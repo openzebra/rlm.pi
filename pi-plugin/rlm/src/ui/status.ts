@@ -6,20 +6,21 @@ import type { RlmController } from "../mode/rlm-mode.ts";
 
 const KEY = "rlm";
 
-function modelLabel(model: Model<Api> | undefined, fallback: string): string {
+export function modelLabel(model: Model<Api> | undefined, fallback: string): string {
   return model ? `${model.provider}/${model.id}` : fallback;
 }
 
-export function setRlmModeStatus(ui: ExtensionUIContext, controller: RlmController): void {
-  if (!controller.enabled) {
-    ui.setStatus(KEY, "○ RLM OFF");
-    return;
-  }
+export function formatRlmStateLine(controller: RlmController): string {
+  if (!controller.enabled) return "○ RLM OFF";
   const smart = modelLabel(controller.smartModel, controller.savedSmartRef ?? "default");
   const worker = modelLabel(controller.workerModel, controller.savedWorkerRef ?? "cheapest");
   const smartReasoning = controller.config.smartReasoning ? ` · smartReasoning=${controller.config.smartReasoning}` : "";
   const workerReasoning = controller.config.subSampling.reasoning ? ` · workerReasoning=${controller.config.subSampling.reasoning}` : "";
-  ui.setStatus(KEY, `● RLM ON · smart=${smart} · worker=${worker}${smartReasoning}${workerReasoning}`);
+  return `● RLM ON · smart=${smart} · worker=${worker}${smartReasoning}${workerReasoning}`;
+}
+
+export function setRlmModeStatus(ui: ExtensionUIContext, controller: RlmController): void {
+  ui.setStatus(KEY, formatRlmStateLine(controller));
 }
 
 export function clearRlmStatus(ui: ExtensionUIContext): void {

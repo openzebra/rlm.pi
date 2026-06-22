@@ -8,6 +8,7 @@ import { registerRlmConfigCommand, runRlmConfig } from "./commands/rlm-config.ts
 import { loadSettings, mergeConfig } from "./config/settings.ts";
 import { decideRlmInputRoute } from "./mode/input-router.ts";
 import { RlmController } from "./mode/rlm-mode.ts";
+import { postRlmGuide } from "./ui/intro.ts";
 import { setRlmModeStatus } from "./ui/status.ts";
 
 export default function rlmExtension(pi: ExtensionAPI): void {
@@ -23,13 +24,21 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   pi.registerMessageRenderer("rlm-question", (message, _options, _theme) =>
     new Markdown(`**RLM question**\n\n${String(message.content ?? "")}`, 1, 0, getMarkdownTheme()),
   );
+  pi.registerMessageRenderer("rlm-intro", (message, _options, _theme) =>
+    new Markdown(String(message.content ?? ""), 1, 0, getMarkdownTheme()),
+  );
 
   registerRlmCommand(pi, controller);
   registerRlmConfigCommand(pi, controller);
 
   pi.on("session_start", async (_event, ctx) => {
     setRlmModeStatus(ctx.ui, controller);
+    postRlmGuide(pi, controller);
   });
+
+  pi.on("context", async (event) => ({
+    messages: event.messages.filter((message) => !(message.role === "custom" && message.customType === "rlm-intro")),
+  }));
 
   pi.on("input", async (event, ctx) => {
     const text = event.text ?? "";

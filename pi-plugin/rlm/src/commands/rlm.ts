@@ -4,6 +4,7 @@ import { readFile, stat as fsStat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RlmController } from "../mode/rlm-mode.ts";
+import { postRlmGuide } from "../ui/intro.ts";
 import { clearRlmStatus, setRlmModeStatus } from "../ui/status.ts";
 import { createTreeWidget } from "../ui/tree-widget.ts";
 import { formatCost, formatTokens } from "../ui/theme.ts";
@@ -139,6 +140,13 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
       }
       controller.abort();
       ctx.ui.notify("RLM run aborted.", "info");
+    },
+  });
+
+  pi.registerCommand("rlm-help", {
+    description: "Show the RLM startup guide and command cheatsheet.",
+    handler: async () => {
+      postRlmGuide(pi, controller);
     },
   });
 
