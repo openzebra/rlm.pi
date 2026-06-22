@@ -47,6 +47,7 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
       () => done(),
     );
     container.addChild(list);
+    container.addChild(new Text(theme.fg("dim", "↑↓ move · enter change · esc save & close"), 1, 1));
     return {
       render: (w) => container.render(w),
       invalidate: () => container.invalidate(),

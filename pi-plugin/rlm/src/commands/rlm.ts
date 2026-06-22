@@ -1,20 +1,10 @@
-/**
- * `/rlm` — run a Recursive Language Model over a (possibly huge) context.
- *
- * Usage:
- *   /rlm <question>                       run with no preloaded context
- *   /rlm --file a.txt --file b.txt <q>    load files as a list[str] context
- *   /rlm --paste <question>               open an editor to paste a large context
- *
- * Streams a live agent tree above the editor while the engine runs, then posts the answer.
- * `/rlm-stop` aborts an in-flight run.
- */
+/** `/rlm` — toggle persistent RLM mode or run a one-shot Recursive Language Model. */
 
 import { readFile, stat as fsStat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RlmController } from "../mode/rlm-mode.ts";
-import { clearRlmStatus } from "../ui/status.ts";
+import { clearRlmStatus, setRlmModeStatus } from "../ui/status.ts";
 import { createTreeWidget } from "../ui/tree-widget.ts";
 import { formatCost, formatTokens } from "../ui/theme.ts";
 
@@ -58,10 +48,63 @@ async function loadContext(ctx: ExtensionCommandContext, parsed: ParsedArgs): Pr
   return contents.length === 1 ? contents[0] : contents;
 }
 
+export async function executeRlmRun(
+  pi: ExtensionAPI,
+  controller: RlmController,
+  ctx: ExtensionContext,
+  question: string,
+  context: unknown,
+  restoreModeStatus = true,
+): Promise<void> {
+  let handle;
+  try {
+    handle = controller.start(ctx, question, context);
+  } catch (e) {
+    ctx.ui.notify(`RLM failed to start: ${e instanceof Error ? e.message : e}`, "error");
+    return;
+  }
+
+  const { tree, done } = handle;
+  ctx.ui.setWidget("rlm-tree", createTreeWidget(tree), { placement: "aboveEditor" });
+
+  const statusTimer = setInterval(() => {
+    if (controller.isBusy()) {
+      const t = tree.totals();
+      ctx.ui.setStatus("rlm", `● RLM · ${formatCost(t.costUsd)} · ${formatTokens(t.tokens)} tok · ${t.running} active`);
+    } else {
+      clearInterval(statusTimer);
+    }
+  }, 300);
+
+  try {
+    const result = await done;
+    pi.sendMessage({
+      customType: "rlm-answer",
+      content: result.answer,
+      display: true,
+      details: { iterations: result.iterations, costUsd: result.costUsd },
+    });
+  } catch (e) {
+    ctx.ui.notify(`RLM failed: ${e instanceof Error ? e.message : e}`, "error");
+  } finally {
+    clearInterval(statusTimer);
+    ctx.ui.setWidget("rlm-tree", undefined);
+    if (restoreModeStatus) setRlmModeStatus(ctx.ui, controller);
+    else clearRlmStatus(ctx.ui);
+  }
+}
+
 export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController): void {
   pi.registerCommand("rlm", {
-    description: "Run a Recursive Language Model over a (possibly huge) context.",
+    description: "Toggle RLM mode, or run a one-shot Recursive Language Model with args.",
     handler: async (args, ctx) => {
+      if (!args.trim()) {
+        const enabled = controller.toggle();
+        setRlmModeStatus(ctx.ui, controller);
+        ctx.ui.notify(`RLM mode ${enabled ? "ON" : "OFF"}`, "info");
+        return;
+      }
+
       if (controller.isBusy()) {
         ctx.ui.notify("An RLM run is already in progress (use /rlm-stop to cancel).", "warning");
         return;
@@ -83,44 +126,7 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
         return;
       }
 
-      let handle;
-      try {
-        handle = controller.start(ctx, question, context);
-      } catch (e) {
-        ctx.ui.notify(`RLM failed to start: ${e instanceof Error ? e.message : e}`, "error");
-        return;
-      }
-
-      const { tree, done } = handle;
-      ctx.ui.setWidget("rlm-tree", createTreeWidget(tree), { placement: "aboveEditor" });
-
-      const statusTimer = setInterval(() => {
-        if (controller.isBusy()) {
-          const t = tree.totals();
-          ctx.ui.setStatus(
-            "rlm",
-            `● RLM · ${formatCost(t.costUsd)} · ${formatTokens(t.tokens)} tok · ${t.running} active`,
-          );
-        } else {
-          clearInterval(statusTimer);
-        }
-      }, 300);
-
-      try {
-        const result = await done;
-        pi.sendMessage({
-          customType: "rlm-answer",
-          content: result.answer,
-          display: true,
-          details: { iterations: result.iterations, costUsd: result.costUsd },
-        });
-      } catch (e) {
-        ctx.ui.notify(`RLM failed: ${e instanceof Error ? e.message : e}`, "error");
-      } finally {
-        clearInterval(statusTimer);
-        ctx.ui.setWidget("rlm-tree", undefined);
-        clearRlmStatus(ctx.ui);
-      }
+      await executeRlmRun(pi, controller, ctx, question, context);
     },
   });
 
@@ -133,6 +139,15 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
       }
       controller.abort();
       ctx.ui.notify("RLM run aborted.", "info");
+    },
+  });
+
+  pi.registerShortcut?.("ctrl+shift+r", {
+    description: "Toggle RLM mode",
+    handler: async (ctx) => {
+      const enabled = controller.toggle();
+      setRlmModeStatus(ctx.ui, controller);
+      ctx.ui.notify(`RLM mode ${enabled ? "ON" : "OFF"}`, "info");
     },
   });
 }

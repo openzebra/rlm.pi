@@ -1,6 +1,7 @@
 import type { RlmConfig } from "../core/types.ts";
 
 export const DEFAULT_CONFIG: RlmConfig = {
+  enabled: true,
   maxDepth: 2,
   maxIterations: 30,
   execTimeoutS: 120,

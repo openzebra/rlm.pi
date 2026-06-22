@@ -8,7 +8,7 @@
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { resolveModelId } from "../config/settings.ts";
+import { modelRef, resolveModelId, saveSettings } from "../config/settings.ts";
 import { createEngine } from "../core/engine.ts";
 import type { RlmConfig, RlmResult } from "../core/types.ts";
 import { AgentTree } from "../state/agent-tree.ts";
@@ -34,6 +34,32 @@ export class RlmController {
   private active: AbortController | null = null;
 
   constructor(public config: RlmConfig) {}
+
+  get enabled(): boolean {
+    return this.config.enabled;
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.config.enabled = enabled;
+    this.persist();
+  }
+
+  toggle(): boolean {
+    this.setEnabled(!this.enabled);
+    return this.enabled;
+  }
+
+  hasSavedModels(): boolean {
+    return Boolean(this.savedSmartRef || this.savedWorkerRef || this.smartModel || this.workerModel);
+  }
+
+  persist(): void {
+    saveSettings({
+      config: this.config,
+      smart: modelRef(this.smartModel) ?? this.savedSmartRef,
+      worker: modelRef(this.workerModel) ?? this.savedWorkerRef,
+    });
+  }
 
   isBusy(): boolean {
     return this.active !== null;

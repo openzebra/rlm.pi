@@ -152,6 +152,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         const turn = await runTurn(history, sandbox, {
           model: smartModel,
           registry: deps.registry,
+          sampling: { reasoning: deps.config.smartReasoning },
           signal: deps.signal,
         });
         limits.addUsage(turn.usage);
@@ -197,6 +198,7 @@ async function finalize(history: ChatMsg[], deps: EngineDeps, limits: LimitGuard
   const { text, usage } = await modelComplete([...history, { role: "user", content: FINALIZE_PROMPT }], {
     model: deps.smartModel,
     registry: deps.registry,
+    reasoning: deps.config.smartReasoning,
     signal: deps.signal,
   });
   limits.addUsage(usage);

@@ -31,6 +31,7 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (typeof raw !== "object" || raw === null) return {};
   const r = raw as Record<string, unknown>;
   const out: Partial<RlmConfig> = {};
+  if (typeof r.enabled === "boolean") out.enabled = r.enabled;
   if (validateNumber(r.maxDepth, 1)) out.maxDepth = r.maxDepth as number;
   if (validateNumber(r.maxIterations, 1)) out.maxIterations = r.maxIterations as number;
   if (validateNumber(r.execTimeoutS, 1)) out.execTimeoutS = r.execTimeoutS as number;
@@ -45,6 +46,7 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (typeof r.compaction === "boolean") out.compaction = r.compaction;
   if (validateNumber(r.compactionThresholdPct, 0) && (r.compactionThresholdPct as number) <= 1) out.compactionThresholdPct = r.compactionThresholdPct as number;
   if (typeof r.python === "string" && r.python.trim()) out.python = r.python;
+  if (typeof r.smartReasoning === "string") out.smartReasoning = r.smartReasoning as ThinkingLevel;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
     const ss = r.subSampling as Record<string, unknown>;
     const sampling: Partial<Sampling> = {};

@@ -9,6 +9,8 @@ export interface Sampling {
 }
 
 export interface RlmConfig {
+  /** Persistent editor-routing mode; when enabled, plain interactive prompts use RLM. */
+  enabled: boolean;
   /** Max recursion depth. depth >= maxDepth ⇒ rlm_query falls back to a plain llm_query. */
   maxDepth: number;
   /** Max turns before the engine must finalize. */
@@ -37,6 +39,8 @@ export interface RlmConfig {
   compactionThresholdPct: number;
   /** Python executable used to launch the sandbox worker. */
   python: string;
+  /** Sampling for the root smart model. */
+  smartReasoning?: ThinkingLevel;
   /** Sampling for sub-LLM (worker) calls. */
   subSampling: Sampling;
 }
