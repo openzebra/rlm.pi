@@ -1,0 +1,14 @@
+{
+  "name": "pi-rlm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Recursive Language Model (RLM) for the Pi coding agent — native, server-less.",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@earendil-works/pi-ai": "latest",
+    "@earendil-works/pi-coding-agent": "latest",
+    "@earendil-works/pi-tui": "latest",
+    "typebox": "latest"
+  }
+}
