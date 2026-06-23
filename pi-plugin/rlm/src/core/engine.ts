@@ -25,9 +25,13 @@ import { previewStdout, previewText } from "../text/preview.ts";
 import { contextLength, contextTypeLabel } from "../text/tokens.ts";
 import { collectEdits, finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
 import { compactHistory, shouldCompact } from "./compaction.ts";
+import { appendUserMessage } from "./history.ts";
 import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
 import type { RlmConfig, RlmInput, RlmResult, RunRlm } from "./types.ts";
+import { appendRow, finalizeSnapshot, generateRunId, pruneRuns, snapshotPath, writeContextSidecar } from "../state/index.ts";
+import { STATE_SCHEMA_VERSION } from "../state/rows.ts";
+import type { RunHeader } from "../state/rows.ts";
 
 export interface EngineDeps {
   smartModel: Model<Api>;
@@ -42,12 +46,20 @@ export interface EngineDeps {
   onUsage?: (usage: Usage, role: "root" | "sub") => void;
   /** Called after propose_edit validates and before the worker records the edit. */
   onEditRequest?: (request: EditRequestPreview) => Promise<boolean>;
+  /** Run-state persistence handle. undefined ⇒ persistence off. */
+  runState?: { cwd: string; dir: string; snapshot: boolean };
 }
 
 /** Build a `runRlm` bound to the given deps. The returned function is reused for recursion. */
 export function createEngine(deps: EngineDeps): RunRlm {
   const observer = deps.observer ?? NOOP_OBSERVER;
   const run: RunRlm = async (input: RlmInput): Promise<RlmResult> => {
+    const nowIso = (): string => new Date().toISOString(); // local helper — 4 call sites below
+    const persist = input.depth === 0 && deps.runState !== undefined;
+    // Compute runId early so it can tag the MLflow root span (Ops: trace correlation on resume).
+    const runId = persist
+      ? (input.resume ? input.resume.header.runId : generateRunId())
+      : undefined;
     const selfId = observer.start({
       kind: input.depth === 0 ? "root" : "rlm",
       depth: input.depth,
@@ -55,6 +67,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
       model: deps.smartModel.id,
       label: input.depth === 0 ? "root" : "rlm_query",
       detail: input.rootPrompt ? input.rootPrompt.slice(0, 60) : String(input.context).slice(0, 60),
+      runId,
+      resume: Boolean(input.resume),
     });
 
     const overrideModel = input.smartModelOverride ? resolveModelId(deps.registry, input.smartModelOverride) : undefined;
@@ -75,12 +89,13 @@ export function createEngine(deps: EngineDeps): RunRlm {
     // Create LimitGuard BEFORE the bridge so sub-LLM usage feeds into it.
     // Children inherit the parent's remaining budget/timeout (reference: limits propagate
     // as remaining amounts, not the full original cap).
+    // CA: seed the clock on resume so resumed runs don't get a fresh timeout budget.
     const limits = new LimitGuard({
       maxBudgetUsd: input.remainingBudgetUsd ?? deps.limits?.maxBudgetUsd,
       maxTimeoutMs: input.remainingTimeoutMs ?? deps.limits?.maxTimeoutMs,
       maxErrors: deps.limits?.maxErrors,
       maxTokens: deps.limits?.maxTokens,
-    });
+    }, input.resume?.usageSeed.durationMs ?? 0);
 
     const llm = createLlmBridge({
       workerModel: deps.workerModel,
@@ -119,6 +134,31 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let completedTurns = 0;
     let editsAcc: ProposedEdit[] = [];
     let nodeStatus: "done" | "error" = "done";
+    let persistOn = persist;
+    const fsTools = Boolean(input.workspaceRoot); // B1: compute before header — `const fs` is created later in the try block
+    if (persist && deps.runState && !input.resume && runId) {
+      const json = typeof input.context !== "string";
+      writeContextSidecar(deps.runState.cwd, deps.runState.dir, runId, input.context, json);
+      const header: RunHeader = {
+        kind: "header", v: STATE_SCHEMA_VERSION, runId, ts: nowIso(),
+        rootPrompt: input.rootPrompt,
+        context: { type: contextTypeLabel(input.context), chars: contextLength(input.context), json, projectMap: input.projectMap ?? false },
+        workspaceRoot: input.workspaceRoot,
+        models: { smart: smartModel.id, worker: deps.workerModel.id },
+        meta: { maxIterations: deps.config.maxIterations, maxDepth: deps.config.maxDepth, orchestrator: deps.config.orchestrator, editEnabled: deps.config.editEnabled && fsTools, fsTools },
+      };
+      persistOn = appendRow(deps.runState.cwd, deps.runState.dir, runId, header);
+      pruneRuns(deps.runState.cwd, deps.runState.dir, deps.config.runLog?.maxRuns ?? 50); // Ops: retention — prune oldest runs beyond maxRuns
+    }
+
+    const recordTerminal = (status: "completed" | "finalized" | "aborted" | "stopped", r: RlmResult): void => {
+      if (!persistOn || !runId || !deps.runState) return;
+      appendRow(deps.runState.cwd, deps.runState.dir, runId, {
+        kind: "terminal", ts: nowIso(), status, answer: r.answer, iterations: r.iterations,
+        usage: { costUsd: r.costUsd, inputTokens: r.inputTokens, outputTokens: r.outputTokens },
+      });
+    };
+
     try {
       const fsInitialFiles = input.projectMap && typeof input.context === "string"
         ? input.context.split("\n").filter((line) => line && !line.startsWith("#"))
@@ -170,10 +210,20 @@ export function createEngine(deps: EngineDeps): RunRlm {
         recursion: input.depth + 1 < deps.config.maxDepth,
         edit: Boolean(fs) && deps.config.editEnabled && input.depth === 0,
       });
-      let history: ChatMsg[] = [{ role: "system", content: system }];
-      let pendingReplOutputs: string | undefined;
+      let history: ChatMsg[] = input.resume ? input.resume.history : [{ role: "system", content: system }];
+      let pendingReplOutputs: string | undefined = input.resume?.pendingReplOutputs;
+      const startTurn = input.resume?.completedTurns ?? 0;
+      if (input.resume) {
+        limits.addRaw(input.resume.usageSeed.costUsd, input.resume.usageSeed.inputTokens, input.resume.usageSeed.outputTokens);
+        best = input.resume.best;
+        editsAcc = [...input.resume.editsAcc];
+        compactions = input.resume.compactions;
+        completedTurns = input.resume.completedTurns;
+      }
       await sandbox.loadContext(input.context);
-      for (let i = 0; i < deps.config.maxIterations; i++) {
+      if (input.resume?.snapshotTurn !== undefined && deps.runState && runId) // R-C1: restore from the verified per-turn file
+        await sandbox.restore(snapshotPath(deps.runState.cwd, deps.runState.dir, runId, input.resume.snapshotTurn));
+      for (let i = startTurn; i < deps.config.maxIterations; i++) {
         limits.checkTimeout();
         observer.detail(selfId, `turn ${i + 1}/${deps.config.maxIterations}`);
 
@@ -191,7 +241,18 @@ export function createEngine(deps: EngineDeps): RunRlm {
             signal: deps.signal,
           };
           if (shouldCompact(history, compactionDeps)) {
-            history = await compactHistory(history, compactionDeps, ++compactions, (u) => limits.addUsage(u));
+            const prevHistoryRef = history;
+            let compactionUsage = { costUsd: 0, inputTokens: 0, outputTokens: 0 };
+            history = await compactHistory(history, compactionDeps, ++compactions, (u) => {
+              limits.addUsage(u);
+              compactionUsage = { costUsd: compactionUsage.costUsd + u.cost.total, inputTokens: compactionUsage.inputTokens + u.input, outputTokens: compactionUsage.outputTokens + u.output }; // CC: accumulate
+            });
+            if (persistOn && runId && deps.runState && history !== prevHistoryRef) {
+              appendRow(deps.runState.cwd, deps.runState.dir, runId, {
+                kind: "compaction", turn: i + 1, ts: nowIso(), history,
+                usage: compactionUsage,
+              });
+            }
           }
         }
 
@@ -221,28 +282,53 @@ export function createEngine(deps: EngineDeps): RunRlm {
         const final = finalAnswerOf(turn.results);
         if (final != null) {
           const done = result(final, i + 1, limits, editsAcc);
+          recordTerminal("completed", done);
           lastAnswer = done.answer;
           return done;
         }
 
         limits.observe(turnHadError(turn.results));
         history.push({ role: "assistant", content: turn.response });
-        pendingReplOutputs = formatReplOutputs(turn.results);
+        const turnReplOutputs = formatReplOutputs(turn.results);
+        pendingReplOutputs = turnReplOutputs;
+
+        if (persistOn && runId && deps.runState) {
+          const pklPath = snapshotPath(deps.runState.cwd, deps.runState.dir, runId, i + 1); // R-C1: per-turn file
+          // QA: snapshot() already catches internally and returns false — no IIFE needed.
+          const snapOk = deps.runState.snapshot && sandbox
+            ? await sandbox.snapshot(pklPath)
+            : false;
+          const ok = appendRow(deps.runState.cwd, deps.runState.dir, runId, {
+            kind: "turn", turn: i + 1, ts: nowIso(),
+            response: turn.response, replOutputs: turnReplOutputs || undefined,
+            answerContent: answerContent || undefined,
+            edits: proposedEdits.length > 0 ? proposedEdits : undefined,
+            error: turnHadError(turn.results),
+            usage: { costUsd: turn.usage.cost.total, inputTokens: turn.usage.input, outputTokens: turn.usage.output }, // B2: Usage has .input/.output, not .inputTokens/.outputTokens
+            cumulativeDurationMs: limits.usage().durationMs, // B3: required by TurnRow, seeds LimitGuard clock on resume (CA)
+            snapshotOk: snapOk,
+          });
+          if (!ok) persistOn = false;
+          else if (snapOk) finalizeSnapshot(pklPath); // B4: rename .tmp → .pkl only after the trail row is durable
+        }
       }
       if (pendingReplOutputs) appendUserMessage(history, pendingReplOutputs);
       const finalized = result(await finalize(history, deps, limits), deps.config.maxIterations, limits);
+      recordTerminal("finalized", finalized);
       lastAnswer = finalized.answer;
       return finalized;
     } catch (err) {
       // Abort is a user action — resolve with the best partial, not an error.
       if (deps.signal?.aborted) {
         const aborted = result(best.trim() || "(aborted)", completedTurns, limits);
+        recordTerminal("aborted", aborted);
         lastAnswer = aborted.answer;
         return aborted;
       }
       if (err instanceof LimitError) {
         nodeStatus = "error";
         const stopped = result(best.trim() || `(stopped: ${err.message})`, completedTurns, limits);
+        recordTerminal("stopped", stopped);
         lastAnswer = stopped.answer;
         return stopped;
       }
@@ -254,15 +340,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
     }
   };
   return run;
-}
-
-function appendUserMessage(history: ChatMsg[], content: string): void {
-  const last = history.at(-1);
-  if (last?.role === "user") {
-    last.content = [last.content, content].join("\n\n");
-    return;
-  }
-  history.push({ role: "user", content });
 }
 
 function result(answer: string, iterations: number, limits: LimitGuard, edits: ProposedEdit[] = []): RlmResult {

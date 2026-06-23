@@ -10,6 +10,8 @@
 export type WorkerRequest =
   | { id: string; type: "exec"; code: string }
   | { id: string; type: "load_context"; path: string; index?: number; json: boolean }
+  | { id: string; type: "snapshot"; path: string }
+  | { id: string; type: "restore"; path: string }
   | { id: string; type: "shutdown" };
 
 /** Reply the parent sends to satisfy a sub-LLM interrupt. */
@@ -44,6 +46,9 @@ export interface WorkerResponse {
   execution_time?: number;
   // load_context:
   index?: number;
+  // snapshot/restore:
+  skipped?: string[];
+  restored?: string[];
 }
 
 /** Kinds of sub-LLM interrupt the worker can raise mid-exec. */

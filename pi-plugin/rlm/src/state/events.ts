@@ -15,6 +15,10 @@ export interface SubcallStart {
   label: string;
   detail?: string;
   args?: string;
+  /** Run ID for the root node — lets MLflow correlate a resumed trace with the original. */
+  runId?: string;
+  /** True when this is a resumed root node (not a fresh start). */
+  resume?: boolean;
 }
 
 export interface SubcallObserver {

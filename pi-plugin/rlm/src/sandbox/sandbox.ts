@@ -203,6 +203,26 @@ export class PythonSandbox {
     this.failAll(new Error("sandbox disposed"));
   }
 
+  /** Pickle the worker's user namespace to a side file. Best-effort; failure ⇒ resume falls back to history-only. */
+  async snapshot(path: string): Promise<boolean> {
+    try {
+      const res = await this.request({ type: "snapshot", path });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Restore user variables from a previously written pickle side file. */
+  async restore(path: string): Promise<boolean> {
+    try {
+      const res = await this.request({ type: "restore", path });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
   // ---- internals ------------------------------------------------------------------------
 
   private waitForInit(): Promise<void> {

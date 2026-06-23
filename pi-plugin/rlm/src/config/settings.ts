@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import type { EditRequestApprovalMode, FsLimits, RlmConfig, Sampling, TelemetryConfig } from "../core/types.ts";
+import type { EditRequestApprovalMode, FsLimits, RlmConfig, RunLogConfig, Sampling, TelemetryConfig } from "../core/types.ts";
 import { DEFAULT_CONFIG } from "./defaults.ts";
 
 export interface PersistedSettings {
@@ -55,6 +55,20 @@ function validateTelemetry(raw: unknown): TelemetryConfig | undefined {
   return out;
 }
 
+function validateRunLog(raw: unknown): Partial<RunLogConfig> | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: { enabled?: boolean; dir?: string; snapshot?: boolean; maxRuns?: number } = {};
+  const enabled = validateBoolean(r.enabled);
+  if (enabled !== undefined) out.enabled = enabled;
+  const dir = validateString(r.dir);
+  if (dir !== undefined) out.dir = dir;
+  const snapshot = validateBoolean(r.snapshot);
+  if (snapshot !== undefined) out.snapshot = snapshot;
+  if (validateNumber(r.maxRuns, 1) !== undefined) out.maxRuns = r.maxRuns as number;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function validateFsLimits(raw: unknown): Partial<FsLimits> | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const r = raw as Record<string, unknown>;
@@ -100,6 +114,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (typeof r.smartReasoning === "string") out.smartReasoning = r.smartReasoning as ThinkingLevel;
   const telemetry = validateTelemetry(r.telemetry);
   if (telemetry) out.telemetry = telemetry;
+  const runLog = validateRunLog(r.runLog);
+  if (runLog) out.runLog = runLog;
   const fsLimits = validateFsLimits(r.fsLimits);
   if (fsLimits) out.fsLimits = fsLimits as FsLimits;
   if (validateNumber(r.sandboxInitTimeoutMs, 100) !== undefined) out.sandboxInitTimeoutMs = r.sandboxInitTimeoutMs as number;
@@ -154,6 +170,7 @@ export function mergeConfig(partial: Partial<RlmConfig>): RlmConfig {
     fsLimits: { ...DEFAULT_CONFIG.fsLimits, ...partial.fsLimits },
     subSampling: { ...DEFAULT_CONFIG.subSampling, ...partial.subSampling },
     ...(partial.telemetry ? { telemetry: { ...partial.telemetry } } : {}),
+    ...(partial.runLog ? { runLog: Object.freeze({ ...DEFAULT_CONFIG.runLog, ...partial.runLog }) } : {}), // QC: freeze to match DEFAULT_CONFIG
   };
 }
 

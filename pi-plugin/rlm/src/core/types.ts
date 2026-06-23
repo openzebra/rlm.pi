@@ -30,6 +30,19 @@ export interface TelemetryConfig {
   readonly maxQueueSize?: number;
 }
 
+import type { ReconstructResult } from "../state/resume.ts";
+
+export interface RunLogConfig {
+  /** Default: true — always-on, opt-out. */
+  readonly enabled?: boolean;
+  /** Default: ".rlm/runs". Directory under cwd for run artifacts. */
+  readonly dir?: string;
+  /** Default: true — whether to write sandbox.pkl snapshots. */
+  readonly snapshot?: boolean;
+  /** Default: 50 — prune oldest runs beyond this count on each new run. */
+  readonly maxRuns?: number;
+}
+
 export interface RlmConfig {
   /** Persistent editor-routing mode; when enabled, plain interactive prompts use RLM. */
   enabled: boolean;
@@ -77,6 +90,8 @@ export interface RlmConfig {
   subSampling: Sampling;
   /** Optional MLflow telemetry export configuration. Omitted by default. */
   readonly telemetry?: TelemetryConfig;
+  /** Optional run-state persistence configuration. Enabled by default. */
+  readonly runLog?: RunLogConfig;
 }
 
 /** Input to a (headless) RLM run. */
@@ -99,6 +114,8 @@ export interface RlmInput {
   workspaceRoot?: string;
   /** True when context was synthesized by buildProjectManifest. */
   projectMap?: boolean;
+  /** Depth-0 resume payload — controller rebuilds this from the trail's `reconstructRlmState()`. */
+  readonly resume?: ReconstructResult & { readonly ok: true };
 }
 
 /** Result of a completed RLM run. */

@@ -24,13 +24,15 @@ export class LimitError extends Error {
 }
 
 export class LimitGuard {
-  private readonly start = Date.now();
+  private start: number;
   private inputTokens = 0;
   private outputTokens = 0;
   private costUsd = 0;
   private consecutiveErrors = 0;
 
-  constructor(private readonly limits: Limits = {}) {}
+  constructor(private readonly limits: Limits = {}, seedElapsedMs = 0) {
+    this.start = Date.now() - seedElapsedMs; // C2: seed clock so resumed runs don't get a fresh timeout budget
+  }
 
   /** Call before each turn. */
   checkTimeout(): void {

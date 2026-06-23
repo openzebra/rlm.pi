@@ -3,13 +3,18 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { safeWorkspaceRealPath } from "../bridge/fs-tools.ts";
-import type { RlmController } from "../mode/rlm-mode.ts";
+import type { RlmController, RunHandle } from "../mode/rlm-mode.ts";
 import type { ProposedEdit } from "../sandbox/protocol.ts";
 import { applyAnchorEdits, type AnchorEdit } from "../text/edits.ts";
 import { groupEdits, renderEditSummary, type EditGroup } from "../text/edit-preview.ts";
 import { postRlmGuide } from "../ui/intro.ts";
 import { clearRlmStatus, setRlmModeStatus } from "../ui/status.ts";
 import { createTreeWidget } from "../ui/tree-widget.ts";
+import { listRunIds, readContextSidecar, readHeader, resolveRunId } from "../state/index.ts";
+import { reconstructRlmState } from "../state/resume.ts";
+import type { ReconstructResult } from "../state/resume.ts";
+import type { RunHeader } from "../state/rows.ts";
+import { buildRlmSystemPrompt } from "../prompts/system.ts";
 
 interface PreparedFileEdit {
   readonly ok: true;
@@ -100,9 +105,9 @@ export async function executeRlmRun(
   context: unknown,
   restoreModeStatus = true,
 ): Promise<void> {
-  let handle;
+  let handle: RunHandle | undefined;
   try {
-    handle = controller.start(ctx, question, context);
+    handle = controller.start(ctx, { kind: "fresh", rootPrompt: question, context });
   } catch (e) {
     ctx.ui.notify(`RLM failed to start: ${e instanceof Error ? e.message : String(e)}`, "error");
     return;
@@ -164,6 +169,43 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
     },
   });
 
+  pi.registerCommand("rlm-resume", {
+    description: "Resume an interrupted RLM run (default @latest).",
+    handler: async (args, ctx) => {
+      if (controller.isBusy()) {
+        ctx.ui.notify("RLM is busy (use /rlm-stop to cancel).", "warning");
+        return;
+      }
+      const ref = args.trim() || "@latest";
+      const dir = controller.config.runLog?.dir ?? ".rlm/runs";
+      const cwd = ctx.cwd ?? process.cwd();
+      const runId = resolveRunId(cwd, dir, ref);
+      if (!runId) { ctx.ui.notify(`No resumable RLM run for '${ref}'.`, "error"); return; }
+      const header = readHeader(cwd, dir, runId);
+      if (!header) { ctx.ui.notify(`Run ${runId} has no header.`, "error"); return; }
+      const systemPrompt = buildRlmSystemPrompt(
+        { contextType: header.context.type, contextChars: header.context.chars, rootPrompt: header.rootPrompt, workspaceRoot: header.workspaceRoot, fsTools: header.meta.fsTools, projectMap: header.context.projectMap },
+        { orchestrator: header.meta.orchestrator, recursion: 1 < header.meta.maxDepth, edit: header.meta.editEnabled }, // CB: 1 < maxDepth, not hardcoded true
+      );
+      const recon = reconstructRlmState(cwd, dir, runId, systemPrompt);
+      if (!recon.ok) { ctx.ui.notify(`Cannot resume ${runId}: ${recon.reason}.`, "error"); return; }
+      if (recon.terminated) { ctx.ui.notify(`Run ${runId} already finished.`, "info"); return; }
+      const context = readContextSidecar(cwd, dir, runId, header.context.json);
+      if (context === undefined) // R-C2: warn instead of silently resuming on empty context
+        ctx.ui.notify(`Warning: context sidecar missing for ${runId} — resuming without original context.`, "warning");
+      await executeRlmRunWithResume(pi, controller, ctx, recon, header, context ?? "");
+    },
+  });
+
+  pi.registerCommand("rlm-runs", {
+    description: "List recent RLM runs.",
+    handler: async (_args, ctx) => {
+      const dir = controller.config.runLog?.dir ?? ".rlm/runs";
+      const ids = listRunIds(ctx.cwd ?? process.cwd(), dir).slice(0, 20);
+      ctx.ui.notify(ids.length ? ids.join("\n") : "No RLM runs recorded.", "info");
+    },
+  });
+
   pi.registerShortcut?.("ctrl+shift+r", {
     description: "Toggle RLM mode (off also stops a running query)",
     handler: async (ctx) => {
@@ -172,4 +214,30 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
       ctx.ui.notify(`RLM mode ${enabled ? "ON" : "OFF"}`, "info");
     },
   });
+}
+
+async function executeRlmRunWithResume(
+  pi: ExtensionAPI,
+  controller: RlmController,
+  ctx: ExtensionContext,
+  recon: ReconstructResult & { ok: true },
+  header: RunHeader,
+  context: unknown,
+): Promise<void> {
+  let handle: RunHandle | undefined;
+  try { handle = controller.start(ctx, { kind: "resume", resume: recon, context }); }
+  catch (e) { ctx.ui.notify(`RLM resume failed: ${e instanceof Error ? e.message : String(e)}`, "error"); return; }
+  pi.sendMessage({ customType: "rlm-question", content: `[resume] ${header.rootPrompt}`, display: true });
+  const { tree, done } = handle;
+  ctx.ui.setWidget("rlm-tree", createTreeWidget(tree), { placement: "aboveEditor" });
+  try {
+    const result = await done;
+    pi.sendMessage({ customType: "rlm-answer", content: result.answer, display: true });
+    if (result.edits && result.edits.length > 0) {
+      pi.sendMessage({ customType: "rlm-answer", content: renderEditSummary(groupEdits(result.edits)), display: true });
+      await applyProposedEdits(controller, ctx, result.edits);
+    }
+  } catch (e) {
+    ctx.ui.notify(`RLM resume failed: ${e instanceof Error ? e.message : String(e)}`, "error");
+  } finally { ctx.ui.setWidget("rlm-tree", undefined); }
 }

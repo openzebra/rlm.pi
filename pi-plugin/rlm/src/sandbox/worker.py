@@ -20,6 +20,7 @@ import argparse
 import io
 import json
 import os
+import pickle
 import signal
 import sys
 import time
@@ -311,6 +312,60 @@ class Worker:
             "execution_time": time.perf_counter() - start,
         }
 
+    def _serializer(self):
+        try:
+            import dill as s
+            return s
+        except ImportError:
+            return pickle
+
+    # Magic header written before pickle data so restore can reject non-RLM files (RCE guard).
+    _SNAPSHOT_MAGIC = b"RLMSNAP\x01"  # RLM Snapshot, format v1
+
+    def snapshot(self, path: str) -> dict:
+        """Pickle user variables to path.tmp. Does NOT rename — parent finalizes after trail row is durable (C1)."""
+        s = self._serializer()
+        out, skipped = {}, []
+        MAX_VAR_BYTES = 50 * 1024 * 1024  # P3: skip vars larger than 50MB
+        for k, v in self.ns.items():
+            if k.startswith("_") or k.startswith("context") or k in RESERVED or k == "__builtins__":
+                continue
+            try:
+                blob = s.dumps(v)  # single serialize (P2 fix — reuse blob for size check)
+                if len(blob) > MAX_VAR_BYTES:
+                    skipped.append(k)
+                    continue
+                out[k] = v
+            except Exception:
+                skipped.append(k)
+        if skipped:
+            print(f"[rlm-sandbox] snapshot skipped {len(skipped)} unpicklable/oversized vars: {skipped}", file=sys.stderr)
+        tmp = path + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(self._SNAPSHOT_MAGIC)
+            s.dump(out, f)
+        # NOTE: parent calls renameSync(tmp, path) AFTER appendRow succeeds — prevents pkl ahead of trail (C1)
+        return {"skipped": skipped}
+
+    def restore(self, path: str) -> dict:
+        """Restore user variables from a pickle file.
+
+        SECURITY (R1): pickle.load executes arbitrary code. The magic header check rejects
+        non-RLM pickle files, but a crafted file could still bypass it. This is acceptable
+        because the .pkl was written by this same worker process during the current session.
+        Resume widens trust from 'this session's model code' to 'any .pkl on disk' — callers
+        must validate the run directory is trusted before invoking restore.
+        """
+        s = self._serializer()
+        with open(path, "rb") as f:
+            magic = f.read(len(self._SNAPSHOT_MAGIC))
+            if magic != self._SNAPSHOT_MAGIC:
+                raise ValueError("not an RLM snapshot file or unsupported format")
+            data = s.load(f)
+        self.ns.update(data)
+        self._restore_scaffold()
+        return {"restored": list(data.keys())}
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -340,6 +395,10 @@ def main() -> None:
             elif kind == "shutdown":
                 _send({"id": rid, "ok": True})
                 return
+            elif kind == "snapshot":
+                _send({"id": rid, "ok": True, **worker.snapshot(req.get("path", ""))})
+            elif kind == "restore":
+                _send({"id": rid, "ok": True, **worker.restore(req.get("path", ""))})
             else:
                 _send({"id": rid, "ok": False, "error": f"unknown type: {kind!r}"})
         except BaseException as e:  # noqa: BLE001

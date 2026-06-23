@@ -55,6 +55,8 @@ class SpanApplier<S> implements DispatcherSink<SpanOp> {
           "rlm.kind": op.info.kind,
           "rlm.depth": op.info.depth,
           ...(op.info.model ? { "rlm.model": op.info.model } : {}),
+          ...(op.info.runId ? { "rlm.runId": op.info.runId } : {}),
+          ...(op.info.resume ? { "rlm.resume": true } : {}),
         },
         startTimeNs: msToNs(op.tsMs),
       });

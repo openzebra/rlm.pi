@@ -27,4 +27,10 @@ export const DEFAULT_CONFIG: RlmConfig = {
   editRequestApproval: "ask",
   allowReadOutsideWorkspace: false,
   subSampling: Object.freeze({ maxTokens: 8192 }),
+  runLog: Object.freeze({
+    enabled: true,
+    dir: ".rlm/runs",
+    snapshot: true,
+    maxRuns: 50,
+  }),
 };

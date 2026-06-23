@@ -13,6 +13,7 @@ import { DEFAULT_CONFIG } from "../config/defaults.ts";
 import { modelRef, resolveModelId, saveSettings } from "../config/settings.ts";
 import { createEngine } from "../core/engine.ts";
 import type { RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
+import type { ReconstructResult } from "../state/resume.ts";
 import { renderEditRequestPreview } from "../text/edit-preview.ts";
 import { contextLength } from "../text/tokens.ts";
 import { AgentTree } from "../state/agent-tree.ts";
@@ -44,6 +45,11 @@ export interface RunHandle {
   abort: () => void;
   done: Promise<RlmResult>;
 }
+
+/** B5+SA: discriminated union removes non-null `!` assertions and the `context: ""` hack. */
+export type StartInput =
+  | { readonly kind: "fresh"; readonly rootPrompt: string; readonly context: unknown }
+  | { readonly kind: "resume"; readonly resume: ReconstructResult & { ok: true }; readonly context: unknown };
 
 export async function prepareRlmContext(context: unknown, cwd: string | undefined, config: RlmConfig = DEFAULT_CONFIG, signal?: AbortSignal): Promise<unknown> {
   return contextLength(context) === 0 && cwd ? buildProjectManifest(cwd, { signal, limits: config.fsLimits }) : context;
@@ -107,7 +113,7 @@ export class RlmController {
     return { smart, worker };
   }
 
-  start(ctx: ExtensionContext, rootPrompt: string, context: unknown): RunHandle {
+  start(ctx: ExtensionContext, input: StartInput): RunHandle {
     const models = this.resolveModels(ctx);
     if (!models) throw new Error("no model with configured auth is available");
 
@@ -115,11 +121,34 @@ export class RlmController {
     const abortController = new AbortController();
     this.active = abortController;
 
+    const runState = this.config.runLog?.enabled !== false
+      ? { cwd: ctx.cwd ?? process.cwd(), dir: this.config.runLog?.dir ?? ".rlm/runs", snapshot: this.config.runLog?.snapshot !== false }
+      : undefined;
+
     const done = (async () => {
       const sink = await createTelemetrySink(this.config.telemetry);
       try {
         const workspaceRoot = ctx.cwd;
-        const contextValue = await prepareRlmContext(context, workspaceRoot, this.config, abortController.signal);
+        let engineInput: RlmInput;
+        if (input.kind === "fresh") {
+          const contextValue = await prepareRlmContext(input.context, workspaceRoot, this.config, abortController.signal);
+          engineInput = {
+            rootPrompt: input.rootPrompt,
+            context: contextValue,
+            depth: 0,
+            workspaceRoot,
+            projectMap: isProjectMapContext(input.context, contextValue, workspaceRoot),
+          };
+        } else {
+          engineInput = {
+            rootPrompt: input.resume.header.rootPrompt,
+            context: input.context, // B5: load the actual context from the sidecar, not ""
+            depth: 0,
+            workspaceRoot,
+            projectMap: input.resume.header.context.projectMap,
+            resume: input.resume,
+          };
+        }
         const engine = createEngine({
           smartModel: models.smart,
           workerModel: models.worker,
@@ -127,6 +156,7 @@ export class RlmController {
           config: this.config,
           signal: abortController.signal,
           observer: observerWith(tree, sink),
+          runState,
           onEditRequest: async (request) => {
             if (this.config.editRequestApproval === "yolo") return true;
             return ctx.hasUI ? ctx.ui.confirm("Approve RLM edit request?", renderEditRequestPreview(request)) : false;
@@ -138,8 +168,7 @@ export class RlmController {
             maxErrors: this.config.maxErrors,
           },
         });
-        const input: RlmInput = { rootPrompt, context: contextValue, depth: 0, workspaceRoot, projectMap: isProjectMapContext(context, contextValue, workspaceRoot) };
-        return await engine(input);
+        return await engine(engineInput);
       } finally {
         try {
           await shutdownTelemetryBounded(sink);
