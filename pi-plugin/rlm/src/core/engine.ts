@@ -19,6 +19,8 @@ import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
 import { NOOP_OBSERVER, type SubcallObserver } from "../state/events.ts";
 import { PythonSandbox } from "../sandbox/sandbox.ts";
 import type { ProposedEdit } from "../sandbox/protocol.ts";
+import type { AnchorEdit } from "../text/edits.ts";
+import type { EditRequestPreview } from "../text/edit-preview.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
 import { contextLength, contextTypeLabel } from "../text/tokens.ts";
 import { collectEdits, finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
@@ -38,6 +40,8 @@ export interface EngineDeps {
   observer?: SubcallObserver;
   /** Called with each completion's usage (root + sub-LLM) for cost/token rollups. */
   onUsage?: (usage: Usage, role: "root" | "sub") => void;
+  /** Called after propose_edit validates and before the worker records the edit. */
+  onEditRequest?: (request: EditRequestPreview) => Promise<boolean>;
 }
 
 /** Build a `runRlm` bound to the given deps. The returned function is reused for recursion. */
@@ -131,7 +135,17 @@ export function createEngine(deps: EngineDeps): RunRlm {
           })
         : undefined;
 
-      const editHandlers = fs && deps.config.editEnabled && input.depth === 0 ? { proposeEdit: fs.proposeEdit } : {};
+      const editHandlers = fs && deps.config.editEnabled && input.depth === 0
+        ? {
+            proposeEdit: async (path: string, oldText: string, newText: string, existingEdits: readonly AnchorEdit[]) => {
+              const validationPreview = await fs.proposeEdit(path, oldText, newText, existingEdits);
+              if (validationPreview.startsWith("Error:")) return validationPreview;
+              if (deps.config.editRequestApproval === "yolo") return validationPreview;
+              const approved = await deps.onEditRequest?.({ path, oldText, newText, validationPreview }) ?? false;
+              return approved ? validationPreview : "Error: edit request declined by user";
+            },
+          }
+        : {};
       sandbox = await PythonSandbox.spawn({
         depth: input.depth,
         execTimeoutS: deps.config.execTimeoutS,

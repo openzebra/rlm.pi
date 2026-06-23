@@ -317,6 +317,7 @@ async function main() {
       fsLimits: { ...DEFAULT_CONFIG.fsLimits, maxOutputChars: 1234 },
       allowReadOutsideWorkspace: true,
       editEnabled: true,
+      editRequestApproval: "yolo",
     });
     const saved = saveSettings({ config, smart: "test/smart", worker: "test/worker" });
     const loaded = loadSettings();
@@ -324,7 +325,7 @@ async function main() {
     check("settings save reports success", saved);
     check("settings round-trips model refs", loaded.smart === "test/smart" && loaded.worker === "test/worker");
     check("settings round-trips reasoning", roundTrip.smartReasoning === "high" && roundTrip.subSampling.reasoning === "low");
-    check("settings round-trips fs/security/edit knobs", roundTrip.fsLimits.maxOutputChars === 1234 && roundTrip.allowReadOutsideWorkspace && roundTrip.editEnabled);
+    check("settings round-trips fs/security/edit knobs", roundTrip.fsLimits.maxOutputChars === 1234 && roundTrip.allowReadOutsideWorkspace && roundTrip.editEnabled && roundTrip.editRequestApproval === "yolo");
     saveSettings(previous);
   }
 

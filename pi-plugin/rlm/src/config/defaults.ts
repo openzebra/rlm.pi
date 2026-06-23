@@ -24,6 +24,7 @@ export const DEFAULT_CONFIG: RlmConfig = {
   }),
   sandboxInitTimeoutMs: 30_000,
   editEnabled: false,
+  editRequestApproval: "ask",
   allowReadOutsideWorkspace: false,
   subSampling: Object.freeze({ maxTokens: 8192 }),
 };

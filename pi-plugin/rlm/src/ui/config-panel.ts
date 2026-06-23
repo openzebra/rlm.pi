@@ -25,6 +25,7 @@ const CHOICES = Object.freeze({
   grepMaxMatchesCeiling: Object.freeze(["200", "1000", "2500", "5000"]),
   sandboxInitTimeoutMs: Object.freeze(["10000", "30000", "60000", "120000"]),
   editEnabled: Object.freeze(["off", "on"]),
+  editRequestApproval: Object.freeze(["ask", "yolo"]),
   allowReadOutsideWorkspace: Object.freeze(["off", "on"]),
 });
 
@@ -54,6 +55,7 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("grepMaxMatchesCeiling", "Grep hard max matches", String(config.fsLimits.grepMaxMatchesCeiling), CHOICES.grepMaxMatchesCeiling, "Maximum grep result cap even if the model requests more."),
     item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
     item("editEnabled", "[Editing] propose_edit", config.editEnabled ? "on" : "off", CHOICES.editEnabled, "Allow RLM to propose exact-anchor edits for approval after the run."),
+    item("editRequestApproval", "[Editing] Request popup", config.editRequestApproval, CHOICES.editRequestApproval, "ask = popup for every validated propose_edit; yolo = record proposals without the popup."),
     item("allowReadOutsideWorkspace", "[Security] Read outside workspace", config.allowReadOutsideWorkspace ? "on" : "off", CHOICES.allowReadOutsideWorkspace, "UNSAFE: lets read_file/grep/find escape the project root."),
     item("__save__", "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
   ];
@@ -105,6 +107,7 @@ function applySetting(config: RlmConfig, id: string, value: string): void {
     case "grepMaxMatchesCeiling": config.fsLimits.grepMaxMatchesCeiling = Number(value); break;
     case "sandboxInitTimeoutMs": config.sandboxInitTimeoutMs = Number(value); break;
     case "editEnabled": config.editEnabled = value === "on"; break;
+    case "editRequestApproval": config.editRequestApproval = value === "yolo" ? "yolo" : "ask"; break;
     case "allowReadOutsideWorkspace": config.allowReadOutsideWorkspace = value === "on"; break;
   }
 }

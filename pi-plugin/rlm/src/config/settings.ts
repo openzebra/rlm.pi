@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import type { FsLimits, RlmConfig, Sampling } from "../core/types.ts";
+import type { EditRequestApprovalMode, FsLimits, RlmConfig, Sampling } from "../core/types.ts";
 import { DEFAULT_CONFIG } from "./defaults.ts";
 
 export interface PersistedSettings {
@@ -23,6 +23,10 @@ function validateNumber(v: unknown, min: number): number | undefined {
 
 function validateBoolean(v: unknown): boolean | undefined {
   return typeof v === "boolean" ? v : undefined;
+}
+
+function validateEditRequestApprovalMode(v: unknown): EditRequestApprovalMode | undefined {
+  return v === "ask" || v === "yolo" ? v : undefined;
 }
 
 function validateFsLimits(raw: unknown): Partial<FsLimits> | undefined {
@@ -73,6 +77,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (validateNumber(r.sandboxInitTimeoutMs, 100) !== undefined) out.sandboxInitTimeoutMs = r.sandboxInitTimeoutMs as number;
   const editEnabled = validateBoolean(r.editEnabled);
   if (editEnabled !== undefined) out.editEnabled = editEnabled;
+  const editRequestApproval = validateEditRequestApprovalMode(r.editRequestApproval);
+  if (editRequestApproval !== undefined) out.editRequestApproval = editRequestApproval;
   const allowReadOutsideWorkspace = validateBoolean(r.allowReadOutsideWorkspace);
   if (allowReadOutsideWorkspace !== undefined) out.allowReadOutsideWorkspace = allowReadOutsideWorkspace;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {

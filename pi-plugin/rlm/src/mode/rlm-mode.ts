@@ -13,6 +13,7 @@ import { DEFAULT_CONFIG } from "../config/defaults.ts";
 import { modelRef, resolveModelId, saveSettings } from "../config/settings.ts";
 import { createEngine } from "../core/engine.ts";
 import type { RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
+import { renderEditRequestPreview } from "../text/edit-preview.ts";
 import { contextLength } from "../text/tokens.ts";
 import { AgentTree } from "../state/agent-tree.ts";
 import { treeObserver } from "../state/events.ts";
@@ -109,6 +110,10 @@ export class RlmController {
         config: this.config,
         signal: abortController.signal,
         observer: treeObserver(tree),
+        onEditRequest: async (request) => {
+          if (this.config.editRequestApproval === "yolo") return true;
+          return ctx.hasUI ? ctx.ui.confirm("Approve RLM edit request?", renderEditRequestPreview(request)) : false;
+        },
         limits: {
           maxBudgetUsd: this.config.maxBudgetUsd,
           maxTimeoutMs: this.config.maxTimeoutMs,

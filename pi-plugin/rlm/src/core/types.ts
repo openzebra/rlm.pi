@@ -19,6 +19,8 @@ export interface FsLimits {
   grepMaxMatchesCeiling: number;
 }
 
+export type EditRequestApprovalMode = "ask" | "yolo";
+
 export interface RlmConfig {
   /** Persistent editor-routing mode; when enabled, plain interactive prompts use RLM. */
   enabled: boolean;
@@ -56,6 +58,8 @@ export interface RlmConfig {
   sandboxInitTimeoutMs: number;
   /** Enable RLM to propose exact-anchor edits for explicit approval after the run. */
   editEnabled: boolean;
+  /** Whether each validated propose_edit request asks the user first or records immediately. */
+  editRequestApproval: EditRequestApprovalMode;
   /** SECURITY: allow first-class fs tools to read outside the workspace root. */
   allowReadOutsideWorkspace: boolean;
   /** Sampling for the root smart model. */

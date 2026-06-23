@@ -6,14 +6,10 @@ import { safeWorkspaceRealPath } from "../bridge/fs-tools.ts";
 import type { RlmController } from "../mode/rlm-mode.ts";
 import type { ProposedEdit } from "../sandbox/protocol.ts";
 import { applyAnchorEdits, type AnchorEdit } from "../text/edits.ts";
+import { groupEdits, renderEditSummary, type EditGroup } from "../text/edit-preview.ts";
 import { postRlmGuide } from "../ui/intro.ts";
 import { clearRlmStatus, setRlmModeStatus } from "../ui/status.ts";
 import { createTreeWidget } from "../ui/tree-widget.ts";
-
-interface EditGroup {
-  readonly path: string;
-  readonly edits: ProposedEdit[];
-}
 
 interface PreparedFileEdit {
   readonly ok: true;
@@ -32,44 +28,6 @@ interface SkippedFileEdit {
 interface AppliedFileEdit {
   readonly path: string;
   readonly count: number;
-}
-
-function groupEdits(edits: readonly ProposedEdit[]): EditGroup[] {
-  const byPath = new Map<string, ProposedEdit[]>();
-  for (const edit of edits) {
-    const group = byPath.get(edit.path);
-    if (group) group.push(edit);
-    else byPath.set(edit.path, [edit]);
-  }
-  return Array.from(byPath, ([path, group]) => ({ path, edits: group }));
-}
-
-function lineCount(text: string): number {
-  return text.split("\n").length;
-}
-
-function previewBlock(text: string): string {
-  const limit = 700;
-  return text.length <= limit ? text : `${text.slice(0, limit)}\n…[truncated]`;
-}
-
-function renderEditSummary(groups: readonly EditGroup[]): string {
-  const lines = [
-    `RLM proposed ${groups.reduce((n, group) => n + group.edits.length, 0)} edit(s) across ${groups.length} file(s).`,
-    "",
-  ];
-  for (const group of groups) {
-    lines.push(`### ${group.path}`);
-    group.edits.forEach((edit, index) => {
-      lines.push(`- Edit ${index + 1}: −${lineCount(edit.oldText)}/+${lineCount(edit.newText)} lines`);
-      lines.push("```diff");
-      lines.push(`- ${previewBlock(edit.oldText).replaceAll("\n", "\n- ")}`);
-      lines.push(`+ ${previewBlock(edit.newText).replaceAll("\n", "\n+ ")}`);
-      lines.push("```");
-    });
-    lines.push("");
-  }
-  return lines.join("\n");
 }
 
 async function prepareFileEdit(cwd: string, group: EditGroup, maxReadBytes: number): Promise<PreparedFileEdit | SkippedFileEdit> {
