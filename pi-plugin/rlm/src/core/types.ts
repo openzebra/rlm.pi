@@ -1,6 +1,7 @@
 /** Shared configuration + runtime types for the RLM engine. */
 
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
+import type { ProposedEdit } from "../sandbox/protocol.ts";
 
 export interface Sampling {
   maxTokens?: number;
@@ -53,6 +54,8 @@ export interface RlmConfig {
   fsLimits: FsLimits;
   /** Worker startup wait before treating sandbox init as failed (ms). */
   sandboxInitTimeoutMs: number;
+  /** Enable RLM to propose exact-anchor edits for explicit approval after the run. */
+  editEnabled: boolean;
   /** SECURITY: allow first-class fs tools to read outside the workspace root. */
   allowReadOutsideWorkspace: boolean;
   /** Sampling for the root smart model. */
@@ -86,6 +89,7 @@ export interface RlmInput {
 /** Result of a completed RLM run. */
 export interface RlmResult {
   answer: string;
+  edits?: ProposedEdit[];
   iterations: number;
   costUsd: number;
   inputTokens: number;

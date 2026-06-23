@@ -24,6 +24,7 @@ const CHOICES = Object.freeze({
   grepDefaultMaxMatches: Object.freeze(["50", "200", "500", "1000"]),
   grepMaxMatchesCeiling: Object.freeze(["200", "1000", "2500", "5000"]),
   sandboxInitTimeoutMs: Object.freeze(["10000", "30000", "60000", "120000"]),
+  editEnabled: Object.freeze(["off", "on"]),
   allowReadOutsideWorkspace: Object.freeze(["off", "on"]),
 });
 
@@ -52,6 +53,7 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("grepDefaultMaxMatches", "Grep default matches", String(config.fsLimits.grepDefaultMaxMatches), CHOICES.grepDefaultMaxMatches, "Default grep result cap when the model does not pass maxMatches."),
     item("grepMaxMatchesCeiling", "Grep hard max matches", String(config.fsLimits.grepMaxMatchesCeiling), CHOICES.grepMaxMatchesCeiling, "Maximum grep result cap even if the model requests more."),
     item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
+    item("editEnabled", "[Editing] propose_edit", config.editEnabled ? "on" : "off", CHOICES.editEnabled, "Allow RLM to propose exact-anchor edits for approval after the run."),
     item("allowReadOutsideWorkspace", "[Security] Read outside workspace", config.allowReadOutsideWorkspace ? "on" : "off", CHOICES.allowReadOutsideWorkspace, "UNSAFE: lets read_file/grep/find escape the project root."),
     item("__save__", "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
   ];
@@ -102,6 +104,7 @@ function applySetting(config: RlmConfig, id: string, value: string): void {
     case "grepDefaultMaxMatches": config.fsLimits.grepDefaultMaxMatches = Number(value); break;
     case "grepMaxMatchesCeiling": config.fsLimits.grepMaxMatchesCeiling = Number(value); break;
     case "sandboxInitTimeoutMs": config.sandboxInitTimeoutMs = Number(value); break;
+    case "editEnabled": config.editEnabled = value === "on"; break;
     case "allowReadOutsideWorkspace": config.allowReadOutsideWorkspace = value === "on"; break;
   }
 }

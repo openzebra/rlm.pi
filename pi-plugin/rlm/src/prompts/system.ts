@@ -17,6 +17,7 @@ export interface PromptMeta {
 export interface SystemPromptOptions {
   orchestrator?: boolean;
   recursion?: boolean;
+  edit?: boolean;
 }
 
 function howToRunCode(): string {
@@ -27,7 +28,7 @@ function howToRunCode(): string {
   ].join(" ");
 }
 
-function replGlossary(recursion: boolean, fsTools: boolean): string {
+function replGlossary(recursion: boolean, fsTools: boolean, edit: boolean): string {
   const lines = [
     "Available in the REPL:",
     "- `context`: the important, potentially very long input (usually `str` or `list[str]`).",
@@ -55,6 +56,16 @@ function replGlossary(recursion: boolean, fsTools: boolean): string {
       "Read a file directly into your own context only when it is small AND a quick keyword/regex",
       "check would already pin the answer. Glob support is gitignore/ripgrep-style; verify with `read_file`.",
     );
+    if (edit) {
+      lines.push(
+        "- `propose_edit(path, old, new) -> str`: PROPOSE an anchor edit. `old` MUST be copied verbatim",
+        "  from `read_file` output and be UNIQUE in the file (extend with surrounding lines if not).",
+        "  This does NOT write the file — edits are applied after the run, with the user's approval.",
+        "  Workflow: grep/find to LOCATE → read_file to GROUND the exact anchor → generate `new` with",
+        "  `llm_query` over the chunk (never verbalize file bodies yourself) → propose_edit. Use loops",
+        "  + llm_query_batched to edit many files programmatically; print only short confirmations.",
+      );
+    }
   }
   if (recursion) {
     lines.push(
@@ -65,6 +76,8 @@ function replGlossary(recursion: boolean, fsTools: boolean): string {
   }
   lines.push(
     "- `SHOW_VARS() -> str`: list every variable currently in the REPL.",
+    "- `SHOW_EDITS() -> str`: list proposed edits by path and size (no file bodies). Use after",
+    "  repeated `propose_edit` calls to avoid duplicates or conflicts.",
     '- `answer`: a dict initialized to {"content": "", "ready": False}. To submit your final answer,',
     '  set `answer["content"]` to the answer text and `answer["ready"] = True`.',
   );
@@ -103,7 +116,7 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
     "",
     howToRunCode(),
     "",
-    replGlossary(recursion, meta.fsTools ?? false),
+    replGlossary(recursion, meta.fsTools ?? false, opts.edit ?? false),
     "",
     "REPL outputs over ~20K characters are truncated, so for long payloads (including `read_file`",
     "output) slice them and pass the slices through `llm_query` rather than printing them whole.",

@@ -1,6 +1,6 @@
 /** Helpers for detecting and formatting the RLM final answer from a turn's REPL results. */
 
-import type { ReplResult } from "../sandbox/protocol.ts";
+import type { ProposedEdit, ReplResult } from "../sandbox/protocol.ts";
 import { truncateOutput } from "../text/parsing.ts";
 
 /** First non-null final answer across a turn's executed blocks, or null. */
@@ -16,6 +16,15 @@ export function latestAnswerContentOf(results: ReplResult[]): string | null {
     if (content) return content;
   }
   return null;
+}
+
+/** Last cumulative proposed-edit set reported by a turn. */
+export function collectEdits(results: ReplResult[]): ProposedEdit[] {
+  for (let i = results.length - 1; i >= 0; i--) {
+    const edits = results[i]?.edits;
+    if (edits && edits.length > 0) return edits;
+  }
+  return [];
 }
 
 /** True if any block in the turn raised an exception. Plain stderr does not count. */

@@ -23,6 +23,12 @@ export interface LlmReply {
 
 export type ParentMessage = WorkerRequest | LlmReply;
 
+export interface ProposedEdit {
+  readonly path: string;
+  readonly oldText: string;
+  readonly newText: string;
+}
+
 /** A normal response to a request (keyed by the request `id`). */
 export interface WorkerResponse {
   id: string;
@@ -33,6 +39,7 @@ export interface WorkerResponse {
   stderr?: string;
   final_answer?: string | null;
   answer_content?: string;
+  edits?: ProposedEdit[];
   raised?: boolean;
   execution_time?: number;
   // load_context:
@@ -47,7 +54,8 @@ export type InterruptKind =
   | "rlm_query_batched"
   | "read_file"
   | "grep"
-  | "find";
+  | "find"
+  | "propose_edit";
 
 /** A mid-exec sub-LLM/tool request from the worker. */
 export interface WorkerInterrupt {
@@ -63,6 +71,9 @@ export interface WorkerInterrupt {
   pattern?: string;
   glob?: string | null;
   maxMatches?: number | null;
+  old?: string;
+  new?: string;
+  existingEdits?: ProposedEdit[];
 }
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
@@ -75,6 +86,7 @@ export const INTERRUPT_KINDS = new Set<InterruptKind>([
   "read_file",
   "grep",
   "find",
+  "propose_edit",
 ]);
 
 export function isInterrupt(msg: WorkerMessage): msg is WorkerInterrupt {
@@ -87,6 +99,7 @@ export interface ReplResult {
   stderr: string;
   finalAnswer: string | null;
   answerContent: string;
+  edits: ProposedEdit[];
   raised: boolean;
   executionTimeMs: number;
 }

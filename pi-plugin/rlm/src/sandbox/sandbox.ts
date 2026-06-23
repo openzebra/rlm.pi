@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import {
   isInterrupt,
   type ParentMessage,
+  type ProposedEdit,
   type ReplResult,
   type WorkerInterrupt,
   type WorkerMessage,
@@ -31,6 +32,7 @@ export interface SubLlmHandlers {
   readFile(path: string, start: number | null, end: number | null): Promise<string>;
   grep(pattern: string, glob: string | null, maxMatches: number | null): Promise<string>;
   find(glob: string | null): Promise<string>;
+  proposeEdit(path: string, oldText: string, newText: string, existingEdits: readonly ProposedEdit[]): Promise<string>;
 }
 
 export interface SandboxOptions {
@@ -73,6 +75,7 @@ const REJECT: SubLlmHandlers = {
   readFile: async () => "Error: filesystem tools are not available in this run",
   grep: async () => "Error: filesystem tools are not available in this run",
   find: async () => "Error: filesystem tools are not available in this run",
+  proposeEdit: async () => "Error: edit tools are not enabled in this run",
 };
 
 /** Distributive omit so each union member keeps its own fields (plain Omit collapses to shared keys). */
@@ -181,6 +184,7 @@ export class PythonSandbox {
       stderr: res.stderr ?? "",
       finalAnswer: res.final_answer ?? null,
       answerContent: res.answer_content ?? "",
+      edits: res.edits ?? [],
       raised: res.raised ?? false,
       executionTimeMs: Math.round((res.execution_time ?? 0) * 1000),
     };
@@ -304,8 +308,11 @@ export class PythonSandbox {
       } else if (msg.type === "grep") {
         const response = await h.grep(msg.pattern ?? "", msg.glob ?? null, msg.maxMatches ?? null);
         this.reply(msg.rid, { response });
-      } else {
+      } else if (msg.type === "find") {
         const response = await h.find(msg.glob ?? null);
+        this.reply(msg.rid, { response });
+      } else {
+        const response = await h.proposeEdit(msg.path ?? "", msg.old ?? "", msg.new ?? "", msg.existingEdits ?? []);
         this.reply(msg.rid, { response });
       }
     } catch (err) {

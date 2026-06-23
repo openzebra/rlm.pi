@@ -18,9 +18,10 @@ import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
 import { NOOP_OBSERVER, type SubcallObserver } from "../state/events.ts";
 import { PythonSandbox } from "../sandbox/sandbox.ts";
+import type { ProposedEdit } from "../sandbox/protocol.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
 import { contextLength, contextTypeLabel } from "../text/tokens.ts";
-import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
+import { collectEdits, finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
 import { compactHistory, shouldCompact } from "./compaction.ts";
 import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
@@ -57,6 +58,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
       observer.end(selfId, { error: "unknown model override" });
       return {
         answer: `Error: unknown model override '${input.smartModelOverride}'`,
+        edits: [],
         iterations: 0,
         costUsd: 0,
         inputTokens: 0,
@@ -111,6 +113,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let lastAnswer = "";
     let compactions = 0;
     let completedTurns = 0;
+    let editsAcc: ProposedEdit[] = [];
     let nodeStatus: "done" | "error" = "done";
     try {
       const fsInitialFiles = input.projectMap && typeof input.context === "string"
@@ -128,6 +131,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           })
         : undefined;
 
+      const editHandlers = fs && deps.config.editEnabled && input.depth === 0 ? { proposeEdit: fs.proposeEdit } : {};
       sandbox = await PythonSandbox.spawn({
         depth: input.depth,
         execTimeoutS: deps.config.execTimeoutS,
@@ -136,7 +140,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         signal: deps.signal,
         workspaceRoot: input.workspaceRoot,
         initTimeoutMs: deps.config.sandboxInitTimeoutMs,
-        handlers: { ...llm, ...rlm, ...(fs ? { readFile: fs.readFile, grep: fs.grep, find: fs.find } : {}) },
+        handlers: { ...llm, ...rlm, ...(fs ? { readFile: fs.readFile, grep: fs.grep, find: fs.find } : {}), ...editHandlers },
       });
 
       const meta = {
@@ -150,6 +154,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
       const system = buildRlmSystemPrompt(meta, {
         orchestrator: deps.config.orchestrator,
         recursion: input.depth + 1 < deps.config.maxDepth,
+        edit: Boolean(fs) && deps.config.editEnabled && input.depth === 0,
       });
       let history: ChatMsg[] = [{ role: "system", content: system }];
       let pendingReplOutputs: string | undefined;
@@ -193,10 +198,12 @@ export function createEngine(deps: EngineDeps): RunRlm {
         if (answerContent) best = answerContent;
         else if (!best && turn.response.trim()) best = turn.response;
         completedTurns = i + 1;
+        const proposedEdits = collectEdits(turn.results);
+        if (proposedEdits.length > 0) editsAcc = proposedEdits;
 
         const final = finalAnswerOf(turn.results);
         if (final != null) {
-          const done = result(final, i + 1, limits);
+          const done = result(final, i + 1, limits, editsAcc);
           lastAnswer = done.answer;
           return done;
         }
@@ -241,9 +248,9 @@ function appendUserMessage(history: ChatMsg[], content: string): void {
   history.push({ role: "user", content });
 }
 
-function result(answer: string, iterations: number, limits: LimitGuard): RlmResult {
+function result(answer: string, iterations: number, limits: LimitGuard, edits: ProposedEdit[] = []): RlmResult {
   const u = limits.usage();
-  return { answer, iterations, costUsd: u.costUsd, inputTokens: u.inputTokens, outputTokens: u.outputTokens, durationMs: u.durationMs };
+  return { answer, edits, iterations, costUsd: u.costUsd, inputTokens: u.inputTokens, outputTokens: u.outputTokens, durationMs: u.durationMs };
 }
 
 /** Out of turns: ask the model for its best final answer (plain text). */

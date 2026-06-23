@@ -62,7 +62,7 @@ for _blocked in ("eval", "exec", "compile", "input", "globals", "locals"):
 RESERVED = frozenset(
     {
         "llm_query", "llm_query_batched", "rlm_query", "rlm_query_batched",
-        "read_file", "grep", "find", "SHOW_VARS", "answer", "context", "context_0",
+        "read_file", "grep", "find", "propose_edit", "SHOW_EDITS", "SHOW_VARS", "answer", "context", "context_0",
     }
 )
 
@@ -93,6 +93,7 @@ class Worker:
         self.exec_timeout_s = exec_timeout_s
         self._rid = 0
         self._final_answer: str | None = None
+        self._edits: list[dict[str, str]] = []
         self._context_count = 0
         self.ns: dict[str, Any] = {}
         self._setup()
@@ -114,6 +115,8 @@ class Worker:
         ns["read_file"] = self._read_file
         ns["grep"] = self._grep
         ns["find"] = self._find
+        ns["propose_edit"] = self._propose_edit
+        ns["SHOW_EDITS"] = self._show_edits
         ns["SHOW_VARS"] = self._show_vars
         if not isinstance(ns.get("answer"), _AnswerDict):
             cur = ns.get("answer")
@@ -135,6 +138,19 @@ class Worker:
             if not k.startswith("_") and not k.startswith("context_") and k not in RESERVED and k != "__builtins__"
         }
         return f"Available variables: {avail}" if avail else "No variables created yet."
+
+    def _show_edits(self) -> str:
+        if not self._edits:
+            return "No proposed edits."
+        lines = [f"Proposed edits: {len(self._edits)}"]
+        for i, e in enumerate(self._edits, 1):
+            old_lines = str(e.get("oldText", "")).count("\n") + 1
+            new_lines = str(e.get("newText", "")).count("\n") + 1
+            lines.append(
+                f"{i}. {e.get('path', '')}: old {len(e.get('oldText', ''))} chars/{old_lines} lines -> "
+                f"new {len(e.get('newText', ''))} chars/{new_lines} lines"
+            )
+        return "\n".join(lines)
 
     # ---- sub-LLM bridge over stdio --------------------------------------------------------
 
@@ -193,6 +209,28 @@ class Worker:
     def _find(self, glob: str | None = None) -> str:
         r = self._rpc("find", {"glob": glob})
         return f"Error: {r['error']}" if r.get("error") else r.get("response", "")
+
+    def _propose_edit(self, path: str, old: str, new: str) -> str:
+        """Validate an anchor edit with the parent; record it on success.
+
+        Does NOT write to disk — the parent applies edits after the run, with approval.
+        Returns a short preview, or an `Error: …` string the model can act on.
+        """
+        path_s = str(path)
+        old_s = str(old)
+        new_s = str(new)
+        proposed = {"path": path_s, "oldText": old_s, "newText": new_s}
+        if proposed in self._edits:
+            return "ok — duplicate edit already proposed"
+        existing = [e for e in self._edits if e.get("path") == path_s]
+        r = self._rpc("propose_edit", {"path": path_s, "old": old_s, "new": new_s, "existingEdits": existing})
+        if r.get("error"):
+            return f"Error: {r['error']}"
+        response = r.get("response", "ok")
+        if isinstance(response, str) and response.startswith("Error:"):
+            return response
+        self._edits.append(proposed)
+        return response if isinstance(response, str) else "ok"
 
     def _rlm_query_batched(self, prompts, model: str | None = None) -> list[str]:
         prompts = [str(p) for p in prompts]
@@ -268,6 +306,7 @@ class Worker:
             "stderr": stderr,
             "final_answer": final,
             "answer_content": str(answer_content),
+            "edits": list(self._edits),
             "raised": raised,
             "execution_time": time.perf_counter() - start,
         }

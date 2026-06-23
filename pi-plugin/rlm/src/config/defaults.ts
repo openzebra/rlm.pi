@@ -23,6 +23,7 @@ export const DEFAULT_CONFIG: RlmConfig = {
     grepMaxMatchesCeiling: 1_000,
   }),
   sandboxInitTimeoutMs: 30_000,
+  editEnabled: false,
   allowReadOutsideWorkspace: false,
   subSampling: Object.freeze({ maxTokens: 8192 }),
 };

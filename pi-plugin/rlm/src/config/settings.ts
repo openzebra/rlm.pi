@@ -71,6 +71,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   const fsLimits = validateFsLimits(r.fsLimits);
   if (fsLimits) out.fsLimits = fsLimits as FsLimits;
   if (validateNumber(r.sandboxInitTimeoutMs, 100) !== undefined) out.sandboxInitTimeoutMs = r.sandboxInitTimeoutMs as number;
+  const editEnabled = validateBoolean(r.editEnabled);
+  if (editEnabled !== undefined) out.editEnabled = editEnabled;
   const allowReadOutsideWorkspace = validateBoolean(r.allowReadOutsideWorkspace);
   if (allowReadOutsideWorkspace !== undefined) out.allowReadOutsideWorkspace = allowReadOutsideWorkspace;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {

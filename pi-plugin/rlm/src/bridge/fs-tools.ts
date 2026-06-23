@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { DEFAULT_CONFIG } from "../config/defaults.ts";
 import type { FsLimits } from "../core/types.ts";
 import { NOOP_OBSERVER, type SubcallObserver } from "../state/events.ts";
+import { validateAnchorEdit, validateAnchorEditSet, type AnchorEdit } from "../text/edits.ts";
 
 const execFileP = promisify(execFile);
 
@@ -33,6 +34,7 @@ export interface FsBridge {
   readFile(path: string, start: number | null, end: number | null): Promise<string>;
   grep(pattern: string, glob: string | null, maxMatches: number | null): Promise<string>;
   find(glob: string | null): Promise<string>;
+  proposeEdit(path: string, oldText: string, newText: string, existingEdits: readonly AnchorEdit[]): Promise<string>;
 }
 
 export interface FsBridgeOptions {
@@ -73,9 +75,20 @@ async function safeRealPath(root: string, path: string, opts: CommandOptions, ro
   return real;
 }
 
+export async function safeWorkspaceRealPath(root: string, path: string, allowOutsideWorkspace = false): Promise<string> {
+  return safeRealPath(root, path, { ...commandOptions(), allowReadOutsideWorkspace: allowOutsideWorkspace });
+}
+
 function truncateOutput(text: string, limit = DEFAULT_CONFIG.fsLimits.maxOutputChars): string {
   if (text.length <= limit) return text;
   return `${text.slice(0, limit)}\n…[truncated to ${limit} characters]`;
+}
+
+function previewEdit(text: string, oldText: string, newText: string, path: string, offset: number): string {
+  const line = text.slice(0, offset).split("\n").length;
+  const removed = oldText.split("\n").length;
+  const added = newText.split("\n").length;
+  return `ok — ${path}:${line} (−${removed}/+${added} lines)`;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -335,6 +348,32 @@ export function createFsBridge(root: string, fsOpts: FsBridgeOptions = {}): FsBr
         out = isEnoent(e) ? `Error: ${missingFileMessage(path)}` : `Error: ${errorMessage(e)}`;
       }
       observer.end(id, { error: out.startsWith("Error:") ? out : undefined, resultPreview: previewRead(out) });
+      return out;
+    },
+
+    async proposeEdit(path, oldText, newText, existingEdits) {
+      const id = observer.start({ kind: "tool", depth, parentId: fsOpts.parentId, label: "propose_edit", args: path });
+      let out: string;
+      try {
+        const abs = await safeRealPath(root, path, opts, await rootReal());
+        const st = await stat(abs);
+        if (!st.isFile()) out = `Error: '${path}' is not a file`;
+        else if (st.size > opts.limits.maxReadBytes) out = `Error: file '${path}' exceeds the ${opts.limits.maxReadBytes} byte limit`;
+        else {
+          const text = await readFile(abs, "utf8");
+          const candidate: AnchorEdit = { oldText, newText };
+          const validation = validateAnchorEdit(text, path, candidate);
+          if (!validation.ok) out = `Error: ${validation.error}`;
+          else {
+            const combined = [...existingEdits, candidate];
+            const setValidation = validateAnchorEditSet(text, path, combined);
+            out = setValidation.ok ? previewEdit(text, oldText, newText, path, validation.range.start) : `Error: ${setValidation.error}`;
+          }
+        }
+      } catch (e) {
+        out = isEnoent(e) ? `Error: ${missingFileMessage(path)}` : `Error: ${errorMessage(e)}`;
+      }
+      observer.end(id, { error: out.startsWith("Error:") ? out : undefined, resultPreview: out });
       return out;
     },
 
