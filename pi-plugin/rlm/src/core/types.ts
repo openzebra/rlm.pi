@@ -21,6 +21,15 @@ export interface FsLimits {
 
 export type EditRequestApprovalMode = "ask" | "yolo";
 
+export interface TelemetryConfig {
+  /** Default: enabled iff a tracking URI resolves from config or MLFLOW_TRACKING_URI. */
+  readonly enabled?: boolean;
+  readonly trackingUri?: string;
+  readonly experimentId?: string;
+  /** Bearer token is env-only via MLFLOW_TRACKING_TOKEN; never persisted in rlm.json. */
+  readonly maxQueueSize?: number;
+}
+
 export interface RlmConfig {
   /** Persistent editor-routing mode; when enabled, plain interactive prompts use RLM. */
   enabled: boolean;
@@ -66,6 +75,8 @@ export interface RlmConfig {
   smartReasoning?: ThinkingLevel;
   /** Sampling for sub-LLM (worker) calls. */
   subSampling: Sampling;
+  /** Optional MLflow telemetry export configuration. Omitted by default. */
+  readonly telemetry?: TelemetryConfig;
 }
 
 /** Input to a (headless) RLM run. */

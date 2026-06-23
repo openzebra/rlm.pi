@@ -4,6 +4,7 @@
  * pass a no-op (or recording) observer instead.
  */
 
+import type { TelemetrySink } from "../telemetry/sink.ts";
 import { AgentTree, type NodeKind } from "./agent-tree.ts";
 
 export interface SubcallStart {
@@ -68,5 +69,30 @@ export function treeObserver(tree: AgentTree): SubcallObserver {
     result: (id, text) => {
       if (id) tree.setResult(id, text);
     },
+  };
+}
+
+export function observerWith(tree: AgentTree, sink?: TelemetrySink): SubcallObserver {
+  const base = treeObserver(tree);
+  if (!sink) return base;
+  return {
+    start: (info) => {
+      const id = base.start(info);
+      sink.start(id, info);
+      return id;
+    },
+    end: (id, opts) => {
+      base.end(id, opts);
+      if (!id) return;
+      if (opts?.costUsd || opts?.tokens) sink.usage(id, opts.costUsd ?? 0, opts.tokens ?? 0);
+      sink.end(id, { error: opts?.error, resultPreview: opts?.resultPreview });
+    },
+    usage: (id, costUsd, tokens) => {
+      base.usage(id, costUsd, tokens);
+      sink.usage(id, costUsd, tokens);
+    },
+    detail: base.detail,
+    action: base.action,
+    result: base.result,
   };
 }

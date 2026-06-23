@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import type { EditRequestApprovalMode, FsLimits, RlmConfig, Sampling } from "../core/types.ts";
+import type { EditRequestApprovalMode, FsLimits, RlmConfig, Sampling, TelemetryConfig } from "../core/types.ts";
 import { DEFAULT_CONFIG } from "./defaults.ts";
 
 export interface PersistedSettings {
@@ -12,6 +12,8 @@ export interface PersistedSettings {
   smart?: string;
   worker?: string;
 }
+
+type MutablePartialRlmConfig = { -readonly [K in keyof RlmConfig]?: RlmConfig[K] };
 
 function settingsPath(): string {
   return join(getAgentDir(), "rlm.json");
@@ -27,6 +29,30 @@ function validateBoolean(v: unknown): boolean | undefined {
 
 function validateEditRequestApprovalMode(v: unknown): EditRequestApprovalMode | undefined {
   return v === "ask" || v === "yolo" ? v : undefined;
+}
+
+function validateString(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim() ? v : undefined;
+}
+
+function validateTelemetry(raw: unknown): TelemetryConfig | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: {
+    enabled?: boolean;
+    trackingUri?: string;
+    experimentId?: string;
+    maxQueueSize?: number;
+  } = {};
+  const enabled = validateBoolean(r.enabled);
+  if (enabled !== undefined) out.enabled = enabled;
+  const trackingUri = validateString(r.trackingUri);
+  if (trackingUri !== undefined) out.trackingUri = trackingUri;
+  const experimentId = validateString(r.experimentId);
+  if (experimentId !== undefined) out.experimentId = experimentId;
+  const maxQueueSize = validateNumber(r.maxQueueSize, 1);
+  if (maxQueueSize !== undefined) out.maxQueueSize = maxQueueSize;
+  return out;
 }
 
 function validateFsLimits(raw: unknown): Partial<FsLimits> | undefined {
@@ -52,7 +78,7 @@ function validateFsLimits(raw: unknown): Partial<FsLimits> | undefined {
 function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (typeof raw !== "object" || raw === null) return {};
   const r = raw as Record<string, unknown>;
-  const out: Partial<RlmConfig> = {};
+  const out: MutablePartialRlmConfig = {};
   const enabled = validateBoolean(r.enabled);
   if (enabled !== undefined) out.enabled = enabled;
   if (validateNumber(r.maxDepth, 1) !== undefined) out.maxDepth = r.maxDepth as number;
@@ -72,6 +98,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (validateNumber(r.compactionThresholdPct, 0) !== undefined && (r.compactionThresholdPct as number) <= 1) out.compactionThresholdPct = r.compactionThresholdPct as number;
   if (typeof r.python === "string" && r.python.trim()) out.python = r.python;
   if (typeof r.smartReasoning === "string") out.smartReasoning = r.smartReasoning as ThinkingLevel;
+  const telemetry = validateTelemetry(r.telemetry);
+  if (telemetry) out.telemetry = telemetry;
   const fsLimits = validateFsLimits(r.fsLimits);
   if (fsLimits) out.fsLimits = fsLimits as FsLimits;
   if (validateNumber(r.sandboxInitTimeoutMs, 100) !== undefined) out.sandboxInitTimeoutMs = r.sandboxInitTimeoutMs as number;
@@ -125,6 +153,7 @@ export function mergeConfig(partial: Partial<RlmConfig>): RlmConfig {
     ...partial,
     fsLimits: { ...DEFAULT_CONFIG.fsLimits, ...partial.fsLimits },
     subSampling: { ...DEFAULT_CONFIG.subSampling, ...partial.subSampling },
+    ...(partial.telemetry ? { telemetry: { ...partial.telemetry } } : {}),
   };
 }
 

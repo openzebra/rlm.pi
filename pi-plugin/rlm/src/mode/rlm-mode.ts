@@ -16,7 +16,22 @@ import type { RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
 import { renderEditRequestPreview } from "../text/edit-preview.ts";
 import { contextLength } from "../text/tokens.ts";
 import { AgentTree } from "../state/agent-tree.ts";
-import { treeObserver } from "../state/events.ts";
+import { observerWith } from "../state/events.ts";
+import { createTelemetrySink, type TelemetrySink } from "../telemetry/index.ts";
+
+const TELEMETRY_FLUSH_TIMEOUT_MS = 2_000;
+
+function timeout(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const handle = setTimeout(resolve, ms);
+    handle.unref?.();
+  });
+}
+
+async function shutdownTelemetryBounded(sink: TelemetrySink | undefined): Promise<void> {
+  if (!sink) return;
+  await Promise.race([sink.shutdown(), timeout(TELEMETRY_FLUSH_TIMEOUT_MS)]);
+}
 
 export function cheapestModel(registry: ModelRegistry): Model<Api> | undefined {
   const models = registry.getAvailable();
@@ -101,28 +116,37 @@ export class RlmController {
     this.active = abortController;
 
     const done = (async () => {
-      const workspaceRoot = ctx.cwd;
-      const contextValue = await prepareRlmContext(context, workspaceRoot, this.config, abortController.signal);
-      const engine = createEngine({
-        smartModel: models.smart,
-        workerModel: models.worker,
-        registry: ctx.modelRegistry,
-        config: this.config,
-        signal: abortController.signal,
-        observer: treeObserver(tree),
-        onEditRequest: async (request) => {
-          if (this.config.editRequestApproval === "yolo") return true;
-          return ctx.hasUI ? ctx.ui.confirm("Approve RLM edit request?", renderEditRequestPreview(request)) : false;
-        },
-        limits: {
-          maxBudgetUsd: this.config.maxBudgetUsd,
-          maxTimeoutMs: this.config.maxTimeoutMs,
-          maxTokens: this.config.maxTokens,
-          maxErrors: this.config.maxErrors,
-        },
-      });
-      const input: RlmInput = { rootPrompt, context: contextValue, depth: 0, workspaceRoot, projectMap: isProjectMapContext(context, contextValue, workspaceRoot) };
-      return engine(input);
+      const sink = await createTelemetrySink(this.config.telemetry);
+      try {
+        const workspaceRoot = ctx.cwd;
+        const contextValue = await prepareRlmContext(context, workspaceRoot, this.config, abortController.signal);
+        const engine = createEngine({
+          smartModel: models.smart,
+          workerModel: models.worker,
+          registry: ctx.modelRegistry,
+          config: this.config,
+          signal: abortController.signal,
+          observer: observerWith(tree, sink),
+          onEditRequest: async (request) => {
+            if (this.config.editRequestApproval === "yolo") return true;
+            return ctx.hasUI ? ctx.ui.confirm("Approve RLM edit request?", renderEditRequestPreview(request)) : false;
+          },
+          limits: {
+            maxBudgetUsd: this.config.maxBudgetUsd,
+            maxTimeoutMs: this.config.maxTimeoutMs,
+            maxTokens: this.config.maxTokens,
+            maxErrors: this.config.maxErrors,
+          },
+        });
+        const input: RlmInput = { rootPrompt, context: contextValue, depth: 0, workspaceRoot, projectMap: isProjectMapContext(context, contextValue, workspaceRoot) };
+        return await engine(input);
+      } finally {
+        try {
+          await shutdownTelemetryBounded(sink);
+        } catch (err) {
+          console.warn(`[rlm] telemetry shutdown failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     })().finally(() => {
       if (this.active === abortController) this.active = null;
     });
