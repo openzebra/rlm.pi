@@ -2,7 +2,7 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { AgentTree, type TreeNode } from "../state/agent-tree.ts";
 import { formatCost, formatDuration, formatTokens, kindLabel, statusGlyph } from "./theme.ts";
 
@@ -30,13 +30,24 @@ function headline(node: TreeNode, theme: Theme): string {
   return `${glyph} ${label}${model}${theme.fg("muted", `  ${stats.join(" · ")}`)}`;
 }
 
+function wrapPreview(text: string, width: number, indent: string, marker: string, maxLines = 2): string[] {
+  const firstIndent = `${indent}${marker}`;
+  const nextIndent = `${indent}${" ".repeat(marker.length)}`;
+  const body = wrapTextWithAnsi(text.replace(/\s+/g, " ").trim(), Math.max(8, width - firstIndent.length)).slice(0, maxLines);
+  return body.map((line, index) => `${index === 0 ? firstIndent : nextIndent}${line}`);
+}
+
+function coloredRows(theme: Theme, color: "dim" | "muted", rows: readonly string[]): string[] {
+  return rows.map((line) => theme.fg(color, line));
+}
+
 function nodeLines(node: TreeNode, theme: Theme, width: number, prefix: string, childIndent: string): string[] {
   const lines: string[] = [truncateToWidth(`${prefix}${headline(node, theme)}`, width)];
   const nodeDetail = node.kind === "root" && node.detail?.startsWith("turn ") ? undefined : node.detail;
   const detail = node.args ?? nodeDetail;
-  if (detail) lines.push(truncateToWidth(`${childIndent}  ${theme.fg("dim", detail)}`, width));
+  if (detail) lines.push(...coloredRows(theme, "dim", wrapPreview(detail, width, `${childIndent}  `, "")));
   if (node.status === "error" && node.detail) lines.push(truncateToWidth(`${childIndent}  ${theme.fg("error", `✗ ${node.detail}`)}`, width));
-  else if (node.resultPreview) lines.push(truncateToWidth(`${childIndent}  ${theme.fg("muted", `→ ${node.resultPreview}`)}`, width));
+  else if (node.resultPreview) lines.push(...coloredRows(theme, "muted", wrapPreview(node.resultPreview, width, `${childIndent}  `, "→ ")));
   return lines;
 }
 

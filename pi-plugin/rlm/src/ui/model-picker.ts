@@ -3,7 +3,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import { Container, type Component, type SelectItem, SelectList, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { formatCost } from "./theme.ts";
 
 export interface ModelSelection {
@@ -81,14 +81,21 @@ export async function selectModel(
     return undefined;
   }
   if (ctx.mode !== "tui") {
-    const model = current ?? models[0]!;
+    const fallback = models[0];
+    if (!fallback) return undefined;
+    const model = current ?? fallback;
     return { model, thinkingLevel: await selectThinkingLevel(ctx, model, currentThinking) };
   }
 
   const chosen = await ctx.ui.custom<string | null>((_tui, theme, _kb, done) => {
+    let query = "";
     const container = new Container();
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
     container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+    const filterLine: Component = {
+      render: (w) => [truncateToWidth(theme.fg("dim", `Filter: ${query || "type to filter…"}`), w)],
+      invalidate: () => {},
+    };
     const list = new SelectList(items(models), Math.min(models.length, 12), {
       selectedPrefix: (t) => theme.fg("accent", t),
       selectedText: (t) => theme.fg("accent", t),
@@ -96,12 +103,34 @@ export async function selectModel(
       scrollInfo: (t) => theme.fg("dim", t),
       noMatch: (t) => theme.fg("warning", t),
     });
+    const isFilterText = (s: string): boolean => {
+      const sanitized = s.replace(/ /g, "");
+      return sanitized.length > 0 && Array.from(sanitized).every((char) => char >= " " && char !== "\x7f");
+    };
+    const isBackspace = (s: string): boolean => s === "\x7f" || s === "\b";
     list.onSelect = (item) => done(item.value);
     list.onCancel = () => done(null);
+    container.addChild(filterLine);
     container.addChild(list);
-    container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter select • esc cancel"), 1, 0));
+    container.addChild(new Text(theme.fg("dim", "↑↓ navigate • type to filter • enter select • esc cancel"), 1, 0));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-    return { render: (w) => container.render(w), invalidate: () => container.invalidate(), handleInput: (data) => list.handleInput(data) };
+    return {
+      render: (w) => container.render(w),
+      invalidate: () => container.invalidate(),
+      handleInput: (data) => {
+        if (isFilterText(data)) {
+          query = `${query}${data.replace(/ /g, "")}`;
+          list.setFilter(query);
+          return;
+        }
+        if (isBackspace(data)) {
+          query = query.slice(0, -1);
+          list.setFilter(query);
+          return;
+        }
+        list.handleInput(data);
+      },
+    };
   });
 
   const model = chosen ? models.find((m) => `${m.provider}/${m.id}` === chosen) : undefined;

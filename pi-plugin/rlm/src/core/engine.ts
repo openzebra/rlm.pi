@@ -18,6 +18,7 @@ import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
 import { NOOP_OBSERVER, type SubcallObserver } from "../state/events.ts";
 import { PythonSandbox } from "../sandbox/sandbox.ts";
+import { previewStdout, previewText } from "../text/preview.ts";
 import { contextLength, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
 import { compactHistory, shouldCompact } from "./compaction.ts";
@@ -107,6 +108,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
     });
     let sandbox: PythonSandbox | undefined;
     let best = "";
+    let lastAnswer = "";
     let compactions = 0;
     let completedTurns = 0;
     let nodeStatus: "done" | "error" = "done";
@@ -182,6 +184,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
           sampling: { reasoning: deps.config.smartReasoning },
           signal: deps.signal,
         });
+        observer.action(selfId, `▶ ${previewText(turn.blocks[0] ?? turn.response)}`);
+        observer.result(selfId, previewStdout(turn.results));
         limits.addUsage(turn.usage);
         observer.usage(selfId, turn.usage.cost.total, turn.usage.totalTokens);
         deps.onUsage?.(turn.usage, "root");
@@ -191,27 +195,37 @@ export function createEngine(deps: EngineDeps): RunRlm {
         completedTurns = i + 1;
 
         const final = finalAnswerOf(turn.results);
-        if (final != null) return result(final, i + 1, limits);
+        if (final != null) {
+          const done = result(final, i + 1, limits);
+          lastAnswer = done.answer;
+          return done;
+        }
 
         limits.observe(turnHadError(turn.results));
         history.push({ role: "assistant", content: turn.response });
         pendingReplOutputs = formatReplOutputs(turn.results);
       }
       if (pendingReplOutputs) appendUserMessage(history, pendingReplOutputs);
-      return result(await finalize(history, deps, limits), deps.config.maxIterations, limits);
+      const finalized = result(await finalize(history, deps, limits), deps.config.maxIterations, limits);
+      lastAnswer = finalized.answer;
+      return finalized;
     } catch (err) {
       // Abort is a user action — resolve with the best partial, not an error.
       if (deps.signal?.aborted) {
-        return result(best.trim() || "(aborted)", completedTurns, limits);
+        const aborted = result(best.trim() || "(aborted)", completedTurns, limits);
+        lastAnswer = aborted.answer;
+        return aborted;
       }
       if (err instanceof LimitError) {
         nodeStatus = "error";
-        return result(best.trim() || `(stopped: ${err.message})`, completedTurns, limits);
+        const stopped = result(best.trim() || `(stopped: ${err.message})`, completedTurns, limits);
+        lastAnswer = stopped.answer;
+        return stopped;
       }
       nodeStatus = "error";
       throw err;
     } finally {
-      observer.end(selfId, nodeStatus === "error" ? { error: "stopped" } : undefined);
+      observer.end(selfId, nodeStatus === "error" ? { error: "stopped" } : { resultPreview: previewText(lastAnswer) });
       await sandbox?.dispose();
     }
   };

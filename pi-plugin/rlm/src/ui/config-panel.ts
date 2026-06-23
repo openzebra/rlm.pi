@@ -53,6 +53,7 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("grepMaxMatchesCeiling", "Grep hard max matches", String(config.fsLimits.grepMaxMatchesCeiling), CHOICES.grepMaxMatchesCeiling, "Maximum grep result cap even if the model requests more."),
     item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
     item("allowReadOutsideWorkspace", "[Security] Read outside workspace", config.allowReadOutsideWorkspace ? "on" : "off", CHOICES.allowReadOutsideWorkspace, "UNSAFE: lets read_file/grep/find escape the project root."),
+    item("__save__", "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
   ];
 
   await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
@@ -62,7 +63,13 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
       items,
       items.length + 2,
       getSettingsListTheme(),
-      (id, value) => applySetting(config, id, value),
+      (id, value) => {
+        if (id === "__save__") {
+          done();
+          return;
+        }
+        applySetting(config, id, value);
+      },
       () => done(),
     );
     container.addChild(list);

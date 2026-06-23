@@ -16,6 +16,7 @@ export interface Turn {
   response: string;
   results: ReplResult[];
   usage: Usage;
+  blocks: string[];
 }
 
 export interface TurnDeps {
@@ -40,5 +41,5 @@ export async function runTurn(history: ChatMsg[], sandbox: PythonSandbox, deps: 
   for (const code of blocks) {
     results.push(await sandbox.exec(code));
   }
-  return { response: text, results, usage };
+  return { response: text, results, usage, blocks };
 }

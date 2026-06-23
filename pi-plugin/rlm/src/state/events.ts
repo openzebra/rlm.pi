@@ -23,6 +23,10 @@ export interface SubcallObserver {
   usage(id: string, costUsd: number, tokens: number): void;
   /** Update a node's one-line detail (e.g. "turn 3/30"). */
   detail(id: string, text: string): void;
+  /** Update the current action/code preview for a running node. */
+  action(id: string, args: string): void;
+  /** Update the current result/stdout preview for a running node. */
+  result(id: string, text: string): void;
 }
 
 export const NOOP_OBSERVER: SubcallObserver = {
@@ -30,6 +34,8 @@ export const NOOP_OBSERVER: SubcallObserver = {
   end: () => {},
   usage: () => {},
   detail: () => {},
+  action: () => {},
+  result: () => {},
 };
 
 export function treeObserver(tree: AgentTree): SubcallObserver {
@@ -55,6 +61,12 @@ export function treeObserver(tree: AgentTree): SubcallObserver {
     },
     detail: (id, text) => {
       if (id) tree.setDetail(id, text);
+    },
+    action: (id, args) => {
+      if (id) tree.setArgs(id, args);
+    },
+    result: (id, text) => {
+      if (id) tree.setResult(id, text);
     },
   };
 }

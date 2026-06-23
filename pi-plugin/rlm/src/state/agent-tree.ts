@@ -74,6 +74,13 @@ export class AgentTree {
     this.emit();
   }
 
+  setArgs(id: string, args: string): void {
+    const n = this.nodes.get(id);
+    if (!n) return;
+    n.args = args;
+    this.emit();
+  }
+
   setResult(id: string, resultPreview: string): void {
     const n = this.nodes.get(id);
     if (!n) return;

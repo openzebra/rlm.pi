@@ -64,11 +64,14 @@ async function testStartupFailureEndsNode(): Promise<void> {
 
 async function testBatchedFailure(): Promise<void> {
   let endedError = "";
+  let endedResult = "";
   const observer: SubcallObserver = {
     start: () => "batch",
-    end: (_id, opts) => { endedError = opts?.error ?? ""; },
+    end: (_id, opts) => { endedError = opts?.error ?? ""; endedResult = opts?.resultPreview ?? ""; },
     usage: () => {},
     detail: () => {},
+    action: () => {},
+    result: () => {},
   };
   const workerModel = { id: "worker", provider: "test", cost: { input: 0, output: 0 } } as Model<Api>;
   const registry = { find: () => undefined } as unknown as ModelRegistry;
@@ -76,6 +79,7 @@ async function testBatchedFailure(): Promise<void> {
   const out = await bridge.llmQueryBatched(["a", "b"], "missing/model", 0);
   check("batched call returns per-item errors", out.length === 2 && out.every((v) => v.startsWith("Error:")));
   check("batched failure surfaces on tree node", endedError === "all 2 sub-calls failed", endedError);
+  check("batched response preview surfaces on tree node", endedResult.includes("(+1 more)"), endedResult);
 }
 
 async function main() {
@@ -87,8 +91,10 @@ async function main() {
   const tool = obs.start({ kind: "tool", depth: 0, parentId: root, label: "read_file", args: "src/auth/jwt.ts:1-120" });
   obs.end(tool, { resultPreview: "118 lines · 3.2k chars" });
   const llm = obs.start({ kind: "llm", depth: 0, parentId: root, model: "worker", label: "llm_query", args: "prompt: summarize chunk" });
-  obs.end(llm, { costUsd: 0.0003, tokens: 800 });
+  obs.end(llm, { costUsd: 0.0003, tokens: 800, resultPreview: "Worker response summary with exported symbol details" });
   const rlm = obs.start({ kind: "rlm", depth: 1, parentId: root, model: "smart", label: "rlm_query", detail: "sub-problem" });
+  obs.action(root, "▶ print('root stdout sample')");
+  obs.result(root, "root stdout sample");
   const nested = obs.start({ kind: "llm", depth: 1, parentId: rlm, model: "worker", label: "llm_query" });
   obs.end(nested);
 
@@ -99,6 +105,12 @@ async function main() {
   check("header shows rolled-up totals", /RLM · \$/.test(lines[0] ?? ""));
   check("root node rendered", text.includes("root"));
   check("llm_query child rendered", text.includes("llm_query"));
+  check("llm_query node carries response preview", tree.get(llm)?.resultPreview === "Worker response summary with exported symbol details");
+  check("llm_query response preview rendered", text.includes("Worker response summary"));
+  check("root node carries action preview", tree.get(root)?.args === "▶ print('root stdout sample')");
+  check("root node carries stdout preview", tree.get(root)?.resultPreview === "root stdout sample");
+  check("root action preview rendered", text.includes("▶ print('root stdout sample')"));
+  check("root stdout preview rendered", text.includes("→ root stdout sample"));
   check("read_file tool rendered", text.includes("read_file"));
   check("tool args rendered", text.includes("src/auth/jwt.ts:1-120"));
   check("tool result preview rendered", text.includes("→ 118 lines"));
