@@ -1,4 +1,9 @@
 import type { RlmConfig } from "../core/types.ts";
+import { tmpdir } from "node:os";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+export const DEFAULT_RUN_DIR = join(tmpdir(), "rlm-runs");
 
 export const DEFAULT_CONFIG: RlmConfig = {
   enabled: true,
@@ -29,7 +34,7 @@ export const DEFAULT_CONFIG: RlmConfig = {
   subSampling: Object.freeze({ maxTokens: 8192 }),
   runLog: Object.freeze({
     enabled: true,
-    dir: ".rlm/runs",
+    dir: DEFAULT_RUN_DIR,
     snapshot: true,
     maxRuns: 50,
   }),

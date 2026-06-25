@@ -4,7 +4,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { DEFAULT_CONFIG } from "../config/defaults.ts";
 import type { FsLimits } from "../core/types.ts";
-import { NOOP_OBSERVER, type SubcallObserver } from "../state/events.ts";
+import type { RlmToolBridge } from "../tool/rlm-details.ts";
 import { validateAnchorEdit, validateAnchorEditSet, type AnchorEdit } from "../text/edits.ts";
 
 const execFileP = promisify(execFile);
@@ -41,7 +41,7 @@ export interface FsBridgeOptions {
   signal?: AbortSignal;
   commandTimeoutMs?: number;
   initialFiles?: string[];
-  observer?: SubcallObserver;
+  bridge?: RlmToolBridge;
   parentId?: string;
   depth?: number;
   limits?: FsLimits;
@@ -277,15 +277,17 @@ export async function buildProjectManifest(root: string, opts?: FsBridgeOptions)
   ].join("\n");
 }
 
+const isErr = (s: string): boolean => s.startsWith("Error:");
+
 function previewRead(out: string): string {
-  if (out.startsWith("Error:")) return out;
+  if (isErr(out)) return out;
   if (out.length === 0) return "0 lines · 0 chars";
   const lines = out.split("\n").length;
   return `${lines} line${lines === 1 ? "" : "s"} · ${out.length.toLocaleString()} chars`;
 }
 
 function previewGrep(out: string): string {
-  if (out.startsWith("Error:")) return out;
+  if (isErr(out)) return out;
   if (out === "(no matches)") return "(no matches)";
   const lines = out.split("\n").filter((line) => line && !line.startsWith("…[truncated")).length;
   const files = new Set<string>();
@@ -297,7 +299,7 @@ function previewGrep(out: string): string {
 }
 
 function previewFind(out: string): string {
-  if (out.startsWith("Error:")) return out;
+  if (isErr(out)) return out;
   if (out === "(no files)") return "(no files)";
   const files = out.split("\n").filter((line) => line && !line.startsWith("…[truncated")).length;
   return `${files} file${files === 1 ? "" : "s"}`;
@@ -305,8 +307,7 @@ function previewFind(out: string): string {
 
 export function createFsBridge(root: string, fsOpts: FsBridgeOptions = {}): FsBridge {
   const opts = commandOptions(fsOpts);
-  const observer = fsOpts.observer ?? NOOP_OBSERVER;
-  const depth = fsOpts.depth ?? 0;
+  const bridge = fsOpts.bridge;
   let rootRealPromise: Promise<string> | undefined;
   let fileListPromise: Promise<string[]> | undefined;
 
@@ -327,7 +328,7 @@ export function createFsBridge(root: string, fsOpts: FsBridgeOptions = {}): FsBr
   return {
     async readFile(path, start, end) {
       const args = start != null || end != null ? `${path}:${start ?? ""}-${end ?? ""}` : path;
-      const id = observer.start({ kind: "tool", depth, parentId: fsOpts.parentId, label: "read_file", args });
+      const id = bridge?.addSubcall({ kind: "tool", parentId: fsOpts.parentId, label: "read_file", args, depth: fsOpts.depth });
       let out: string;
       try {
         const abs = await safeRealPath(root, path, opts, await rootReal());
@@ -347,12 +348,16 @@ export function createFsBridge(root: string, fsOpts: FsBridgeOptions = {}): FsBr
       } catch (e) {
         out = isEnoent(e) ? `Error: ${missingFileMessage(path)}` : `Error: ${errorMessage(e)}`;
       }
-      observer.end(id, { error: out.startsWith("Error:") ? out : undefined, resultPreview: previewRead(out) });
+      if (bridge && id !== undefined) bridge.updateSubcall(id, {
+        status: isErr(out) ? "error" : "done",
+        detail: isErr(out) ? out : undefined,
+        resultPreview: previewRead(out),
+      });
       return out;
     },
 
     async proposeEdit(path, oldText, newText, existingEdits) {
-      const id = observer.start({ kind: "tool", depth, parentId: fsOpts.parentId, label: "propose_edit", args: path });
+      const id = bridge?.addSubcall({ kind: "tool", parentId: fsOpts.parentId, label: "propose_edit", args: path, depth: fsOpts.depth });
       let out: string;
       try {
         const abs = await safeRealPath(root, path, opts, await rootReal());
@@ -373,13 +378,17 @@ export function createFsBridge(root: string, fsOpts: FsBridgeOptions = {}): FsBr
       } catch (e) {
         out = isEnoent(e) ? `Error: ${missingFileMessage(path)}` : `Error: ${errorMessage(e)}`;
       }
-      observer.end(id, { error: out.startsWith("Error:") ? out : undefined, resultPreview: out });
+      if (bridge && id !== undefined) bridge.updateSubcall(id, {
+        status: isErr(out) ? "error" : "done",
+        detail: isErr(out) ? out : undefined,
+        resultPreview: out,
+      });
       return out;
     },
 
     async grep(pattern, glob, maxMatches) {
       const cap = Math.min(Math.max(maxMatches ?? opts.limits.grepDefaultMaxMatches, 1), opts.limits.grepMaxMatchesCeiling);
-      const id = observer.start({ kind: "tool", depth, parentId: fsOpts.parentId, label: "grep", args: `"${pattern}" ${glob ?? "**/*"} (max ${cap})` });
+      const id = bridge?.addSubcall({ kind: "tool", parentId: fsOpts.parentId, label: "grep", args: `"${pattern}" ${glob ?? "**/*"} (max ${cap})`, depth: fsOpts.depth });
       let out: string;
       try {
         const args = ["--line-number", "--no-heading", "--color=never"];
@@ -400,12 +409,16 @@ export function createFsBridge(root: string, fsOpts: FsBridgeOptions = {}): FsBr
           }
         }
       }
-      observer.end(id, { error: out.startsWith("Error:") ? out : undefined, resultPreview: previewGrep(out) });
+      if (bridge && id !== undefined) bridge.updateSubcall(id, {
+        status: isErr(out) ? "error" : "done",
+        detail: isErr(out) ? out : undefined,
+        resultPreview: previewGrep(out),
+      });
       return out;
     },
 
     async find(glob) {
-      const id = observer.start({ kind: "tool", depth, parentId: fsOpts.parentId, label: "find", args: glob ?? "**/*" });
+      const id = bridge?.addSubcall({ kind: "tool", parentId: fsOpts.parentId, label: "find", args: glob ?? "**/*", depth: fsOpts.depth });
       let out: string;
       try {
         let files = await projectFiles();
@@ -420,7 +433,11 @@ export function createFsBridge(root: string, fsOpts: FsBridgeOptions = {}): FsBr
       } catch (e) {
         out = `Error: ${errorMessage(e)}`;
       }
-      observer.end(id, { error: out.startsWith("Error:") ? out : undefined, resultPreview: previewFind(out) });
+      if (bridge && id !== undefined) bridge.updateSubcall(id, {
+        status: isErr(out) ? "error" : "done",
+        detail: isErr(out) ? out : undefined,
+        resultPreview: previewFind(out),
+      });
       return out;
     },
   };

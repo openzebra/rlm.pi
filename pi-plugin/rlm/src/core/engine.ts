@@ -16,7 +16,7 @@ import { createRlmHandlers } from "../bridge/rlm-query.ts";
 import { resolveModelId } from "../config/settings.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
-import { NOOP_OBSERVER, type SubcallObserver } from "../state/events.ts";
+import type { RlmToolBridge } from "../tool/rlm-details.ts";
 import { PythonSandbox } from "../sandbox/sandbox.ts";
 import type { ProposedEdit } from "../sandbox/protocol.ts";
 import type { AnchorEdit } from "../text/edits.ts";
@@ -29,7 +29,8 @@ import { appendUserMessage } from "./history.ts";
 import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
 import type { RlmConfig, RlmInput, RlmResult, RunRlm } from "./types.ts";
-import { appendRow, finalizeSnapshot, generateRunId, pruneRuns, snapshotPath, writeContextSidecar } from "../state/index.ts";
+import { randomUUID } from "node:crypto";
+import { appendRow, generateRunId, pruneRuns, snapshotPath, writeContextSidecar } from "../state/index.ts";
 import { STATE_SCHEMA_VERSION } from "../state/rows.ts";
 import type { RunHeader } from "../state/rows.ts";
 
@@ -40,8 +41,8 @@ export interface EngineDeps {
   config: RlmConfig;
   limits?: Limits;
   signal?: AbortSignal;
-  /** Live AgentTree reporting. Defaults to a no-op observer. */
-  observer?: SubcallObserver;
+  /** Live RlmDetails reporting via onUpdate. Required — replaces SubcallObserver. */
+  bridge: RlmToolBridge;
   /** Called with each completion's usage (root + sub-LLM) for cost/token rollups. */
   onUsage?: (usage: Usage, role: "root" | "sub") => void;
   /** Called after propose_edit validates and before the worker records the edit. */
@@ -52,7 +53,7 @@ export interface EngineDeps {
 
 /** Build a `runRlm` bound to the given deps. The returned function is reused for recursion. */
 export function createEngine(deps: EngineDeps): RunRlm {
-  const observer = deps.observer ?? NOOP_OBSERVER;
+  const { bridge } = deps;
   const run: RunRlm = async (input: RlmInput): Promise<RlmResult> => {
     const nowIso = (): string => new Date().toISOString(); // local helper — 4 call sites below
     const persist = input.depth === 0 && deps.runState !== undefined;
@@ -60,20 +61,21 @@ export function createEngine(deps: EngineDeps): RunRlm {
     const runId = persist
       ? (input.resume ? input.resume.header.runId : generateRunId())
       : undefined;
-    const selfId = observer.start({
-      kind: input.depth === 0 ? "root" : "rlm",
-      depth: input.depth,
-      parentId: input.parentNodeId,
-      model: deps.smartModel.id,
-      label: input.depth === 0 ? "root" : "rlm_query",
-      detail: input.rootPrompt ? input.rootPrompt.slice(0, 60) : String(input.context).slice(0, 60),
-      runId,
-      resume: Boolean(input.resume),
-    });
+    // I4: session-scoped pickle trust — nonce prevents cross-session snapshot replay.
+    // On resume, sessionNonce is undefined → no snapshots, history-only replay.
+    const sessionNonce = persist && !input.resume ? randomUUID() : undefined;
+    // For depth > 0, input.parentNodeId is the subcall ID created by the parent's rlm-query bridge.
+    // For depth 0, input.parentNodeId is undefined — engine uses root-level bridge methods.
+    const selfReportId = input.depth === 0 ? undefined : input.parentNodeId;
+    if (!selfReportId) {
+      bridge.setRootPrompt(input.rootPrompt ? input.rootPrompt.slice(0, 60) : String(input.context).slice(0, 60));
+      bridge.setTurn(0, deps.config.maxIterations);
+    }
 
     const overrideModel = input.smartModelOverride ? resolveModelId(deps.registry, input.smartModelOverride) : undefined;
     if (input.smartModelOverride && !overrideModel) {
-      observer.end(selfId, { error: "unknown model override" });
+      if (selfReportId) bridge.updateSubcall(selfReportId, { status: "error", detail: "unknown model override" });
+      else bridge.complete("error");
       return {
         answer: `Error: unknown model override '${input.smartModelOverride}'`,
         edits: [],
@@ -108,16 +110,17 @@ export function createEngine(deps: EngineDeps): RunRlm {
         limits.addUsage(u);
         deps.onUsage?.(u, "sub");
       },
-      observer,
-      parentId: selfId,
+      bridge,
+      parentId: selfReportId,
       depth: input.depth,
     });
     const rlm = createRlmHandlers({
       run,
       llm,
+      bridge,
       maxDepth: deps.config.maxDepth,
       maxConcurrent: deps.config.maxConcurrentSubcalls,
-      parentNodeId: selfId,
+      parentNodeId: selfReportId,
       remainingBudget: () => ({
         budgetUsd: limits.remainingBudgetUsd(),
         timeoutMs: limits.remainingTimeoutMs(),
@@ -138,22 +141,26 @@ export function createEngine(deps: EngineDeps): RunRlm {
     const fsTools = Boolean(input.workspaceRoot); // B1: compute before header — `const fs` is created later in the try block
     if (persist && deps.runState && !input.resume && runId) {
       const json = typeof input.context !== "string";
-      writeContextSidecar(deps.runState.cwd, deps.runState.dir, runId, input.context, json);
-      const header: RunHeader = {
-        kind: "header", v: STATE_SCHEMA_VERSION, runId, ts: nowIso(),
-        rootPrompt: input.rootPrompt,
-        context: { type: contextTypeLabel(input.context), chars: contextLength(input.context), json, projectMap: input.projectMap ?? false },
-        workspaceRoot: input.workspaceRoot,
-        models: { smart: smartModel.id, worker: deps.workerModel.id },
-        meta: { maxIterations: deps.config.maxIterations, maxDepth: deps.config.maxDepth, orchestrator: deps.config.orchestrator, editEnabled: deps.config.editEnabled && fsTools, fsTools },
-      };
-      persistOn = appendRow(deps.runState.cwd, deps.runState.dir, runId, header);
-      pruneRuns(deps.runState.cwd, deps.runState.dir, deps.config.runLog?.maxRuns ?? 50); // Ops: retention — prune oldest runs beyond maxRuns
+      const sidecarOk = writeContextSidecar(deps.runState.cwd, deps.runState.dir, runId, input.context, json);
+      if (!sidecarOk) {
+        persistOn = false; // QC: skip header if sidecar failed — prevents orphan trail referencing non-existent context
+      } else {
+        const header: RunHeader = {
+          kind: "header", v: STATE_SCHEMA_VERSION, runId, ts: nowIso(),
+          rootPrompt: input.rootPrompt,
+          context: { type: contextTypeLabel(input.context), chars: contextLength(input.context), json, projectMap: input.projectMap ?? false },
+          workspaceRoot: input.workspaceRoot,
+          models: { smart: smartModel.id, worker: deps.workerModel.id },
+          meta: { maxIterations: deps.config.maxIterations, maxDepth: deps.config.maxDepth, orchestrator: deps.config.orchestrator, editEnabled: deps.config.editEnabled && fsTools, fsTools },
+        };
+        persistOn = appendRow(deps.runState.cwd, deps.runState.dir, runId, header);
+      }
+      pruneRuns(deps.runState.cwd, deps.runState.dir, deps.config.runLog?.maxRuns ?? 50); // Ops: retention (always — cleanup even if sidecar failed)
     }
 
-    const recordTerminal = (status: "completed" | "finalized" | "aborted" | "stopped", r: RlmResult): void => {
-      if (!persistOn || !runId || !deps.runState) return;
-      appendRow(deps.runState.cwd, deps.runState.dir, runId, {
+    const recordTerminal = (status: "completed" | "finalized" | "aborted" | "stopped", r: RlmResult): boolean => {
+      if (!persistOn || !runId || !deps.runState) return false;
+      return appendRow(deps.runState.cwd, deps.runState.dir, runId, {
         kind: "terminal", ts: nowIso(), status, answer: r.answer, iterations: r.iterations,
         usage: { costUsd: r.costUsd, inputTokens: r.inputTokens, outputTokens: r.outputTokens },
       });
@@ -167,8 +174,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
         ? createFsBridge(input.workspaceRoot, {
             signal: deps.signal,
             initialFiles: fsInitialFiles,
-            observer,
-            parentId: selfId,
+            bridge,
+            parentId: selfReportId,
             depth: input.depth,
             limits: deps.config.fsLimits,
             allowReadOutsideWorkspace: deps.config.allowReadOutsideWorkspace,
@@ -221,11 +228,12 @@ export function createEngine(deps: EngineDeps): RunRlm {
         completedTurns = input.resume.completedTurns;
       }
       await sandbox.loadContext(input.context);
-      if (input.resume?.snapshotTurn !== undefined && deps.runState && runId) // R-C1: restore from the verified per-turn file
-        await sandbox.restore(snapshotPath(deps.runState.cwd, deps.runState.dir, runId, input.resume.snapshotTurn));
+      if (input.resume?.snapshotTurn !== undefined && deps.runState && runId && sessionNonce) // R-C1: restore only for same-session (sessionNonce present)
+        await sandbox.restore(snapshotPath(deps.runState.cwd, deps.runState.dir, runId, input.resume.snapshotTurn), sessionNonce);
       for (let i = startTurn; i < deps.config.maxIterations; i++) {
         limits.checkTimeout();
-        observer.detail(selfId, `turn ${i + 1}/${deps.config.maxIterations}`);
+        if (selfReportId) bridge.updateSubcall(selfReportId, { detail: `turn ${i + 1}/${deps.config.maxIterations}` });
+        else bridge.setTurn(i + 1, deps.config.maxIterations);
 
         if (pendingReplOutputs) {
           appendUserMessage(history, pendingReplOutputs);
@@ -248,10 +256,11 @@ export function createEngine(deps: EngineDeps): RunRlm {
               compactionUsage = { costUsd: compactionUsage.costUsd + u.cost.total, inputTokens: compactionUsage.inputTokens + u.input, outputTokens: compactionUsage.outputTokens + u.output }; // CC: accumulate
             });
             if (persistOn && runId && deps.runState && history !== prevHistoryRef) {
-              appendRow(deps.runState.cwd, deps.runState.dir, runId, {
+              const ok = appendRow(deps.runState.cwd, deps.runState.dir, runId, {
                 kind: "compaction", turn: i + 1, ts: nowIso(), history,
                 usage: compactionUsage,
               });
+              if (!ok) persistOn = false; // QC: disable persistence on first failure (match turn-row pattern)
             }
           }
         }
@@ -267,10 +276,12 @@ export function createEngine(deps: EngineDeps): RunRlm {
         const allBlocks = turn.blocks.length > 0
           ? turn.blocks.map((b) => previewText(b, 400)).join("\n")
           : previewText(turn.response, 400);
-        observer.action(selfId, `▶ ${allBlocks}`);
-        observer.result(selfId, previewStdout(turn.results));
+        if (selfReportId) {
+          bridge.updateSubcall(selfReportId, { args: `▶ ${allBlocks}`, resultPreview: previewStdout(turn.results) });
+        }
         limits.addUsage(turn.usage);
-        observer.usage(selfId, turn.usage.cost.total, turn.usage.totalTokens);
+        if (selfReportId) bridge.updateSubcall(selfReportId, { costUsd: turn.usage.cost.total, tokens: turn.usage.totalTokens });
+        else bridge.addRootUsage(turn.usage.cost.total, turn.usage.totalTokens);
         deps.onUsage?.(turn.usage, "root");
         const answerContent = latestAnswerContentOf(turn.results);
         if (answerContent) best = answerContent;
@@ -293,10 +304,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
         pendingReplOutputs = turnReplOutputs;
 
         if (persistOn && runId && deps.runState) {
-          const pklPath = snapshotPath(deps.runState.cwd, deps.runState.dir, runId, i + 1); // R-C1: per-turn file
-          // QA: snapshot() already catches internally and returns false — no IIFE needed.
-          const snapOk = deps.runState.snapshot && sandbox
-            ? await sandbox.snapshot(pklPath)
+          const pklPath = snapshotPath(deps.runState.cwd, deps.runState.dir, runId, i + 1);
+          const snapOk = deps.runState.snapshot && sandbox && sessionNonce
+            ? await sandbox.snapshot(pklPath, sessionNonce)
             : false;
           const ok = appendRow(deps.runState.cwd, deps.runState.dir, runId, {
             kind: "turn", turn: i + 1, ts: nowIso(),
@@ -309,7 +319,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
             snapshotOk: snapOk,
           });
           if (!ok) persistOn = false;
-          else if (snapOk) finalizeSnapshot(pklPath); // B4: rename .tmp → .pkl only after the trail row is durable
+          // No finalizeSnapshot — snapshot is atomic (os.rename inside worker.py)
         }
       }
       if (pendingReplOutputs) appendUserMessage(history, pendingReplOutputs);
@@ -335,7 +345,17 @@ export function createEngine(deps: EngineDeps): RunRlm {
       nodeStatus = "error";
       throw err;
     } finally {
-      observer.end(selfId, nodeStatus === "error" ? { error: "stopped" } : { resultPreview: previewText(lastAnswer) });
+      if (selfReportId) {
+        bridge.updateSubcall(selfReportId, {
+          status: nodeStatus,
+          resultPreview: nodeStatus === "error" ? undefined : previewText(lastAnswer),
+          detail: nodeStatus === "error" ? "stopped" : undefined,
+        });
+      } else {
+        if (nodeStatus !== "error" && lastAnswer) bridge.setAnswer(previewText(lastAnswer));
+        bridge.setEdits(editsAcc.length > 0 ? editsAcc : []);
+        bridge.complete(nodeStatus === "error" ? "error" : "done");
+      }
       await sandbox?.dispose();
     }
   };

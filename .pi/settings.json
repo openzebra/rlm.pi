@@ -1,4 +1,0 @@
-{
-  "compaction": { "enabled": false },
-  "retry": { "enabled": true, "maxRetries": 2 }
-}

@@ -6,12 +6,16 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 const RUN_ID_SUFFIX_BYTES = 2;
 const ISO_DATETIME_LENGTH = 19;
 
-/** `YYYY-MM-DD_HH-MM-SS-<4hex>` — filename-sortable, sub-second collision-safe. */
+/** `YYYY-MM-DD_HH-MM-SS-<4hex>` — filename-sortable, sub-second collision-safe.
+ *
+ * Prune ordering in writes.ts:pruneRuns depends on the ISO-slug format producing
+ * chronologically sortable strings. If the format changes, update pruning logic
+ * to maintain oldest-first deletion. */
 export function generateRunId(
   now: Date = new Date(),
   suffix: string = randomBytes(RUN_ID_SUFFIX_BYTES).toString("hex"),
@@ -21,7 +25,8 @@ export function generateRunId(
   return `${iso.slice(0, ISO_DATETIME_LENGTH).replaceAll(":", "-").replace("T", "_")}-${suffix}`;
 }
 
-export const runsDir = (cwd: string, dir: string): string => join(cwd, dir);
+export const runsDir = (cwd: string, dir: string): string =>
+  isAbsolute(dir) ? dir : join(cwd, dir);
 
 export const runDir = (cwd: string, dir: string, runId: string): string => join(runsDir(cwd, dir), runId);
 

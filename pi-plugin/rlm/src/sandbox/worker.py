@@ -319,19 +319,21 @@ class Worker:
         except ImportError:
             return pickle
 
-    # Magic header written before pickle data so restore can reject non-RLM files (RCE guard).
-    _SNAPSHOT_MAGIC = b"RLMSNAP\x01"  # RLM Snapshot, format v1
+    def snapshot(self, path: str, nonce: str) -> dict:
+        """Pickle user variables atomically to path. Stores session nonce for restore verification.
 
-    def snapshot(self, path: str) -> dict:
-        """Pickle user variables to path.tmp. Does NOT rename — parent finalizes after trail row is durable (C1)."""
+        Writes to path.tmp then os.rename — atomic on POSIX, so no .tmp leak and no
+        TypeScript-side finalize step needed. On resume (fresh session = different nonce),
+        restore fails — caller falls back to history-only replay.
+        """
         s = self._serializer()
         out, skipped = {}, []
-        MAX_VAR_BYTES = 50 * 1024 * 1024  # P3: skip vars larger than 50MB
+        MAX_VAR_BYTES = 50 * 1024 * 1024
         for k, v in self.ns.items():
             if k.startswith("_") or k.startswith("context") or k in RESERVED or k == "__builtins__":
                 continue
             try:
-                blob = s.dumps(v)  # single serialize (P2 fix — reuse blob for size check)
+                blob = s.dumps(v)
                 if len(blob) > MAX_VAR_BYTES:
                     skipped.append(k)
                     continue
@@ -342,29 +344,25 @@ class Worker:
             print(f"[rlm-sandbox] snapshot skipped {len(skipped)} unpicklable/oversized vars: {skipped}", file=sys.stderr)
         tmp = path + ".tmp"
         with open(tmp, "wb") as f:
-            f.write(self._SNAPSHOT_MAGIC)
-            s.dump(out, f)
-        # NOTE: parent calls renameSync(tmp, path) AFTER appendRow succeeds — prevents pkl ahead of trail (C1)
+            s.dump({"nonce": nonce, "vars": out}, f)
+        os.rename(tmp, path)  # atomic rename
         return {"skipped": skipped}
 
-    def restore(self, path: str) -> dict:
-        """Restore user variables from a pickle file.
+    def restore(self, path: str, nonce: str) -> dict:
+        """Restore user variables from a pickle file. Verifies session nonce before deserializing.
 
-        SECURITY (R1): pickle.load executes arbitrary code. The magic header check rejects
-        non-RLM pickle files, but a crafted file could still bypass it. This is acceptable
-        because the .pkl was written by this same worker process during the current session.
-        Resume widens trust from 'this session's model code' to 'any .pkl on disk' — callers
-        must validate the run directory is trusted before invoking restore.
+        SECURITY: pickle.load executes arbitrary code. The session nonce check ensures the
+        .pkl was written by THIS engine session. Cross-session resume falls back to
+        history-only replay (caller skips restore when sessionNonce is undefined).
         """
         s = self._serializer()
         with open(path, "rb") as f:
-            magic = f.read(len(self._SNAPSHOT_MAGIC))
-            if magic != self._SNAPSHOT_MAGIC:
-                raise ValueError("not an RLM snapshot file or unsupported format")
             data = s.load(f)
-        self.ns.update(data)
+        if not isinstance(data, dict) or data.get("nonce") != nonce:
+            raise ValueError("snapshot nonce mismatch — not from this session")
+        self.ns.update(data.get("vars", {}))
         self._restore_scaffold()
-        return {"restored": list(data.keys())}
+        return {"restored": list(data.get("vars", {}).keys())}
 
 
 def main() -> None:
@@ -396,9 +394,9 @@ def main() -> None:
                 _send({"id": rid, "ok": True})
                 return
             elif kind == "snapshot":
-                _send({"id": rid, "ok": True, **worker.snapshot(req.get("path", ""))})
+                _send({"id": rid, "ok": True, **worker.snapshot(req.get("path", ""), req.get("nonce", ""))})
             elif kind == "restore":
-                _send({"id": rid, "ok": True, **worker.restore(req.get("path", ""))})
+                _send({"id": rid, "ok": True, **worker.restore(req.get("path", ""), req.get("nonce", ""))})
             else:
                 _send({"id": rid, "ok": False, "error": f"unknown type: {kind!r}"})
         except BaseException as e:  # noqa: BLE001

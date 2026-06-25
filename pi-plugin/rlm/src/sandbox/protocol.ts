@@ -10,8 +10,8 @@
 export type WorkerRequest =
   | { id: string; type: "exec"; code: string }
   | { id: string; type: "load_context"; path: string; index?: number; json: boolean }
-  | { id: string; type: "snapshot"; path: string }
-  | { id: string; type: "restore"; path: string }
+  | { id: string; type: "snapshot"; path: string; nonce: string }
+  | { id: string; type: "restore"; path: string; nonce: string }
   | { id: string; type: "shutdown" };
 
 /** Reply the parent sends to satisfy a sub-LLM interrupt. */

@@ -17,10 +17,10 @@
 import { mkdtempSync, rmSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import {
   appendRow,
-  finalizeSnapshot,
   generateRunId,
   reconstructRlmState,
   runDir,
@@ -61,20 +61,19 @@ async function main(): Promise<void> {
       depth: 1, execTimeoutS: 5,
       handlers: { llmQuery: async () => "stub", llmQueryBatched: async (ps) => ps.map(() => "stub") },
     });
+    const rnonce = randomUUID();
     let r = await sb.exec("x = 42");
     check("turn 1: x assigned", !r.raised);
 
     const snap1 = snapshotPath(cwd, dir, runId, 1);
-    check("turn 1: snapshot written", await sb.snapshot(snap1));
-    check("turn 1: snapshot finalized", finalizeSnapshot(snap1));
+    check("turn 1: snapshot written", await sb.snapshot(snap1, rnonce));
     check("turn 1: pkl exists", existsSync(snap1));
 
     r = await sb.exec("y = 'hello'");
     check("turn 2: y assigned", !r.raised);
 
     const snap2 = snapshotPath(cwd, dir, runId, 2);
-    check("turn 2: snapshot written", await sb.snapshot(snap2));
-    check("turn 2: snapshot finalized", finalizeSnapshot(snap2));
+    check("turn 2: snapshot written", await sb.snapshot(snap2, rnonce));
     check("turn 2: pkl exists", existsSync(snap2));
     await sb.dispose();
 
@@ -115,7 +114,7 @@ async function main(): Promise<void> {
         handlers: { llmQuery: async () => "stub", llmQueryBatched: async (ps) => ps.map(() => "stub") },
       });
       const restorePath = snapshotPath(cwd, dir, runId, recon.snapshotTurn!);
-      check("sandbox restored from turn 2", await sb3.restore(restorePath));
+      check("sandbox restored from turn 2", await sb3.restore(restorePath, rnonce));
       r = await sb3.exec("print(x, y)");
       check("REPL vars survive: x=42 y=hello", r.stdout.trim() === "42 hello", r.stdout.trim());
       await sb3.dispose();
@@ -130,7 +129,7 @@ async function main(): Promise<void> {
           handlers: { llmQuery: async () => "stub", llmQueryBatched: async (ps) => ps.map(() => "stub") },
         });
         const fallbackPath = snapshotPath(cwd, dir, runId, recon2.snapshotTurn);
-        check("R-C1: restore from turn 1 fallback", await sb4.restore(fallbackPath));
+        check("R-C1: restore from turn 1 fallback", await sb4.restore(fallbackPath, rnonce));
         r = await sb4.exec("print(x)");
         check("R-C1: x=42 from turn 1", r.stdout.trim() === "42", r.stdout.trim());
         r = await sb4.exec("print(y)");
@@ -138,15 +137,23 @@ async function main(): Promise<void> {
         await sb4.dispose();
       }
 
-      // --- Pickle trust guard: non-RLM file should be rejected ---
-      const fakePkl = join(runDir(cwd, dir, runId), "evil.pkl");
-      writeFileSync(fakePkl, "not a pickle at all");
+      // --- Pickle trust guard: restore with wrong nonce rejected ---
+      const trustSnap = snapshotPath(cwd, dir, runId);
+      const trustNonce = randomUUID();
       const sb5 = await PythonSandbox.spawn({
         depth: 1, execTimeoutS: 5,
         handlers: { llmQuery: async () => "stub", llmQueryBatched: async (ps) => ps.map(() => "stub") },
       });
-      const restoreResult = await sb5.restore(fakePkl);
-      check("trust guard: non-RLM file rejected", !restoreResult, "should have failed");
+      await sb5.exec("x = 99");
+      check("trust guard: snapshot with nonce", await sb5.snapshot(trustSnap, trustNonce));
+      const restoreWrongNonce = await sb5.restore(trustSnap, "wrong-nonce-12345");
+      check("trust guard: restore with wrong nonce rejected", !restoreWrongNonce, "should have returned false");
+      const restoreRightNonce = await sb5.restore(trustSnap, trustNonce);
+      check("trust guard: restore with correct nonce accepted", restoreRightNonce, "should have returned true");
+      if (restoreRightNonce) {
+        r = await sb5.exec("print(x)");
+        check("trust guard: x=99 restored via correct nonce", r.stdout.trim() === "99", r.stdout.trim());
+      }
       await sb5.dispose();
     }
 
@@ -161,8 +168,7 @@ async function main(): Promise<void> {
       handlers: { llmQuery: async () => "stub", llmQueryBatched: async (ps) => ps.map(() => "stub") },
     });
     await sb6.exec("z = 1");
-    await sb6.snapshot(snapR2);
-    finalizeSnapshot(snapR2);
+    check("R-C2: snapshot written", await sb6.snapshot(snapR2, randomUUID()));
     await sb6.dispose();
     const t1r2: TurnRow = {
       kind: "turn", turn: 1, ts: new Date().toISOString(),

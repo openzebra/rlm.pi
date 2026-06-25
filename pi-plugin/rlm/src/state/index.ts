@@ -15,7 +15,7 @@ export type {
   Row,
 } from "./rows.ts";
 export { STATE_SCHEMA_VERSION, isHeader, isTurn, isCompaction, isTerminal } from "./rows.ts";
-export { appendRow, finalizeSnapshot, pruneRuns, writeContextSidecar } from "./writes.ts";
+export { appendRow, pruneRuns, writeContextSidecar } from "./writes.ts";
 export { readRows, readHeader, readContextSidecar, listRunIds, resolveRunId } from "./reads.ts";
 export { reconstructRlmState } from "./resume.ts";
 export type { ReconstructResult } from "./resume.ts";

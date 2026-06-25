@@ -79,7 +79,8 @@ const hasKind = (r: unknown, k: Row["kind"]): boolean =>
   typeof r === "object" && r !== null && (r as { kind?: unknown }).kind === k;
 
 export const isHeader = (r: unknown): r is RunHeader =>
-  hasKind(r, "header") && typeof (r as RunHeader).runId === "string" && typeof (r as RunHeader).rootPrompt === "string";
+  hasKind(r, "header") && typeof (r as RunHeader).runId === "string" && typeof (r as RunHeader).rootPrompt === "string"
+  && typeof (r as RunHeader).meta?.maxIterations === "number";
 
 export const isTurn = (r: unknown): r is TurnRow =>
   hasKind(r, "turn") && typeof (r as TurnRow).turn === "number" && typeof (r as TurnRow).response === "string";

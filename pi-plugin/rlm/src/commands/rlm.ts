@@ -9,12 +9,14 @@ import { applyAnchorEdits, type AnchorEdit } from "../text/edits.ts";
 import { groupEdits, renderEditSummary, type EditGroup } from "../text/edit-preview.ts";
 import { postRlmGuide } from "../ui/intro.ts";
 import { clearRlmStatus, setRlmModeStatus } from "../ui/status.ts";
-import { createTreeWidget } from "../ui/tree-widget.ts";
 import { listRunIds, readContextSidecar, readHeader, resolveRunId } from "../state/index.ts";
+import { DEFAULT_RUN_DIR } from "../config/defaults.ts";
 import { reconstructRlmState } from "../state/resume.ts";
 import type { ReconstructResult } from "../state/resume.ts";
 import type { RunHeader } from "../state/rows.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
+import { RlmToolBridge } from "../tool/rlm-details.ts";
+import { createTelemetrySink } from "../telemetry/index.ts";
 
 interface PreparedFileEdit {
   readonly ok: true;
@@ -97,49 +99,6 @@ async function applyProposedEdits(controller: RlmController, ctx: ExtensionConte
   ctx.ui.notify(`Applied ${editCount} RLM edit(s) across ${applied.length} file(s).${skippedSummary(skipped)}`, level);
 }
 
-export async function executeRlmRun(
-  pi: ExtensionAPI,
-  controller: RlmController,
-  ctx: ExtensionContext,
-  question: string,
-  context: unknown,
-  restoreModeStatus = true,
-): Promise<void> {
-  let handle: RunHandle | undefined;
-  try {
-    handle = controller.start(ctx, { kind: "fresh", rootPrompt: question, context });
-  } catch (e) {
-    ctx.ui.notify(`RLM failed to start: ${e instanceof Error ? e.message : String(e)}`, "error");
-    return;
-  }
-
-  const { tree, done } = handle;
-  ctx.ui.setWidget("rlm-tree", createTreeWidget(tree), { placement: "aboveEditor" });
-
-  try {
-    const result = await done;
-    pi.sendMessage({
-      customType: "rlm-answer",
-      content: result.answer,
-      display: true,
-    });
-    if (result.edits && result.edits.length > 0) {
-      pi.sendMessage({
-        customType: "rlm-answer",
-        content: renderEditSummary(groupEdits(result.edits)),
-        display: true,
-      });
-      await applyProposedEdits(controller, ctx, result.edits);
-    }
-  } catch (e) {
-    ctx.ui.notify(`RLM failed: ${e instanceof Error ? e.message : String(e)}`, "error");
-  } finally {
-    ctx.ui.setWidget("rlm-tree", undefined);
-    if (restoreModeStatus) setRlmModeStatus(ctx.ui, controller);
-    else clearRlmStatus(ctx.ui);
-  }
-}
-
 export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController): void {
   pi.registerCommand("rlm", {
     description: "Toggle persistent RLM mode (route plain prompts through the RLM engine).",
@@ -177,7 +136,7 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
         return;
       }
       const ref = args.trim() || "@latest";
-      const dir = controller.config.runLog?.dir ?? ".rlm/runs";
+      const dir = controller.config.runLog?.dir ?? DEFAULT_RUN_DIR;
       const cwd = ctx.cwd ?? process.cwd();
       const runId = resolveRunId(cwd, dir, ref);
       if (!runId) { ctx.ui.notify(`No resumable RLM run for '${ref}'.`, "error"); return; }
@@ -187,7 +146,12 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
         { contextType: header.context.type, contextChars: header.context.chars, rootPrompt: header.rootPrompt, workspaceRoot: header.workspaceRoot, fsTools: header.meta.fsTools, projectMap: header.context.projectMap },
         { orchestrator: header.meta.orchestrator, recursion: 1 < header.meta.maxDepth, edit: header.meta.editEnabled }, // CB: 1 < maxDepth, not hardcoded true
       );
-      const recon = reconstructRlmState(cwd, dir, runId, systemPrompt);
+      let recon: ReconstructResult;
+      try { recon = reconstructRlmState(cwd, dir, runId, systemPrompt); }
+      catch (e) {
+        ctx.ui.notify(`RLM resume failed: corrupt run state — ${e instanceof Error ? e.message : String(e)}`, "error");
+        return;
+      }
       if (!recon.ok) { ctx.ui.notify(`Cannot resume ${runId}: ${recon.reason}.`, "error"); return; }
       if (recon.terminated) { ctx.ui.notify(`Run ${runId} already finished.`, "info"); return; }
       const context = readContextSidecar(cwd, dir, runId, header.context.json);
@@ -200,7 +164,7 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
   pi.registerCommand("rlm-runs", {
     description: "List recent RLM runs.",
     handler: async (_args, ctx) => {
-      const dir = controller.config.runLog?.dir ?? ".rlm/runs";
+      const dir = controller.config.runLog?.dir ?? DEFAULT_RUN_DIR;
       const ids = listRunIds(ctx.cwd ?? process.cwd(), dir).slice(0, 20);
       ctx.ui.notify(ids.length ? ids.join("\n") : "No RLM runs recorded.", "info");
     },
@@ -225,11 +189,25 @@ async function executeRlmRunWithResume(
   context: unknown,
 ): Promise<void> {
   let handle: RunHandle | undefined;
-  try { handle = controller.start(ctx, { kind: "resume", resume: recon, context }); }
-  catch (e) { ctx.ui.notify(`RLM resume failed: ${e instanceof Error ? e.message : String(e)}`, "error"); return; }
+  let sink: Awaited<ReturnType<typeof createTelemetrySink>>;
+  try {
+    sink = await createTelemetrySink(controller.config.telemetry);
+    const bridge = new RlmToolBridge((partial) => {
+      const d = partial.details;
+      if (!d) return;
+      const turn = d.turns.max > 0 ? ` · turn ${d.turns.current}/${d.turns.max}` : "";
+      const cost = d.totals.costUsd > 0 ? ` · $${d.totals.costUsd.toFixed(4)}` : "";
+      const glyph = d.status === "running" ? "⏳" : d.status === "done" ? "✓" : "✗";
+      ctx.ui.setWidget?.("rlm-status", [`${glyph} RLM resume${turn}${cost}`], { placement: "aboveEditor" });
+    }, sink);
+    bridge.setRootPrompt(header.rootPrompt);
+    handle = controller.start(ctx, { kind: "resume", resume: recon, context }, bridge);
+  } catch (e) {
+    ctx.ui.notify(`RLM resume failed: ${e instanceof Error ? e.message : String(e)}`, "error");
+    return;
+  }
   pi.sendMessage({ customType: "rlm-question", content: `[resume] ${header.rootPrompt}`, display: true });
-  const { tree, done } = handle;
-  ctx.ui.setWidget("rlm-tree", createTreeWidget(tree), { placement: "aboveEditor" });
+  const { done } = handle;
   try {
     const result = await done;
     pi.sendMessage({ customType: "rlm-answer", content: result.answer, display: true });
@@ -239,5 +217,9 @@ async function executeRlmRunWithResume(
     }
   } catch (e) {
     ctx.ui.notify(`RLM resume failed: ${e instanceof Error ? e.message : String(e)}`, "error");
-  } finally { ctx.ui.setWidget("rlm-tree", undefined); }
+  } finally {
+    clearRlmStatus(ctx.ui);
+    ctx.ui.setWidget?.("rlm-status", undefined);
+    try { await sink?.shutdown(); } catch { /* best-effort */ }
+  }
 }

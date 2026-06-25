@@ -1,6 +1,6 @@
 /** Small presentation helpers shared by the RLM widgets (glyphs, spinner, formatting). */
 
-import type { NodeKind, NodeStatus } from "../state/agent-tree.ts";
+import type { SubcallKind, SubcallStatus } from "../tool/rlm-details.ts";
 
 export const SPINNER = Object.freeze(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]);
 
@@ -9,14 +9,14 @@ export function spinnerFrame(): string {
 }
 
 /** Glyph for a node's status. */
-export function statusGlyph(status: NodeStatus): string {
+export function statusGlyph(status: SubcallStatus): string {
   if (status === "done") return "✓";
   if (status === "error") return "✗";
   return spinnerFrame();
 }
 
 /** Short role label for a node kind. */
-export function kindLabel(kind: NodeKind): string {
+export function kindLabel(kind: SubcallKind): string {
   switch (kind) {
     case "root":
       return "RLM ▸ root";

@@ -3,8 +3,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
-import { executeRlmRun, registerRlmCommand } from "./commands/rlm.ts";
-import { registerRlmConfigCommand, runRlmConfig } from "./commands/rlm-config.ts";
+import { registerRlmCommand } from "./commands/rlm.ts";
+import { registerRlmConfigCommand } from "./commands/rlm-config.ts";
+import { createRlmTool } from "./tool/rlm-tool.ts";
 import { loadSettings, mergeConfig } from "./config/settings.ts";
 import { decideRlmInputRoute } from "./mode/input-router.ts";
 import { RlmController } from "./mode/rlm-mode.ts";
@@ -31,6 +32,9 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   registerRlmCommand(pi, controller);
   registerRlmConfigCommand(pi, controller);
 
+  // Register RLM as a Pi tool for inline tool card rendering (replaces setWidget)
+  pi.registerTool(createRlmTool(controller));
+
   let guidePosted = false;
   pi.on("session_start", async (_event, ctx) => {
     setRlmModeStatus(ctx.ui, controller);
@@ -53,18 +57,9 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       return { action: "handled" };
     }
 
-    pi.sendMessage({ customType: "rlm-question", content: text, display: true });
-
-    if (!controller.hasSavedModels()) {
-      const configured = await runRlmConfig(pi, controller, ctx);
-      if (!configured) {
-        ctx.ui.notify("RLM: configure smart/worker models before routing prompts.", "warning");
-        return { action: "handled" };
-      }
-    }
-
-    void executeRlmRun(pi, controller, ctx, text, "", true);
-    return { action: "handled" };
+    // Route through the RLM tool: transform input so the agent calls the rlm tool.
+    // The tool's renderCall/renderResult replace the old rlm-question/rlm-answer messages.
+    return { action: "transform", text: `Use the rlm tool to handle this request: ${text}` };
   });
 
   pi.on("session_shutdown", async () => {

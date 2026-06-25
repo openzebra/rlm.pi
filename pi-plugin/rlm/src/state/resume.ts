@@ -76,6 +76,8 @@ export function reconstructRlmState(
 ): ReconstructResult {
   const header = readHeader(cwd, dir, runId);
   if (!header) return { ok: false, reason: "no-header", detail: runId };
+  // QB: ??1 backward-compat — when bumping STATE_SCHEMA_VERSION, also bump this default
+  // so trails written without an explicit `v` field are rejected rather than silently passed.
   if ((header.v ?? 1) !== STATE_SCHEMA_VERSION)
     return { ok: false, reason: "version-mismatch", detail: `run ${runId} written under schema v${header.v}` };
 

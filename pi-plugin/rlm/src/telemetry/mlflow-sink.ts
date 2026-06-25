@@ -1,4 +1,4 @@
-import type { NodeKind } from "../state/agent-tree.ts";
+import type { SubcallKind } from "../tool/rlm-details.ts";
 import type { SubcallStart } from "../state/events.ts";
 import { Dispatcher, type DispatcherSink } from "./dispatcher.ts";
 import {
@@ -20,7 +20,7 @@ function tracerFor(config: MlflowConfig): MlflowTracer {
   return sharedTracer;
 }
 
-const SPAN_TYPE: Readonly<Record<NodeKind, SpanType>> = Object.freeze({
+const SPAN_TYPE: Readonly<Record<SubcallKind, SpanType>> = Object.freeze({
   root: SpanType.AGENT,
   rlm: SpanType.AGENT,
   llm: SpanType.CHAT_MODEL,

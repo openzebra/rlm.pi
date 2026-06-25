@@ -6,7 +6,7 @@
  * of the run without aborting the answer.
  */
 
-import { appendFileSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, fsyncSync, mkdirSync, openSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { contextPath, runDir, runsDir, trailPath } from "./paths.ts";
 import type { Row } from "./rows.ts";
 import { warn } from "./internal.ts";
@@ -15,7 +15,12 @@ import { warn } from "./internal.ts";
 export function appendRow(cwd: string, dir: string, runId: string, row: Row): boolean {
   try {
     mkdirSync(runDir(cwd, dir, runId), { recursive: true });
-    appendFileSync(trailPath(cwd, dir, runId), `${JSON.stringify(row)}\n`, "utf-8");
+    const path = trailPath(cwd, dir, runId);
+    appendFileSync(path, `${JSON.stringify(row)}\n`, "utf-8");
+    // QC: fsync to flush kernel buffers — crash between write and sync would lose the last row
+    const fd = openSync(path, "r+");
+    fsyncSync(fd);
+    closeSync(fd);
     return true;
   } catch (e) {
     warn(e);
@@ -35,16 +40,6 @@ export function writeContextSidecar(cwd: string, dir: string, runId: string, con
   }
 }
 
-/** Rename the snapshot .tmp → final after the turn row is durable. */
-export function finalizeSnapshot(pklPath: string): boolean {
-  try {
-    renameSync(pklPath + ".tmp", pklPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Prune oldest run directories beyond maxRuns. Best-effort; never throws. */
 export function pruneRuns(cwd: string, dir: string, maxRuns: number): void {
   try {
@@ -54,7 +49,9 @@ export function pruneRuns(cwd: string, dir: string, maxRuns: number): void {
       .map((d) => d.name)
       .sort()
       .reverse(); // newest first (slug sorts chronologically)
-    for (const id of ids.slice(maxRuns)) {
+    const pruned = ids.slice(maxRuns);
+    if (pruned.length > 0) console.log(`[rlm-state] pruning ${pruned.length} runs (maxRuns=${maxRuns})`);
+    for (const id of pruned) {
       rmSync(runDir(cwd, dir, id), { recursive: true, force: true });
     }
   } catch (e) {

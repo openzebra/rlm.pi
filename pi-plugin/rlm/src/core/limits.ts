@@ -31,7 +31,7 @@ export class LimitGuard {
   private consecutiveErrors = 0;
 
   constructor(private readonly limits: Limits = {}, seedElapsedMs = 0) {
-    this.start = Date.now() - seedElapsedMs; // C2: seed clock so resumed runs don't get a fresh timeout budget
+    this.start = Date.now() - Math.max(0, seedElapsedMs); // C2: seed clock, clamp to prevent negative seed extending timeout budget
   }
 
   /** Call before each turn. */
