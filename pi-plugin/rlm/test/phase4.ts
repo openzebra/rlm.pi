@@ -12,6 +12,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { createEngine } from "../src/core/engine.ts";
 import { createRlmHandlers } from "../src/bridge/rlm-query.ts";
+import { RlmToolBridge } from "../src/tool/rlm-details.ts";
 import type { LlmBridge } from "../src/bridge/llm-query.ts";
 import type { RunRlm } from "../src/core/types.ts";
 import { cheapestModel } from "../src/mode/rlm-mode.ts";
@@ -33,7 +34,8 @@ async function testRecursionBridge(): Promise<boolean> {
     llmQuery: async (p) => `llm(${p.slice(0, 8)})`,
     llmQueryBatched: async (ps) => ps.map((p) => `llm(${p.slice(0, 8)})`),
   };
-  const handlers = createRlmHandlers({ run, llm, maxDepth: 2, maxConcurrent: 2 });
+  const handlers = createRlmHandlers({
+    bridge: new RlmToolBridge(() => {}), run, llm, maxDepth: 2, maxConcurrent: 2 });
 
   // depth 0 -> child depth 1 < 2 -> recurse into engine
   log("rlm_query at depth 0 recurses", (await handlers.rlmQuery("alpha", null, 0)).startsWith("child("));
@@ -72,6 +74,7 @@ async function testChildBudgetPropagation(): Promise<boolean> {
     llmQueryBatched: async (ps) => ps.map(() => ""),
   };
   const handlers = createRlmHandlers({
+    bridge: new RlmToolBridge(() => {}),
     run,
     llm,
     maxDepth: 3,
@@ -120,26 +123,30 @@ async function testPreSpawnGuard(): Promise<boolean> {
 
   // Budget exhausted — should NOT spawn.
   spawnCount = 0;
-  const h0 = createRlmHandlers({ run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ budgetUsd: 0 }) });
+  const h0 = createRlmHandlers({
+    bridge: new RlmToolBridge(() => {}), run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ budgetUsd: 0 }) });
   const r0 = await h0.rlmQuery("x", null, 0);
   log("F-spawn: budget=0 refuses child spawn", r0 === "Error: budget exhausted", r0);
   log("F-spawn: no run() called when budget exhausted", spawnCount === 0, `spawned ${spawnCount}`);
 
   // Budget negative — should NOT spawn.
-  const hNeg = createRlmHandlers({ run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ budgetUsd: -0.5 }) });
+  const hNeg = createRlmHandlers({
+    bridge: new RlmToolBridge(() => {}), run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ budgetUsd: -0.5 }) });
   const rNeg = await hNeg.rlmQuery("x", null, 0);
   log("F-spawn: budget<0 refuses child spawn", rNeg === "Error: budget exhausted", rNeg);
 
   // Timeout exhausted — should NOT spawn.
   spawnCount = 0;
-  const hT = createRlmHandlers({ run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ timeoutMs: 0 }) });
+  const hT = createRlmHandlers({
+    bridge: new RlmToolBridge(() => {}), run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ timeoutMs: 0 }) });
   const rT = await hT.rlmQuery("x", null, 0);
   log("F-spawn: timeout=0 refuses child spawn", rT === "Error: timeout exhausted", rT);
   log("F-spawn: no run() called when timeout exhausted", spawnCount === 0, `spawned ${spawnCount}`);
 
   // Budget available — SHOULD spawn normally.
   spawnCount = 0;
-  const hOk = createRlmHandlers({ run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ budgetUsd: 1.0 }) });
+  const hOk = createRlmHandlers({
+    bridge: new RlmToolBridge(() => {}), run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ budgetUsd: 1.0 }) });
   const rOk = await hOk.rlmQuery("x", null, 0);
   log("F-spawn: budget>0 spawns child normally", rOk === "ok" && spawnCount === 1, `${rOk} spawned=${spawnCount}`);
 
@@ -166,6 +173,7 @@ async function main() {
   if (available.length > 0) {
     const model = cheapestModel(registry) ?? available[0]!;
     const overrideEngine = createEngine({
+    bridge: new RlmToolBridge(() => {}),
       smartModel: model,
       workerModel: model,
       registry,
@@ -204,6 +212,7 @@ async function main() {
   let rootUsd = 0;
   let subUsd = 0;
   const engine = createEngine({
+    bridge: new RlmToolBridge(() => {}),
     smartModel: smart,
     workerModel: worker,
     registry,

@@ -14,7 +14,7 @@
  * Requires: python3 on PATH
  */
 
-import { mkdtempSync, rmSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, unlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -23,7 +23,6 @@ import {
   appendRow,
   generateRunId,
   reconstructRlmState,
-  runDir,
   snapshotPath,
   writeContextSidecar,
 } from "../src/state/index.ts";

@@ -13,7 +13,7 @@ import { Value } from "typebox/value";
 import type { RlmController, StartInput } from "../mode/rlm-mode.ts";
 import { createTelemetrySink } from "../telemetry/index.ts";
 import { formatCost, formatDuration, formatTokens, spinnerFrame } from "../ui/theme.ts";
-import { RlmToolBridge, type RlmDetails, type RlmSubcall, type SubcallKind } from "./rlm-details.ts";
+import { RlmToolBridge, type RlmDetails, type RlmSubcall } from "./rlm-details.ts";
 
 // ── Parameter schema ──
 
@@ -53,36 +53,6 @@ function rootStats(details: RlmDetails, theme: Theme): string {
   parts.push(`${formatTokens(details.totals.tokens)} tok`);
   if (details.turns.current > 0) parts.push(`${details.turns.current} turn${details.turns.current > 1 ? "s" : ""}`);
   return theme.fg("dim", parts.join(" · "));
-}
-
-/** Group subcalls by (kind, label) for collapsed view. llm_query and batch subcalls are excluded from grouping. */
-function groupSubcalls(subcalls: readonly RlmSubcall[]): {
-  label: string; kind: SubcallKind; count: number;
-  totalCost: number; totalTokens: number;
-  doneCount: number; errorCount: number; runningCount: number;
-}[] {
-  const groups = new Map<string, {
-    label: string; kind: SubcallKind; count: number;
-    totalCost: number; totalTokens: number;
-    doneCount: number; errorCount: number; runningCount: number;
-  }>();
-  for (const sc of subcalls) {
-    // llm_query and batch subcalls are grouped separately in the collapsed view header stats
-    if (sc.kind === "llm" || sc.kind === "batch") continue;
-    const key = `${sc.kind}:${sc.label}`;
-    let g = groups.get(key);
-    if (!g) {
-      g = { label: sc.label, kind: sc.kind, count: 0, totalCost: 0, totalTokens: 0, doneCount: 0, errorCount: 0, runningCount: 0 };
-      groups.set(key, g);
-    }
-    g.count++;
-    g.totalCost += sc.costUsd;
-    g.totalTokens += sc.tokens;
-    if (sc.status === "done") g.doneCount++;
-    else if (sc.status === "error") g.errorCount++;
-    else g.runningCount++;
-  }
-  return [...groups.values()];
 }
 
 // ── Tool definition ──

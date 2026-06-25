@@ -67,8 +67,6 @@ async function main(): Promise<void> {
 
     // --- Q24: validateRunLog ---
     // Import dynamically to avoid top-level issues
-    const { validateConfig } = require("../src/config/settings.ts");
-    // Test through public API: validateConfig with runLog
     const cfg1 = { enabled: true, runLog: { enabled: true, dir: "/tmp/test", snapshot: false, maxRuns: 25 } };
     const merged1 = require("../src/config/settings.ts").mergeConfig(cfg1);
     check("validateRunLog: valid config passes", merged1.runLog?.maxRuns === 25 && merged1.runLog?.dir === "/tmp/test");

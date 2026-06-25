@@ -14,7 +14,7 @@
 import { mkdtempSync, rmSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendRow, generateRunId, pruneRuns, writeContextSidecar, runDir, trailPath } from "../src/state/index.ts";
+import { appendRow, generateRunId, pruneRuns, writeContextSidecar, trailPath } from "../src/state/index.ts";
 import { isHeader, STATE_SCHEMA_VERSION } from "../src/state/rows.ts";
 import type { RunHeader } from "../src/state/rows.ts";
 

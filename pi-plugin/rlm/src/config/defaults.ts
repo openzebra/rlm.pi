@@ -1,6 +1,5 @@
 import type { RlmConfig } from "../core/types.ts";
 import { tmpdir } from "node:os";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export const DEFAULT_RUN_DIR = join(tmpdir(), "rlm-runs");
