@@ -50,29 +50,29 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // Existing rlm tool (stays for backward compat with /rlm mode)
   pi.registerTool(createRlmTool(controller));
 
-  // Native repl tool — worker model resolved on first session_start (needs ExtensionContext)
-  let replToolRegistered = false;
+  // Native repl tool — re-registered each session to pick up model provider changes
   let guidePosted = false;
 
   pi.on("session_start", async (_event, ctx) => {
-    // Restore saved model refs for controller
-    if (persisted.smart) controller.smartModel = resolveModelId(ctx.modelRegistry, persisted.smart);
-    if (persisted.worker) controller.workerModel = resolveModelId(ctx.modelRegistry, persisted.worker);
+    // Restore saved model refs for controller — invalidate if provider changed
+    if (persisted.smart) {
+      const resolved = resolveModelId(ctx.modelRegistry, persisted.smart);
+      if (resolved) controller.smartModel = resolved;
+      else persisted.smart = undefined; // provider gone, clear stale ref
+    }
+    if (persisted.worker) {
+      const resolved = resolveModelId(ctx.modelRegistry, persisted.worker);
+      if (resolved) controller.workerModel = resolved;
+      else persisted.worker = undefined;
+    }
 
-    // Register repl tool on first session (needs model from ExtensionContext)
-    if (!replToolRegistered) {
-      replToolRegistered = true;
-      const workerModel = cheapestModel(ctx.modelRegistry) ?? ctx.model;
-      const smartModel = controller.smartModel ?? ctx.model;
-      if (workerModel && smartModel) {
-        pi.registerTool(createReplTool({
-          sandboxManager,
-          smartModel,
-          workerModel,
-          registry: ctx.modelRegistry,
-          config,
-        }));
-      }
+    // Register repl tool with current models (re-registers each session for provider changes)
+    const workerModel = controller.workerModel ?? cheapestModel(ctx.modelRegistry) ?? ctx.model;
+    const smartModel = controller.smartModel ?? ctx.model;
+    if (workerModel && smartModel) {
+      try {
+        pi.registerTool(createReplTool({ sandboxManager, smartModel, workerModel, registry: ctx.modelRegistry, config }));
+      } catch { /* re-registration on provider change — ignore if already registered */ }
     }
 
     setRlmModeStatus(ctx.ui, controller);
@@ -103,9 +103,9 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       if (result.ok) {
         const contextText = formatForLLM(result.value);
         const instruction = [
-          "ANALYZE THIS REPOSITORY using repl({code}) — do NOT read files one-by-one.",
-          `Total: ${result.value.totalFiles} files, ${result.value.totalChars.toLocaleString()} chars — too large for direct reading.`,
-          "Use Python in repl() to chunk context, delegate to llm_query, and aggregate.",
+          "ANALYZE THIS REPOSITORY using repl({code}) — read/grep/bash are DISABLED.",
+          `Total: ${result.value.totalFiles} files, ${result.value.totalChars.toLocaleString()} chars — must use repl().`,
+          "Chunk context via Python, delegate to llm_query. If credits exhausted → report and stop.",
           "",
         ].join("\n");
         const contextMsg = {
@@ -129,6 +129,18 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // and chooses natively when to call repl(), read, grep, zebra-mcp, etc.
   pi.on("input", async (_event, _ctx) => {
     return { action: "continue" };
+  });
+
+  // ── Tool restriction: block read/grep/bash when RLM is ON ──
+  pi.on("tool_call", async (event) => {
+    if (!controller.enabled) return;
+    const blocked = new Set(["read", "grep", "bash"]);
+    if (blocked.has(event.toolName)) {
+      return {
+        block: true,
+        reason: "RLM mode active. Use repl({code}) to access the repository context. All files are pre-loaded in the REPL. If sub-LLM credits are exhausted, report to the user.",
+      };
+    }
   });
 
   // ── Session shutdown: cleanup ──

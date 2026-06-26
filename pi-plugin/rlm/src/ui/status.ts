@@ -13,10 +13,10 @@ export function modelLabel(model: Model<Api> | undefined, fallback: string): str
 export function formatRlmStateLine(controller: RlmController): string {
   if (!controller.enabled) return "○ RLM OFF";
   const smart = modelLabel(controller.smartModel, controller.savedSmartRef ?? "default");
+  const smartSuffix = controller.config.smartReasoning ? `:${controller.config.smartReasoning}` : "";
   const worker = modelLabel(controller.workerModel, controller.savedWorkerRef ?? "cheapest");
-  const smartReasoning = controller.config.smartReasoning ? ` · smartReasoning=${controller.config.smartReasoning}` : "";
-  const workerReasoning = controller.config.subSampling.reasoning ? ` · workerReasoning=${controller.config.subSampling.reasoning}` : "";
-  return `● RLM ON · smart=${smart} · worker=${worker}${smartReasoning}${workerReasoning}`;
+  const workerSuffix = controller.config.subSampling.reasoning ? `:${controller.config.subSampling.reasoning}` : "";
+  return `● RLM ON · smart=${smart}${smartSuffix} · worker=${worker}${workerSuffix}`;
 }
 
 export function setRlmModeStatus(ui: ExtensionUIContext, controller: RlmController): void {
