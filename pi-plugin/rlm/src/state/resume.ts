@@ -16,6 +16,7 @@ import { readHeader } from "./reads.ts";
 import {
   isCompaction,
   isHeader,
+  isPhase,
   isTerminal,
   isTodo,
   isTurn,
@@ -25,6 +26,12 @@ import {
 } from "./rows.ts";
 import { trailPath, snapshotPath } from "./paths.ts";
 import { warn } from "./internal.ts";
+
+export interface PhaseRecon {
+  readonly current: string;
+  readonly advancedAt: number;
+  readonly summary?: string;
+}
 
 export type ReconstructResult =
   | {
@@ -41,6 +48,8 @@ export type ReconstructResult =
       readonly snapshotTurn: number | undefined;
       readonly todoRows: readonly { readonly action: string; readonly params: Record<string, unknown>; readonly result: string }[];
       readonly terminated: boolean;
+      /** Reconstructed pipeline phase state. undefined ⇒ pre-v3 trail (treats as research). */
+      readonly phase?: PhaseRecon;
     }
   | { readonly ok: false; readonly reason: "no-header" | "version-mismatch" | "no-turns" | "mid-file-hole"; readonly detail: string };
 
@@ -96,6 +105,7 @@ export function reconstructRlmState(
   let pendingReplOutputs: string | undefined;
   const todoRows: { action: string; params: Record<string, unknown>; result: string }[] = [];
   let terminated = false;
+  let phase: PhaseRecon | undefined;
 
   for (const row of rows) {
     if (isHeader(row)) continue;
@@ -127,6 +137,10 @@ export function reconstructRlmState(
       pendingReplOutputs = row.replOutputs;
       continue;
     }
+    if (isPhase(row)) {
+      phase = { current: row.phase, advancedAt: row.turn - 1, summary: row.summary };
+      continue;
+    }
     if (isTodo(row)) {
       todoRows.push({ action: row.action, params: row.params, result: row.result });
       continue;
@@ -135,5 +149,5 @@ export function reconstructRlmState(
   }
 
   if (completedTurns === 0 && !terminated) return { ok: false, reason: "no-turns", detail: runId };
-  return { ok: true, header, history, pendingReplOutputs, usageSeed, best, editsAcc, completedTurns, compactions, snapshotTurn, todoRows, terminated };
+  return { ok: true, header, history, pendingReplOutputs, usageSeed, best, editsAcc, completedTurns, compactions, snapshotTurn, todoRows, terminated, phase };
 }

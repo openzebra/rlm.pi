@@ -3,15 +3,16 @@
  * Native mode does not use these — pi's own loop supplies the turns.
  */
 
-export function buildTurnPrompt(iteration: number, maxIterations: number): string {
+export function buildTurnPrompt(iteration: number, maxIterations: number, gateMessage?: string): string {
   const body = `Turn ${iteration + 1}/${maxIterations}:`;
+  const gate = gateMessage ? `\n${gateMessage}\n\n` : "";
   if (iteration === 0) {
     return (
       "You have not interacted with the REPL or seen your context yet. Look at the context first; " +
-      `do not provide a final answer yet.\n\n${body}`
+      `do not provide a final answer yet.\n\n${gate}${body}`
     );
   }
-  return body;
+  return `${gate}${body}`;
 }
 
 /** Asked once when the engine runs out of turns without a submitted answer. */

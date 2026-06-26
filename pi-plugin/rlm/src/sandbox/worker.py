@@ -63,8 +63,9 @@ for _blocked in ("eval", "exec", "compile", "input", "globals", "locals"):
 RESERVED = frozenset(
     {
         "llm_query", "llm_query_batched", "rlm_query", "rlm_query_batched",
-        "read_file", "grep", "find", "propose_edit", "ask_user_question", "todo",
-        "SHOW_EDITS", "SHOW_VARS", "answer", "context", "context_0",
+        "read_file", "grep", "find", "propose_edit", "rlm_edit", "advance_phase",
+        "ask_user_question", "todo",
+        "SHOW_EDITS", "SHOW_DIFFS", "SHOW_VARS", "answer", "context", "context_0",
     }
 )
 
@@ -96,6 +97,7 @@ class Worker:
         self._rid = 0
         self._final_answer: str | None = None
         self._edits: list[dict[str, str]] = []
+        self._diffs: list[dict[str, str]] = []
         self._context_count = 0
         self.ns: dict[str, Any] = {}
         self._setup()
@@ -118,9 +120,12 @@ class Worker:
         ns["grep"] = self._grep
         ns["find"] = self._find
         ns["propose_edit"] = self._propose_edit
+        ns["rlm_edit"] = self._rlm_edit
+        ns["advance_phase"] = self._advance_phase
         ns["ask_user_question"] = self._ask_user_question
         ns["todo"] = self._todo
         ns["SHOW_EDITS"] = self._show_edits
+        ns["SHOW_DIFFS"] = self._show_diffs
         ns["SHOW_VARS"] = self._show_vars
         if not isinstance(ns.get("answer"), _AnswerDict):
             cur = ns.get("answer")
@@ -154,6 +159,17 @@ class Worker:
                 f"{i}. {e.get('path', '')}: old {len(e.get('oldText', ''))} chars/{old_lines} lines -> "
                 f"new {len(e.get('newText', ''))} chars/{new_lines} lines"
             )
+        return "\n".join(lines)
+
+    def _show_diffs(self) -> str:
+        if not self._diffs:
+            return "No proposed unified diffs."
+        lines = [f"Proposed unified diffs: {len(self._diffs)}"]
+        for i, e in enumerate(self._diffs, 1):
+            diff = str(e.get("diff", ""))
+            files = [line[6:].strip() for line in diff.splitlines() if line.startswith("+++ b/")]
+            label = ", ".join(files) if files else "unknown files"
+            lines.append(f"{i}. {label}: {len(diff)} chars")
         return "\n".join(lines)
 
     # ---- sub-LLM bridge over stdio --------------------------------------------------------
@@ -294,6 +310,42 @@ class Worker:
         self._edits.append(proposed)
         return response if isinstance(response, str) else "ok"
 
+    def _rlm_edit(self, diff: str) -> str:
+        """Validate a unified diff with the parent; record it on success.
+
+        Does NOT write to disk. The parent handler decides whether the diff is valid for this run.
+        Returns a short preview, or an `Error: …` string the model can act on.
+        """
+        diff_s = str(diff)
+        proposed = {"diff": diff_s}
+        if proposed in self._diffs:
+            return "ok — duplicate diff already proposed"
+        r = self._rpc("rlm_edit", {"diff": diff_s, "existingDiffs": list(self._diffs)})
+        if r.get("error"):
+            return f"Error: {r['error']}"
+        response = r.get("response", "ok")
+        if isinstance(response, str) and response.startswith("Error:"):
+            return response
+        self._diffs.append(proposed)
+        return response if isinstance(response, str) else "ok"
+
+    def _advance_phase(self, phase: str, summary: str | None = None) -> str:
+        """Transition the root RLM pipeline to a new phase.
+
+        Only callable at depth 0. The parent handler validates the transition
+        against the phase state machine (research → blueprint → implement → validate).
+        Returns a short confirmation, or an `Error: …` string the model can act on.
+        """
+        if self.depth > 0:
+            return "Error: advance_phase is only available at the root RLM depth"
+        r = self._rpc("advance_phase", {"phase": str(phase), "summary": summary})
+        if r.get("error"):
+            return f"Error: {r['error']}"
+        response = r.get("response", "ok")
+        if isinstance(response, str) and response.startswith("Error:"):
+            return response
+        return response if isinstance(response, str) else "ok"
+
     def _rlm_query_batched(self, prompts, model: str | None = None) -> list[str]:
         prompts = [str(p) for p in prompts]
         if not prompts:
@@ -369,6 +421,7 @@ class Worker:
             "final_answer": final,
             "answer_content": str(answer_content),
             "edits": list(self._edits),
+            "diffs": list(self._diffs),
             "raised": raised,
             "execution_time": time.perf_counter() - start,
         }

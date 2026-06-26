@@ -12,7 +12,7 @@ import type { ChatMsg } from "../bridge/model.ts";
 import type { ProposedEdit } from "../sandbox/protocol.ts";
 
 /** Bump when a row shape changes such that the resume fold cannot replay older files. */
-export const STATE_SCHEMA_VERSION = 2;
+export const STATE_SCHEMA_VERSION = 3;
 
 export interface UsageRow {
   readonly costUsd: number;
@@ -30,13 +30,15 @@ export interface RunHeader {
   readonly context: { readonly type: string; readonly chars: number; readonly json: boolean; readonly projectMap: boolean };
   readonly workspaceRoot?: string;
   readonly models: { readonly smart: string; readonly worker: string };
-  /** Snapshot of the replay-affecting config (maxIterations, orchestrator, editEnabled, fsTools…). */
+  /** Snapshot of the replay-affecting config (maxIterations, orchestrator, editEnabled, fsTools, pipeline…). */
   readonly meta: {
     readonly maxIterations: number;
     readonly maxDepth: number;
     readonly orchestrator: boolean;
     readonly editEnabled: boolean;
     readonly fsTools: boolean;
+    /** pipeline-enabled gate behaviour (always true from v3 on). */
+    readonly pipeline?: boolean;
   };
 }
 
@@ -82,7 +84,16 @@ export interface TerminalRow {
   readonly usage: UsageRow;
 }
 
-export type Row = RunHeader | TurnRow | CompactionRow | TodoRow | TerminalRow;
+/** Emitted when the root RLM advances to a new pipeline phase. */
+export interface PhaseRow {
+  readonly kind: "phase";
+  readonly turn: number; // 1-based turn when advanced
+  readonly ts: string;
+  readonly phase: string;
+  readonly summary?: string;
+}
+
+export type Row = RunHeader | TurnRow | CompactionRow | TodoRow | TerminalRow | PhaseRow;
 
 const hasKind = (r: unknown, k: Row["kind"]): boolean =>
   typeof r === "object" && r !== null && (r as { kind?: unknown }).kind === k;
@@ -101,3 +112,6 @@ export const isTodo = (r: unknown): r is TodoRow =>
   hasKind(r, "todo") && typeof (r as TodoRow).action === "string" && typeof (r as TodoRow).result === "string";
 
 export const isTerminal = (r: unknown): r is TerminalRow => hasKind(r, "terminal");
+
+export const isPhase = (r: unknown): r is PhaseRow =>
+  hasKind(r, "phase") && typeof (r as PhaseRow).phase === "string" && typeof (r as PhaseRow).turn === "number";

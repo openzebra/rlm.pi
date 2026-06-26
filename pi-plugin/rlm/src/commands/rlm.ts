@@ -1,13 +1,15 @@
 /** `/rlm` — toggle persistent Recursive Language Model mode. */
 
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { safeWorkspaceRealPath } from "../bridge/fs-tools.ts";
+import { resolveWorkspacePath, safeWorkspaceRealPath } from "../bridge/fs-tools.ts";
 import { createPiInteractiveDeps } from "../bridge/pi-interactive.ts";
 import type { RlmController, RunHandle } from "../mode/rlm-mode.ts";
-import type { ProposedEdit } from "../sandbox/protocol.ts";
+import type { ProposedDiffEdit, ProposedEdit } from "../sandbox/protocol.ts";
 import { applyAnchorEdits, type AnchorEdit } from "../text/edits.ts";
-import { groupEdits, renderEditSummary, type EditGroup } from "../text/edit-preview.ts";
+import { applyUnifiedDiffSet, parseUnifiedDiff } from "../text/unified-diff.ts";
+import { groupEdits, renderEditSummary, renderUnifiedDiffSummary, type EditGroup } from "../text/edit-preview.ts";
 import { postRlmGuide } from "../ui/intro.ts";
 import { clearRlmStatus, setRlmModeStatus } from "../ui/status.ts";
 import { listRunIds, readContextSidecar, readHeader, resolveRunId } from "../state/index.ts";
@@ -36,6 +38,58 @@ interface SkippedFileEdit {
 interface AppliedFileEdit {
   readonly path: string;
   readonly count: number;
+}
+
+interface PreparedDiffFile {
+  readonly path: string;
+  readonly absolutePath: string;
+  readonly content: string;
+  readonly count: number;
+  readonly deleted: boolean;
+}
+
+interface PreparedDiffApplication {
+  readonly ok: true;
+  readonly files: readonly PreparedDiffFile[];
+}
+
+
+export async function prepareDiffApplication(cwd: string, diff: string, maxReadBytes: number, allowOutsideWorkspace = false): Promise<PreparedDiffApplication | SkippedFileEdit> {
+  const parsed = parseUnifiedDiff(diff);
+  if (!parsed.ok) return { ok: false, path: "(diff)", error: parsed.error };
+
+  const contents = new Map<string, string>();
+  const paths = new Map<string, string>();
+  for (const file of parsed.files) {
+    try {
+      const abs = file.isNewFile
+        ? resolveWorkspacePath(cwd, file.path, allowOutsideWorkspace)
+        : await safeWorkspaceRealPath(cwd, file.path, allowOutsideWorkspace);
+      paths.set(file.path, abs);
+      const st = await stat(abs);
+      if (file.isNewFile) return { ok: false, path: file.path, error: "new file already exists" };
+      if (!st.isFile()) return { ok: false, path: file.path, error: `'${file.path}' is not a file` };
+      if (st.size > maxReadBytes) return { ok: false, path: file.path, error: `file exceeds the ${maxReadBytes} byte limit` };
+      contents.set(file.path, await readFile(abs, "utf8"));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (file.isNewFile && code === "ENOENT") continue;
+      return { ok: false, path: file.path, error: code === "ENOENT" ? `'${file.path}' not found` : error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  const applied = applyUnifiedDiffSet(diff, contents);
+  if (!applied.ok) return { ok: false, path: "(diff)", error: applied.error };
+  return {
+    ok: true,
+    files: applied.files.map((file) => ({
+      path: file.path,
+      absolutePath: paths.get(file.path) ?? resolveWorkspacePath(cwd, file.path, allowOutsideWorkspace),
+      content: file.text,
+      count: file.applied,
+      deleted: file.deleted,
+    })),
+  };
 }
 
 async function prepareFileEdit(cwd: string, group: EditGroup, maxReadBytes: number): Promise<PreparedFileEdit | SkippedFileEdit> {
@@ -72,7 +126,7 @@ async function applyProposedEdits(controller: RlmController, ctx: ExtensionConte
   const groups = groupEdits(resultEdits);
   const summary = renderEditSummary(groups);
   const apply = ctx.hasUI
-    ? await ctx.ui.confirm("Apply RLM edits?", summary)
+    ? await ctx.ui.confirm("Apply legacy RLM anchor edits?", summary)
     : false;
   if (!apply) {
     ctx.ui.notify("RLM edits were proposed but not applied.", "info");
@@ -97,7 +151,47 @@ async function applyProposedEdits(controller: RlmController, ctx: ExtensionConte
 
   const editCount = applied.reduce((sum, file) => sum + file.count, 0);
   const level = applied.length > 0 ? "info" : "error";
-  ctx.ui.notify(`Applied ${editCount} RLM edit(s) across ${applied.length} file(s).${skippedSummary(skipped)}`, level);
+  ctx.ui.notify(`Applied ${editCount} legacy RLM edit(s) across ${applied.length} file(s).${skippedSummary(skipped)}`, level);
+}
+
+export async function applyProposedDiffs(controller: RlmController, ctx: ExtensionContext, resultDiffs: readonly ProposedDiffEdit[]): Promise<void> {
+  if (!controller.config.editEnabled || resultDiffs.length === 0) return;
+  const summary = resultDiffs
+    .map((item, index) => `## Diff ${index + 1}\n\n${renderUnifiedDiffSummary(item.diff)}`)
+    .join("\n\n");
+  const apply = ctx.hasUI
+    ? await ctx.ui.confirm("Apply RLM unified diff edits?", summary)
+    : false;
+  if (!apply) {
+    ctx.ui.notify("RLM unified diff edits were proposed but not applied.", "info");
+    return;
+  }
+
+  const applied: AppliedFileEdit[] = [];
+  const skipped: SkippedFileEdit[] = [];
+  for (const item of resultDiffs) {
+    const prepared = await prepareDiffApplication(ctx.cwd, item.diff, controller.config.fsLimits.maxReadBytes, controller.config.allowReadOutsideWorkspace);
+    if (!prepared.ok) {
+      skipped.push(prepared);
+      continue;
+    }
+    for (const file of prepared.files) {
+      try {
+        if (file.deleted) await unlink(file.absolutePath);
+        else {
+          await mkdir(dirname(file.absolutePath), { recursive: true });
+          await writeFile(file.absolutePath, file.content, "utf8");
+        }
+        applied.push({ path: file.path, count: file.count });
+      } catch (error) {
+        skipped.push({ path: file.path, ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
+
+  const editCount = applied.reduce((sum, file) => sum + file.count, 0);
+  const level = applied.length > 0 ? "info" : "error";
+  ctx.ui.notify(`Applied ${editCount} RLM diff change(s) across ${applied.length} file(s).${skippedSummary(skipped)}`, level);
 }
 
 export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController): void {
@@ -225,7 +319,10 @@ async function executeRlmRunWithResume(
   try {
     const result = await done;
     pi.sendMessage({ customType: "rlm-answer", content: result.answer, display: true });
-    if (result.edits && result.edits.length > 0) {
+    if (result.diffs && result.diffs.length > 0) {
+      pi.sendMessage({ customType: "rlm-answer", content: result.diffs.map((item, index) => `## Diff ${index + 1}\n\n${renderUnifiedDiffSummary(item.diff)}`).join("\n\n"), display: true });
+      await applyProposedDiffs(controller, ctx, result.diffs);
+    } else if (result.edits && result.edits.length > 0) {
       pi.sendMessage({ customType: "rlm-answer", content: renderEditSummary(groupEdits(result.edits)), display: true });
       await applyProposedEdits(controller, ctx, result.edits);
     }

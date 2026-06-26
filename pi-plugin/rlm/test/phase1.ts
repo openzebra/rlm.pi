@@ -45,7 +45,7 @@ async function main() {
     { contextType: "str", contextChars: 0, fsTools: true, projectMap: true, workspaceRoot: "/x" },
     { orchestrator: true, edit: true },
   );
-  check("prompt documents propose_edit when enabled", editPrompt.includes("propose_edit(path, old, new)") && editPrompt.includes("user's approval"));
+  check("prompt documents rlm_edit when enabled", editPrompt.includes("rlm_edit(diff: str)") && editPrompt.includes("SHOW_DIFFS"));
   check("prompt documents SHOW_EDITS", editPrompt.includes("SHOW_EDITS()"));
   const metadata = buildMetadataLine({ contextType: "str", contextChars: 0, projectMap: true, workspaceRoot: "/x" });
   check(
@@ -317,7 +317,7 @@ async function main() {
       fsLimits: { ...DEFAULT_CONFIG.fsLimits, maxOutputChars: 1234 },
       allowReadOutsideWorkspace: true,
       editEnabled: true,
-      editRequestApproval: "yolo",
+      editRequestApproval: "yolo" as never,
     });
     const saved = saveSettings({ config, smart: "test/smart", worker: "test/worker" });
     const loaded = loadSettings();
@@ -325,7 +325,7 @@ async function main() {
     check("settings save reports success", saved);
     check("settings round-trips model refs", loaded.smart === "test/smart" && loaded.worker === "test/worker");
     check("settings round-trips reasoning", roundTrip.smartReasoning === "high" && roundTrip.subSampling.reasoning === "low");
-    check("settings round-trips fs/security/edit knobs", roundTrip.fsLimits.maxOutputChars === 1234 && roundTrip.allowReadOutsideWorkspace && roundTrip.editEnabled && roundTrip.editRequestApproval === "yolo");
+    check("settings sanitizes old yolo edit approval to ask", roundTrip.fsLimits.maxOutputChars === 1234 && roundTrip.allowReadOutsideWorkspace && roundTrip.editEnabled && roundTrip.editRequestApproval === "ask");
     saveSettings(previous);
   }
 

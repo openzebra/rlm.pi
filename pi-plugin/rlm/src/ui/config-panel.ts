@@ -27,7 +27,7 @@ const CHOICES = Object.freeze({
   editEnabled: Object.freeze(["off", "on"]),
   askUserQuestion: Object.freeze(["on", "off"]),
   todo: Object.freeze(["on", "off"]),
-  editRequestApproval: Object.freeze(["ask", "yolo"]),
+  editRequestApproval: Object.freeze(["ask"]),
   allowReadOutsideWorkspace: Object.freeze(["off", "on"]),
 });
 
@@ -56,10 +56,10 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("grepDefaultMaxMatches", "Grep default matches", String(config.fsLimits.grepDefaultMaxMatches), CHOICES.grepDefaultMaxMatches, "Default grep result cap when the model does not pass maxMatches."),
     item("grepMaxMatchesCeiling", "Grep hard max matches", String(config.fsLimits.grepMaxMatchesCeiling), CHOICES.grepMaxMatchesCeiling, "Maximum grep result cap even if the model requests more."),
     item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
-    item("editEnabled", "[Editing] propose_edit", config.editEnabled ? "on" : "off", CHOICES.editEnabled, "Allow RLM to propose exact-anchor edits for approval after the run."),
+    item("editEnabled", "[Editing] rlm_edit", config.editEnabled ? "on" : "off", CHOICES.editEnabled, "Allow RLM to propose unified diff edits with mandatory preview approval."),
     item("askUserQuestion", "[Interactive] Ask user", config.askUserQuestion ? "on" : "off", CHOICES.askUserQuestion, "Allow root REPL code to present structured ask_user_question dialogs."),
     item("todo", "[Interactive] Todo", config.todo ? "on" : "off", CHOICES.todo, "Allow REPL code to manage a visible todo task list."),
-    item("editRequestApproval", "[Editing] Request popup", config.editRequestApproval, CHOICES.editRequestApproval, "ask = popup for every validated propose_edit; yolo = record proposals without the popup."),
+    item("editRequestApproval", "[Editing] Request popup", config.editRequestApproval, CHOICES.editRequestApproval, "Mandatory popup preview for every validated unified diff proposal."),
     item("allowReadOutsideWorkspace", "[Security] Read outside workspace", config.allowReadOutsideWorkspace ? "on" : "off", CHOICES.allowReadOutsideWorkspace, "UNSAFE: lets read_file/grep/find escape the project root."),
     item("__save__", "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
   ];
@@ -113,7 +113,7 @@ function applySetting(config: RlmConfig, id: string, value: string): void {
     case "editEnabled": config.editEnabled = value === "on"; break;
     case "askUserQuestion": config.askUserQuestion = value === "on"; break;
     case "todo": config.todo = value === "on"; break;
-    case "editRequestApproval": config.editRequestApproval = value === "yolo" ? "yolo" : "ask"; break;
+    case "editRequestApproval": config.editRequestApproval = "ask"; break;
     case "allowReadOutsideWorkspace": config.allowReadOutsideWorkspace = value === "on"; break;
   }
 }

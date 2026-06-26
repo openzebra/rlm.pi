@@ -1,7 +1,7 @@
 /** Shared configuration + runtime types for the RLM engine. */
 
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
-import type { AskAnswer, AskQuestion, ProposedEdit } from "../sandbox/protocol.ts";
+import type { AskAnswer, AskQuestion, ProposedDiffEdit, ProposedEdit } from "../sandbox/protocol.ts";
 
 export interface Sampling {
   maxTokens?: number;
@@ -19,7 +19,7 @@ export interface FsLimits {
   grepMaxMatchesCeiling: number;
 }
 
-export type EditRequestApprovalMode = "ask" | "yolo";
+export type EditRequestApprovalMode = "ask";
 
 export interface TelemetryConfig {
   /** Default: enabled iff a tracking URI resolves from config or MLFLOW_TRACKING_URI. */
@@ -78,13 +78,13 @@ export interface RlmConfig {
   fsLimits: FsLimits;
   /** Worker startup wait before treating sandbox init as failed (ms). */
   sandboxInitTimeoutMs: number;
-  /** Enable RLM to propose exact-anchor edits for explicit approval after the run. */
+  /** Enable RLM to propose unified diff edits for explicit approval and final application after the run. */
   editEnabled: boolean;
   /** Allow ask_user_question() calls from the root REPL. */
   askUserQuestion: boolean;
   /** Allow todo() calls from the REPL. */
   todo: boolean;
-  /** Whether each validated propose_edit request asks the user first or records immediately. */
+  /** Diff edit requests always ask before being recorded; old persisted values sanitize to ask. */
   editRequestApproval: EditRequestApprovalMode;
   /** SECURITY: allow first-class fs tools to read outside the workspace root. */
   allowReadOutsideWorkspace: boolean;
@@ -125,7 +125,9 @@ export interface RlmInput {
 /** Result of a completed RLM run. */
 export interface RlmResult {
   answer: string;
+  /** Legacy anchor edits retained for compatibility while older run-state rows exist. */
   edits?: ProposedEdit[];
+  diffs?: ProposedDiffEdit[];
   iterations: number;
   costUsd: number;
   inputTokens: number;

@@ -17,6 +17,7 @@ import {
   type AskAnswer,
   type AskQuestion,
   type ParentMessage,
+  type ProposedDiffEdit,
   type ProposedEdit,
   type ReplResult,
   type WorkerInterrupt,
@@ -35,6 +36,8 @@ export interface SubLlmHandlers {
   grep(pattern: string, glob: string | null, maxMatches: number | null): Promise<string>;
   find(glob: string | null): Promise<string>;
   proposeEdit(path: string, oldText: string, newText: string, existingEdits: readonly ProposedEdit[]): Promise<string>;
+  rlmEdit(diff: string, existingDiffs: readonly ProposedDiffEdit[], depth: number): Promise<string>;
+  advancePhase(phase: string, summary: string | undefined, depth: number): Promise<string>;
   askUserQuestion(questions: readonly AskQuestion[], depth: number): Promise<AskAnswer[]>;
   todo(action: string, params: Record<string, unknown>, depth: number): Promise<string>;
 }
@@ -81,6 +84,8 @@ const REJECT: SubLlmHandlers = {
   grep: async () => "Error: filesystem tools are not available in this run",
   find: async () => "Error: filesystem tools are not available in this run",
   proposeEdit: async () => "Error: edit tools are not enabled in this run",
+  rlmEdit: async () => "Error: diff edit tools are not enabled in this run",
+  advancePhase: async () => "Error: phase advancement not available",
   askUserQuestion: async (questions) => questions.map((q) => ({
     question: q.question,
     selected: [],
@@ -196,6 +201,7 @@ export class PythonSandbox {
       finalAnswer: res.final_answer ?? null,
       answerContent: res.answer_content ?? "",
       edits: res.edits ?? [],
+      diffs: res.diffs ?? [],
       raised: res.raised ?? false,
       executionTimeMs: Math.round((res.execution_time ?? 0) * 1000),
     };
@@ -344,6 +350,12 @@ export class PythonSandbox {
         this.reply(msg.rid, { response });
       } else if (msg.type === "propose_edit") {
         const response = await h.proposeEdit(msg.path ?? "", msg.old ?? "", msg.new ?? "", msg.existingEdits ?? []);
+        this.reply(msg.rid, { response });
+      } else if (msg.type === "rlm_edit") {
+        const response = await h.rlmEdit(msg.diff ?? "", msg.existingDiffs ?? [], d);
+        this.reply(msg.rid, { response });
+      } else if (msg.type === "advance_phase") {
+        const response = await h.advancePhase(msg.phase ?? "", msg.summary, d);
         this.reply(msg.rid, { response });
       } else if (msg.type === "ask_user_question") {
         const answers = await h.askUserQuestion(msg.questions ?? [], d);

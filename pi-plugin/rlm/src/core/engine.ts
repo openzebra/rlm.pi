@@ -9,7 +9,7 @@
 
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { createFsBridge } from "../bridge/fs-tools.ts";
+import { createFsBridge, resolveWorkspacePath } from "../bridge/fs-tools.ts";
 import { buildInteractiveHandlers } from "../bridge/interactive.ts";
 import { createLlmBridge } from "../bridge/llm-query.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
@@ -19,21 +19,65 @@ import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
 import type { RlmToolBridge } from "../tool/rlm-details.ts";
 import { PythonSandbox } from "../sandbox/sandbox.ts";
-import type { ProposedEdit } from "../sandbox/protocol.ts";
-import type { AnchorEdit } from "../text/edits.ts";
-import type { EditRequestPreview } from "../text/edit-preview.ts";
+import type { ProposedDiffEdit, ProposedEdit } from "../sandbox/protocol.ts";
+import { advancePhase as validatePhaseTransition, phaseGatePrompt, type PhaseState } from "./pipeline.ts";
+import { applyUnifiedDiffSet, parseUnifiedDiff } from "../text/unified-diff.ts";
+import type { DiffEditRequestPreview } from "../text/edit-preview.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
 import { contextLength, contextTypeLabel } from "../text/tokens.ts";
-import { collectEdits, finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
+import { collectDiffs, collectEdits, finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
 import { compactHistory, shouldCompact } from "./compaction.ts";
 import { appendUserMessage } from "./history.ts";
 import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
 import type { InteractiveDeps, RlmConfig, RlmInput, RlmResult, RunRlm } from "./types.ts";
 import { randomUUID } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
 import { appendRow, appendTodoRow, generateRunId, pruneRuns, snapshotPath, writeContextSidecar } from "../state/index.ts";
 import { STATE_SCHEMA_VERSION } from "../state/rows.ts";
-import type { RunHeader } from "../state/rows.ts";
+import type { PhaseRow, RunHeader } from "../state/rows.ts";
+
+
+async function validateUnifiedDiffAgainstWorkspace(root: string, diff: string, config: RlmConfig): Promise<string> {
+  const parsed = parseUnifiedDiff(diff);
+  if (!parsed.ok) return `Error: ${parsed.error}`;
+
+  const files = new Map<string, string>();
+  for (const file of parsed.files) {
+    const abs = resolveWorkspacePath(root, file.path, config.allowReadOutsideWorkspace);
+    try {
+      const st = await stat(abs);
+      if (file.isNewFile) return `Error: new file '${file.path}' already exists`;
+      if (!st.isFile()) return `Error: '${file.path}' is not a file`;
+      if (st.size > config.fsLimits.maxReadBytes) return `Error: file '${file.path}' exceeds the ${config.fsLimits.maxReadBytes} byte limit`;
+      files.set(file.path, await readFile(abs, "utf8"));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (file.isNewFile && code === "ENOENT") continue;
+      return `Error: ${code === "ENOENT" ? `'${file.path}' not found` : error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  const applied = applyUnifiedDiffSet(diff, files);
+  if (!applied.ok) return `Error: ${applied.error}`;
+  const hunkCount = parsed.files.reduce((sum, file) => sum + file.hunks.length, 0);
+  const changeCount = applied.files.reduce((sum, file) => sum + file.applied, 0);
+  return `ok — unified diff validated (${parsed.files.length} file${parsed.files.length === 1 ? "" : "s"}, ${hunkCount} hunk${hunkCount === 1 ? "" : "s"}, ${changeCount} change${changeCount === 1 ? "" : "s"})`;
+}
+
+export async function handleDiffEditRequest(
+  root: string,
+  diff: string,
+  existingDiffs: readonly ProposedDiffEdit[],
+  config: RlmConfig,
+  onEditRequest?: (request: DiffEditRequestPreview) => Promise<boolean>,
+): Promise<string> {
+  if (existingDiffs.some((item) => item.diff === diff)) return "ok — duplicate diff already proposed";
+  const validationPreview = await validateUnifiedDiffAgainstWorkspace(root, diff, config);
+  if (validationPreview.startsWith("Error:")) return validationPreview;
+  const approved = await onEditRequest?.({ diff, validationPreview }) ?? false;
+  return approved ? validationPreview : "Error: edit request declined by user";
+}
 
 export interface EngineDeps extends InteractiveDeps {
   smartModel: Model<Api>;
@@ -46,8 +90,8 @@ export interface EngineDeps extends InteractiveDeps {
   bridge: RlmToolBridge;
   /** Called with each completion's usage (root + sub-LLM) for cost/token rollups. */
   onUsage?: (usage: Usage, role: "root" | "sub") => void;
-  /** Called after propose_edit validates and before the worker records the edit. */
-  onEditRequest?: (request: EditRequestPreview) => Promise<boolean>;
+  /** Called after rlm_edit validates and before the worker records the diff. */
+  onEditRequest?: (request: DiffEditRequestPreview) => Promise<boolean>;
   /** Run-state persistence handle. undefined ⇒ persistence off. */
   runState?: { cwd: string; dir: string; snapshot: boolean };
 }
@@ -137,6 +181,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let compactions = 0;
     let completedTurns = 0;
     let editsAcc: ProposedEdit[] = [];
+    let diffsAcc: ProposedDiffEdit[] = [];
+    let phaseState: PhaseState | undefined;
     let nodeStatus: "done" | "error" = "done";
     let persistOn = persist;
     const fsTools = Boolean(input.workspaceRoot); // B1: compute before header — `const fs` is created later in the try block
@@ -152,7 +198,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           context: { type: contextTypeLabel(input.context), chars: contextLength(input.context), json, projectMap: input.projectMap ?? false },
           workspaceRoot: input.workspaceRoot,
           models: { smart: smartModel.id, worker: deps.workerModel.id },
-          meta: { maxIterations: deps.config.maxIterations, maxDepth: deps.config.maxDepth, orchestrator: deps.config.orchestrator, editEnabled: deps.config.editEnabled && fsTools, fsTools },
+          meta: { maxIterations: deps.config.maxIterations, maxDepth: deps.config.maxDepth, orchestrator: deps.config.orchestrator, editEnabled: deps.config.editEnabled && fsTools, fsTools, pipeline: true },
         };
         persistOn = appendRow(deps.runState.cwd, deps.runState.dir, runId, header);
       }
@@ -183,14 +229,27 @@ export function createEngine(deps: EngineDeps): RunRlm {
           })
         : undefined;
 
-      const editHandlers = fs && deps.config.editEnabled && input.depth === 0
+      const editRoot = input.workspaceRoot;
+      const diffEditHandlers = fs && deps.config.editEnabled && input.depth === 0 && editRoot
         ? {
-            proposeEdit: async (path: string, oldText: string, newText: string, existingEdits: readonly AnchorEdit[]) => {
-              const validationPreview = await fs.proposeEdit(path, oldText, newText, existingEdits);
-              if (validationPreview.startsWith("Error:")) return validationPreview;
-              if (deps.config.editRequestApproval === "yolo") return validationPreview;
-              const approved = await deps.onEditRequest?.({ path, oldText, newText, validationPreview }) ?? false;
-              return approved ? validationPreview : "Error: edit request declined by user";
+            rlmEdit: async (diff: string, existingDiffs: readonly ProposedDiffEdit[]) =>
+              handleDiffEditRequest(editRoot, diff, existingDiffs, deps.config, deps.onEditRequest),
+          }
+        : {};
+      const phaseHandlers = input.depth === 0
+        ? {
+            advancePhase: async (phase: string, summary: string | undefined) => {
+              const outcome = validatePhaseTransition(phaseState?.current, phase);
+              if (!outcome.ok) return `Error: ${outcome.error}`;
+              const previous = phaseState;
+              phaseState = { current: outcome.phase, advancedAt: completedTurns, summary };
+              if (persistOn && runId && deps.runState) {
+                const row: PhaseRow = { kind: "phase", turn: completedTurns + 1, ts: nowIso(), phase: outcome.phase, summary };
+                const ok = appendRow(deps.runState.cwd, deps.runState.dir, runId, row);
+                if (!ok) persistOn = false;
+              }
+              const prevLabel = previous ? `was '${previous.current}'` : "fresh run";
+              return `ok — phase advanced to '${outcome.phase}' (${prevLabel}${summary ? `, summary: ${summary.slice(0, 80)}` : ""})`;
             },
           }
         : {};
@@ -217,7 +276,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         signal: deps.signal,
         workspaceRoot: input.workspaceRoot,
         initTimeoutMs: deps.config.sandboxInitTimeoutMs,
-        handlers: { ...llm, ...rlm, ...(fs ? { readFile: fs.readFile, grep: fs.grep, find: fs.find } : {}), ...editHandlers, ...interactiveHandlers },
+        handlers: { ...llm, ...rlm, ...(fs ? { readFile: fs.readFile, grep: fs.grep, find: fs.find } : {}), ...diffEditHandlers, ...phaseHandlers, ...interactiveHandlers },
       });
 
       const meta = {
@@ -242,8 +301,13 @@ export function createEngine(deps: EngineDeps): RunRlm {
         limits.addRaw(input.resume.usageSeed.costUsd, input.resume.usageSeed.inputTokens, input.resume.usageSeed.outputTokens);
         best = input.resume.best;
         editsAcc = [...input.resume.editsAcc];
+        diffsAcc = [];
         compactions = input.resume.compactions;
         completedTurns = input.resume.completedTurns;
+        if (input.resume.phase) {
+          const resumePhase = input.resume.phase;
+          phaseState = { current: resumePhase.current as PhaseState["current"], advancedAt: resumePhase.advancedAt, summary: resumePhase.summary };
+        }
       }
       await sandbox.loadContext(input.context);
       if (input.resume?.snapshotTurn !== undefined && deps.runState && runId && sessionNonce) // R-C1: restore only for same-session (sessionNonce present)
@@ -283,7 +347,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
           }
         }
 
-        appendUserMessage(history, buildTurnPrompt(i, deps.config.maxIterations));
+        const gateMsg = phaseGatePrompt(phaseState, completedTurns);
+        const gateUserMsg = gateMsg ? `[${new Date().toISOString()}] ${gateMsg}` : undefined;
+        appendUserMessage(history, buildTurnPrompt(i, deps.config.maxIterations, gateUserMsg));
 
         const turn = await runTurn(history, sandbox, {
           model: smartModel,
@@ -307,10 +373,12 @@ export function createEngine(deps: EngineDeps): RunRlm {
         completedTurns = i + 1;
         const proposedEdits = collectEdits(turn.results);
         if (proposedEdits.length > 0) editsAcc = proposedEdits;
+        const proposedDiffs = collectDiffs(turn.results);
+        if (proposedDiffs.length > 0) diffsAcc = proposedDiffs;
 
         const final = finalAnswerOf(turn.results);
         if (final != null) {
-          const done = result(final, i + 1, limits, editsAcc);
+          const done = result(final, i + 1, limits, editsAcc, diffsAcc);
           recordTerminal("completed", done);
           lastAnswer = done.answer;
           return done;
@@ -341,21 +409,21 @@ export function createEngine(deps: EngineDeps): RunRlm {
         }
       }
       if (pendingReplOutputs) appendUserMessage(history, pendingReplOutputs);
-      const finalized = result(await finalize(history, deps, limits), deps.config.maxIterations, limits);
+      const finalized = result(await finalize(history, deps, limits), deps.config.maxIterations, limits, editsAcc, diffsAcc);
       recordTerminal("finalized", finalized);
       lastAnswer = finalized.answer;
       return finalized;
     } catch (err) {
       // Abort is a user action — resolve with the best partial, not an error.
       if (deps.signal?.aborted) {
-        const aborted = result(best.trim() || "(aborted)", completedTurns, limits);
+        const aborted = result(best.trim() || "(aborted)", completedTurns, limits, editsAcc, diffsAcc);
         recordTerminal("aborted", aborted);
         lastAnswer = aborted.answer;
         return aborted;
       }
       if (err instanceof LimitError) {
         nodeStatus = "error";
-        const stopped = result(best.trim() || `(stopped: ${err.message})`, completedTurns, limits);
+        const stopped = result(best.trim() || `(stopped: ${err.message})`, completedTurns, limits, editsAcc, diffsAcc);
         recordTerminal("stopped", stopped);
         lastAnswer = stopped.answer;
         return stopped;
@@ -380,9 +448,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
   return run;
 }
 
-function result(answer: string, iterations: number, limits: LimitGuard, edits: ProposedEdit[] = []): RlmResult {
+function result(answer: string, iterations: number, limits: LimitGuard, edits: ProposedEdit[] = [], diffs: ProposedDiffEdit[] = []): RlmResult {
   const u = limits.usage();
-  return { answer, edits, iterations, costUsd: u.costUsd, inputTokens: u.inputTokens, outputTokens: u.outputTokens, durationMs: u.durationMs };
+  return { answer, edits, diffs, iterations, costUsd: u.costUsd, inputTokens: u.inputTokens, outputTokens: u.outputTokens, durationMs: u.durationMs };
 }
 
 /** Out of turns: ask the model for its best final answer (plain text). */

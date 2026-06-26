@@ -1,0 +1,244 @@
+#!/usr/bin/env bun
+/**
+ * Phase 4 state machine verification — token-free transition, persistence, & resume tests.
+ * Run: bun run pi-plugin/rlm/test/phase-state.ts
+ */
+
+import { advancePhase, currentPhase, phaseGatePrompt, turnsInPhase, type AdvancePhaseOutcome } from "../src/core/pipeline.ts";
+import { STATE_SCHEMA_VERSION, isPhase, type PhaseRow } from "../src/state/rows.ts";
+import { reconstructRlmState } from "../src/state/resume.ts";
+import { appendRow, writeContextSidecar } from "../src/state/writes.ts";
+import { trailPath } from "../src/state/paths.ts";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { RunHeader, TurnRow } from "../src/state/rows.ts";
+import { buildTurnPrompt } from "../src/prompts/user.ts";
+import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
+
+let failures = 0;
+function check(name: string, cond: boolean, extra = ""): void {
+  console.log(`${cond ? "✓" : "✗"} ${name}${extra ? `  — ${extra}` : ""}`);
+  if (!cond) failures++;
+}
+
+function outcomeDetail(o: AdvancePhaseOutcome): string {
+  return o.ok ? o.phase : o.error;
+}
+
+// ── Phase 1: Transition validation (token-free) ──
+
+function testTransitions(): void {
+  // Forward progression
+  const r0 = advancePhase(undefined, "research");
+  check("undefined → research fails (already implicit)", !r0.ok, outcomeDetail(r0));
+
+  const r1 = advancePhase("research", "blueprint");
+  check("research → blueprint ok", r1.ok && r1.phase === "blueprint", outcomeDetail(r1));
+
+  const r2 = advancePhase("blueprint", "implement");
+  check("blueprint → implement ok", r2.ok && r2.phase === "implement", outcomeDetail(r2));
+
+  const r3 = advancePhase("implement", "validate");
+  check("implement → validate ok", r3.ok && r3.phase === "validate", outcomeDetail(r3));
+
+  // Backward / same phase rejected
+  const back = advancePhase("blueprint", "research");
+  check("blueprint → research rejected", !back.ok && outcomeDetail(back).includes("backward"), outcomeDetail(back));
+
+  const same = advancePhase("implement", "implement");
+  check("implement → implement rejected", !same.ok && outcomeDetail(same).includes("backward"), outcomeDetail(same));
+
+  // Unknown phase
+  const bad = advancePhase("research", "garbage");
+  check("unknown phase rejected", !bad.ok && outcomeDetail(bad).includes("unknown phase"), outcomeDetail(bad));
+
+  // Skip phases (jump more than one)
+  const skip = advancePhase("research", "validate");
+  check("research → validate (skip) ok — allowed (forward)", skip.ok && skip.phase === "validate", outcomeDetail(skip));
+}
+
+// ── Phase 2: Gate prompts & helpers (token-free) ──
+
+function testGateHelpers(): void {
+  check("currentPhase(undefined) = research", currentPhase(undefined) === "research");
+  check("currentPhase({...}) reads phase", currentPhase({ current: "blueprint", advancedAt: 2 }) === "blueprint");
+
+  check("turnsInPhase computes correctly", turnsInPhase({ current: "research", advancedAt: 0 }, 2) === 2);
+  check("turnsInPhase(undefined, 5) === 5", turnsInPhase(undefined, 5) === 5);
+
+  const stall = phaseGatePrompt({ current: "research", advancedAt: 0 }, 4);
+  check("gate fires at turn 4 in research", stall !== undefined && stall.includes("'research'"), stall ?? "no prompt");
+
+  const noStall = phaseGatePrompt({ current: "research", advancedAt: 0 }, 2);
+  check("gate silent at turn 2", noStall === undefined, noStall ?? "undefined");
+
+  const fresh = phaseGatePrompt({ current: "blueprint", advancedAt: 5 }, 6);
+  check("gate silent early in phase", fresh === undefined, fresh ?? "undefined");
+
+  const terminal = phaseGatePrompt({ current: "validate", advancedAt: 8 }, 13);
+  check("gate fires in validate (no next phase)", terminal !== undefined && !terminal.includes("advance_phase"), terminal ?? "no prompt");
+}
+
+// ── Phase 3: Phase rows, persistence & resume ──
+
+function testPhasePersistence(): void {
+  const tmp = mkdtempSync(join(tmpdir(), "rlm-phase-state-"));
+  const runId = "2026-01-01_00-00-00-aaaa";
+  const dir = ".rlm-test";
+
+  try {
+    // Write a header row
+    const header: RunHeader = {
+      kind: "header", v: STATE_SCHEMA_VERSION, runId, ts: "2026-01-01T00:00:00Z",
+      rootPrompt: "test",
+      context: { type: "none", chars: 0, json: false, projectMap: false },
+      models: { smart: "p/id", worker: "p/wid" },
+      meta: { maxIterations: 10, maxDepth: 2, orchestrator: false, editEnabled: false, fsTools: false, pipeline: true },
+    };
+    if (!writeContextSidecar(tmp, dir, runId, "test context", false)) {
+      console.log("✗ sidecar write failed — check perms?");
+      failures++;
+      return;
+    }
+    check("header written", appendRow(tmp, dir, runId, header));
+
+    // Write a turn row
+    const turn: TurnRow = {
+      kind: "turn", turn: 1, ts: "2026-01-01T00:00:01Z",
+      response: "ok", error: false,
+      usage: { costUsd: 0, inputTokens: 1, outputTokens: 2 },
+      cumulativeDurationMs: 100,
+      snapshotOk: false,
+    };
+    check("turn row written", appendRow(tmp, dir, runId, turn));
+
+    // Write a phase row
+    const phaseRow: PhaseRow = {
+      kind: "phase", turn: 2, ts: "2026-01-01T00:00:02Z",
+      phase: "blueprint", summary: "research complete",
+    };
+    check("phase row written", appendRow(tmp, dir, runId, phaseRow));
+
+    // Write another turn and another phase row
+    const turn2: TurnRow = {
+      kind: "turn", turn: 2, ts: "2026-01-01T00:00:03Z",
+      response: "working", error: false,
+      usage: { costUsd: 100, inputTokens: 50, outputTokens: 30 },
+      cumulativeDurationMs: 200,
+      snapshotOk: false,
+    };
+    check("turn2 row written", appendRow(tmp, dir, runId, turn2));
+
+    const phaseRow2: PhaseRow = {
+      kind: "phase", turn: 3, ts: "2026-01-01T00:00:04Z",
+      phase: "implement", summary: "blueprint complete",
+    };
+    check("phase2 row written", appendRow(tmp, dir, runId, phaseRow2));
+
+    // Verify trail file has rows
+    const trail = readFileSync(trailPath(tmp, dir, runId), "utf8");
+    const lines = trail.trim().split("\n");
+    check("trail has 5 rows", lines.length === 5, String(lines.length));
+
+    // Parse and verify phase rows
+    const rows = lines.map((line) => JSON.parse(line));
+    const phaseRows = rows.filter(isPhase);
+    check("two phase rows found", phaseRows.length === 2, String(phaseRows.length));
+    check("first phase = blueprint", phaseRows[0]?.phase === "blueprint");
+    check("second phase = implement", phaseRows[1]?.phase === "implement");
+
+    // Reconstruct and verify phase state
+    const system = buildRlmSystemPrompt({ contextType: "none", contextChars: 0 });
+    const recon = reconstructRlmState(tmp, dir, runId, system);
+    check("reconstruct ok", recon.ok, recon.ok ? "ok" : `${recon.reason}: ${recon.detail}`);
+    if (recon.ok) {
+      check("recon has phase", recon.phase !== undefined);
+      check("recon phase = implement", recon.phase?.current === "implement");
+      check("recon phase advancedAt = 2", recon.phase?.advancedAt === 2);
+      check("recon phase summary", recon.phase?.summary === "blueprint complete");
+      check("recon completedTurns = 2", recon.completedTurns === 2);
+    }
+
+    // Pre-v2 trail without phase rows
+    const v2RunId = "2025-12-31_23-59-59-bbbb";
+    const v2Header: RunHeader = {
+      kind: "header", v: 2, runId: v2RunId, ts: "2025-12-31T23:59:59Z",
+      rootPrompt: "v2", context: { type: "none", chars: 0, json: false, projectMap: false },
+      models: { smart: "p/id", worker: "p/wid" },
+      meta: { maxIterations: 5, maxDepth: 1, orchestrator: false, editEnabled: false, fsTools: false },
+    };
+    writeContextSidecar(tmp, dir, v2RunId, "v2 context", false);
+    appendRow(tmp, dir, v2RunId, v2Header);
+    appendRow(tmp, dir, v2RunId, {
+      kind: "turn", turn: 1, ts: "2025-12-31T23:59:59Z",
+      response: "v2", error: false,
+      usage: { costUsd: 0, inputTokens: 0, outputTokens: 0 },
+      cumulativeDurationMs: 0, snapshotOk: false,
+    } as TurnRow);
+
+    // v2 trail should fail resume (version mismatch)
+    const v2Recon = reconstructRlmState(tmp, dir, v2RunId, system);
+    check("v2 trail fails version-mismatch", !v2Recon.ok && v2Recon.reason === "version-mismatch", v2Recon.ok ? "unexpected ok" : `${v2Recon.reason}: ${v2Recon.detail}`);
+
+    // Schema v3 header without pipeline field
+    const v3RunId = "2026-06-01_12-00-00-cccc";
+    const v3Header: RunHeader = {
+      kind: "header", v: 3, runId: v3RunId, ts: "2026-06-01T12:00:00Z",
+      rootPrompt: "v3", context: { type: "none", chars: 0, json: false, projectMap: false },
+      models: { smart: "p/id", worker: "p/wid" },
+      meta: { maxIterations: 5, maxDepth: 1, orchestrator: false, editEnabled: false, fsTools: false },
+    };
+    writeContextSidecar(tmp, dir, v3RunId, "v3 context", false);
+    appendRow(tmp, dir, v3RunId, v3Header);
+    const v3Turn: TurnRow = {
+      kind: "turn", turn: 1, ts: "2026-06-01T12:00:01Z",
+      response: "v3 turn", error: false,
+      usage: { costUsd: 0, inputTokens: 0, outputTokens: 0 },
+      cumulativeDurationMs: 0, snapshotOk: false,
+    };
+    appendRow(tmp, dir, v3RunId, v3Turn);
+    const v3Recon = reconstructRlmState(tmp, dir, v3RunId, system);
+    check("v3 trail without phase rows reconstructs ok", v3Recon.ok, v3Recon.ok ? "ok" : `${v3Recon.reason}: ${v3Recon.detail}`);
+    if (v3Recon.ok) {
+      check("v3 trail phase is undefined", v3Recon.phase === undefined);
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── Phase 4: Turn prompt with gate message ──
+
+function testGatePromptIntegration(): void {
+  const p0 = buildTurnPrompt(2, 10);
+  check("turn prompt without gate is short", p0 === "Turn 3/10:", p0);
+
+  const p1 = buildTurnPrompt(2, 10, "Gate message here");
+  check("turn prompt includes gate", p1.includes("Gate message here") && p1.includes("Turn 3/10:"), p1);
+
+  const p2 = buildTurnPrompt(0, 10, "First turn gate");
+  check("first turn prompt includes gate and intro", p2.includes("First turn gate") && p2.includes("not interacted"), p2);
+}
+
+// ── Phase 5: isPhase guard ──
+
+function testIntents(): void {
+  check("isPhase valid", isPhase({ kind: "phase", turn: 1, ts: "ts", phase: "blueprint" }));
+  check("isPhase rejects missing phase", !isPhase({ kind: "phase", turn: 1, ts: "ts" }));
+  check("isPhase rejects wrong kind", !isPhase({ kind: "turn", turn: 1, phase: "blueprint" }));
+  check("isPhase rejects null", !isPhase(null));
+  check("isPhase rejects string", !isPhase("phase"));
+  check("STATE_SCHEMA_VERSION = 3", STATE_SCHEMA_VERSION === 3, String(STATE_SCHEMA_VERSION));
+}
+
+// ── Run ──
+
+testTransitions();
+testGateHelpers();
+testPhasePersistence();
+testGatePromptIntegration();
+testIntents();
+
+console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
+process.exit(failures === 0 ? 0 : 1);

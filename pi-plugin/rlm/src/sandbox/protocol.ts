@@ -32,6 +32,10 @@ export interface ProposedEdit {
   readonly newText: string;
 }
 
+export interface ProposedDiffEdit {
+  readonly diff: string;
+}
+
 /** A normal response to a request (keyed by the request `id`). */
 export interface WorkerResponse {
   id: string;
@@ -43,6 +47,7 @@ export interface WorkerResponse {
   final_answer?: string | null;
   answer_content?: string;
   edits?: ProposedEdit[];
+  diffs?: ProposedDiffEdit[];
   raised?: boolean;
   execution_time?: number;
   // load_context:
@@ -62,6 +67,8 @@ export type InterruptKind =
   | "grep"
   | "find"
   | "propose_edit"
+  | "rlm_edit"
+  | "advance_phase"
   | "ask_user_question"
   | "todo";
 
@@ -132,6 +139,18 @@ interface ProposeEditInterrupt extends InterruptBase {
   readonly existingEdits?: readonly ProposedEdit[];
 }
 
+interface RlmEditInterrupt extends InterruptBase {
+  readonly type: "rlm_edit";
+  readonly diff?: string;
+  readonly existingDiffs?: readonly ProposedDiffEdit[];
+}
+
+interface AdvancePhaseInterrupt extends InterruptBase {
+  readonly type: "advance_phase";
+  readonly phase?: string;
+  readonly summary?: string;
+}
+
 export interface AskUserQuestionInterrupt extends InterruptBase {
   readonly type: "ask_user_question";
   readonly questions: readonly AskQuestion[];
@@ -161,6 +180,8 @@ export type WorkerInterrupt =
   | GrepInterrupt
   | FindInterrupt
   | ProposeEditInterrupt
+  | RlmEditInterrupt
+  | AdvancePhaseInterrupt
   | AskUserQuestionInterrupt
   | TodoInterrupt;
 
@@ -175,6 +196,8 @@ export const INTERRUPT_KINDS = new Set<InterruptKind>([
   "grep",
   "find",
   "propose_edit",
+  "rlm_edit",
+  "advance_phase",
   "ask_user_question",
   "todo",
 ]);
@@ -190,6 +213,7 @@ export interface ReplResult {
   finalAnswer: string | null;
   answerContent: string;
   edits: ProposedEdit[];
+  diffs: ProposedDiffEdit[];
   raised: boolean;
   executionTimeMs: number;
 }

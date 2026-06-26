@@ -60,12 +60,13 @@ function replGlossary(recursion: boolean, fsTools: boolean, edit: boolean, askUs
     );
     if (edit) {
       lines.push(
-        "- `propose_edit(path, old, new) -> str`: PROPOSE an anchor edit. `old` MUST be copied verbatim",
-        "  from `read_file` output and be UNIQUE in the file (extend with surrounding lines if not).",
-        "  This does NOT write the file — edits are applied after the run, with the user's approval.",
-        "  Workflow: grep/find to LOCATE → read_file to GROUND the exact anchor → generate `new` with",
-        "  `llm_query` over the chunk (never verbalize file bodies yourself) → propose_edit. Use loops",
-        "  + llm_query_batched to edit many files programmatically; print only short confirmations.",
+        "- `rlm_edit(diff: str) -> str`: PROPOSE a strict git-style unified diff. The diff may",
+        "  touch multiple files, but every file must use `diff --git`, `---`, `+++`, and `@@` hunks.",
+        "  This does NOT write files — the parent handler validates whether this run may record the diff.",
+        "  If diff edits are not enabled for this run, it returns an `Error: ...` string.",
+        "  Workflow: grep/find to LOCATE → read_file to GROUND current content → produce a unified",
+        "  diff → call `rlm_edit(diff)`. Print only short confirmations.",
+        "- `SHOW_DIFFS() -> str`: list proposed unified diffs by touched files and size.",
       );
     }
   }
@@ -96,9 +97,14 @@ function replGlossary(recursion: boolean, fsTools: boolean, edit: boolean, askUs
     );
   }
   lines.push(
+    "- `advance_phase(phase: str, summary=None) -> str`: transition the root RLM pipeline to the next phase.",
+    "  Valid phases in order: 'research' → 'blueprint' → 'implement' → 'validate'. You must advance forward",
+    "  one phase at a time. Only callable at the root depth; returns an error in sub-RLM contexts.",
+  );
+  lines.push(
     "- `SHOW_VARS() -> str`: list every variable currently in the REPL.",
-    "- `SHOW_EDITS() -> str`: list proposed edits by path and size (no file bodies). Use after",
-    "  repeated `propose_edit` calls to avoid duplicates or conflicts.",
+    "- `SHOW_EDITS() -> str`: list legacy anchor edits still present during the diff migration.",
+    "- `SHOW_DIFFS() -> str`: list proposed unified diffs by touched files and size.",
     '- `answer`: a dict initialized to {"content": "", "ready": False}. To submit your final answer,',
     '  set `answer["content"]` to the answer text and `answer["ready"] = True`.',
   );

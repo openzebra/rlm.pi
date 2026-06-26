@@ -28,7 +28,7 @@ function validateBoolean(v: unknown): boolean | undefined {
 }
 
 function validateEditRequestApprovalMode(v: unknown): EditRequestApprovalMode | undefined {
-  return v === "ask" || v === "yolo" ? v : undefined;
+  return v === "ask" || v === "yolo" ? "ask" : undefined;
 }
 
 function validateString(v: unknown): string | undefined {

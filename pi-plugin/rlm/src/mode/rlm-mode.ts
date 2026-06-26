@@ -14,7 +14,7 @@ import { modelRef, resolveModelId, saveSettings } from "../config/settings.ts";
 import { createEngine } from "../core/engine.ts";
 import type { InteractiveDeps, RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
 import type { ReconstructResult } from "../state/resume.ts";
-import { renderEditRequestPreview } from "../text/edit-preview.ts";
+import { renderUnifiedDiffRequestPreview } from "../text/edit-preview.ts";
 import { contextLength } from "../text/tokens.ts";
 import { RlmToolBridge } from "../tool/rlm-details.ts";
 
@@ -140,10 +140,9 @@ export class RlmController {
         runState,
         onAskUserQuestion: interactive?.onAskUserQuestion,
         onTodo: interactive?.onTodo,
-        onEditRequest: async (request) => {
-          if (this.config.editRequestApproval === "yolo") return true;
-          return ctx.hasUI ? ctx.ui.confirm("Approve RLM edit request?", renderEditRequestPreview(request)) : false;
-        },
+        onEditRequest: async (request) => ctx.hasUI
+          ? ctx.ui.confirm("Approve RLM diff edit request?", renderUnifiedDiffRequestPreview(request))
+          : false,
         limits: {
           maxBudgetUsd: this.config.maxBudgetUsd,
           maxTimeoutMs: this.config.maxTimeoutMs,

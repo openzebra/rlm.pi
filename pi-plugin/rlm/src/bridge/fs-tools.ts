@@ -30,6 +30,17 @@ function shouldSkipWalkEntry(name: string): boolean {
   return WALK_SKIP_NAMES.has(name) || WALK_SKIP_SUFFIXES.some((suffix) => name.endsWith(suffix));
 }
 
+export function resolveWorkspacePath(root: string, path: string, allowOutsideWorkspace = false): string {
+  const absRoot = resolve(root);
+  const abs = resolve(absRoot, path);
+  if (!allowOutsideWorkspace) {
+    const rel = relative(absRoot, abs);
+    if (rel !== "" && (rel.startsWith("..") || isAbsolute(rel)))
+      throw new Error(`path '${path}' is outside the workspace root`);
+  }
+  return abs;
+}
+
 export interface FsBridge {
   readFile(path: string, start: number | null, end: number | null): Promise<string>;
   grep(pattern: string, glob: string | null, maxMatches: number | null): Promise<string>;
