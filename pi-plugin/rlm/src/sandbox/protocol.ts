@@ -63,11 +63,6 @@ export type InterruptKind =
   | "llm_query_batched"
   | "rlm_query"
   | "rlm_query_batched"
-  | "read_file"
-  | "grep"
-  | "find"
-  | "propose_edit"
-  | "rlm_edit"
   | "advance_phase"
   | "ask_user_question"
   | "todo";
@@ -112,39 +107,6 @@ interface BatchedPromptInterrupt extends InterruptBase {
   readonly model?: string | null;
 }
 
-interface ReadFileInterrupt extends InterruptBase {
-  readonly type: "read_file";
-  readonly path?: string;
-  readonly start?: number | null;
-  readonly end?: number | null;
-}
-
-interface GrepInterrupt extends InterruptBase {
-  readonly type: "grep";
-  readonly pattern?: string;
-  readonly glob?: string | null;
-  readonly maxMatches?: number | null;
-}
-
-interface FindInterrupt extends InterruptBase {
-  readonly type: "find";
-  readonly glob?: string | null;
-}
-
-interface ProposeEditInterrupt extends InterruptBase {
-  readonly type: "propose_edit";
-  readonly path?: string;
-  readonly old?: string;
-  readonly new?: string;
-  readonly existingEdits?: readonly ProposedEdit[];
-}
-
-interface RlmEditInterrupt extends InterruptBase {
-  readonly type: "rlm_edit";
-  readonly diff?: string;
-  readonly existingDiffs?: readonly ProposedDiffEdit[];
-}
-
 interface AdvancePhaseInterrupt extends InterruptBase {
   readonly type: "advance_phase";
   readonly phase?: string;
@@ -176,11 +138,6 @@ export interface TodoInterrupt extends InterruptBase {
 export type WorkerInterrupt =
   | PromptInterrupt
   | BatchedPromptInterrupt
-  | ReadFileInterrupt
-  | GrepInterrupt
-  | FindInterrupt
-  | ProposeEditInterrupt
-  | RlmEditInterrupt
   | AdvancePhaseInterrupt
   | AskUserQuestionInterrupt
   | TodoInterrupt;
@@ -192,11 +149,6 @@ export const INTERRUPT_KINDS = new Set<InterruptKind>([
   "llm_query_batched",
   "rlm_query",
   "rlm_query_batched",
-  "read_file",
-  "grep",
-  "find",
-  "propose_edit",
-  "rlm_edit",
   "advance_phase",
   "ask_user_question",
   "todo",

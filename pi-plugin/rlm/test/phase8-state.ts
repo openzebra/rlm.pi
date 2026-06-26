@@ -28,10 +28,9 @@ async function main(): Promise<void> {
     const header: RunHeader = {
       kind: "header", v: STATE_SCHEMA_VERSION, runId, ts: new Date().toISOString(),
       rootPrompt: "test prompt",
-      context: { type: "str", chars: 0, json: false, projectMap: false },
-      workspaceRoot: cwd,
+      context: { type: "str", chars: 0, json: false },
       models: { smart: "deepseek/deepseek-v4-pro", worker: "deepseek/deepseek-v4-flash" },
-      meta: { maxIterations: 30, maxDepth: 2, orchestrator: true, editEnabled: false, fsTools: false },
+      meta: { maxIterations: 30, maxDepth: 2, orchestrator: true },
     };
     check("header written", appendRow(cwd, dir, runId, header));
 

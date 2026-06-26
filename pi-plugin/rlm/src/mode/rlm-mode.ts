@@ -8,14 +8,12 @@
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { buildProjectManifest } from "../bridge/fs-tools.ts";
-import { DEFAULT_CONFIG, DEFAULT_RUN_DIR } from "../config/defaults.ts";
+import { DEFAULT_RUN_DIR } from "../config/defaults.ts";
 import { modelRef, resolveModelId, saveSettings } from "../config/settings.ts";
 import { createEngine } from "../core/engine.ts";
 import type { InteractiveDeps, RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
 import type { ReconstructResult } from "../state/resume.ts";
-import { renderUnifiedDiffRequestPreview } from "../text/edit-preview.ts";
-import { contextLength } from "../text/tokens.ts";
+import { packRepository, serializeForSandbox } from "../context/repomix-context.ts";
 import { RlmEmitter } from "../tool/rlm-events.ts";
 
 export function cheapestModel(registry: ModelRegistry): Model<Api> | undefined {
@@ -33,14 +31,6 @@ export interface RunHandle {
 export type StartInput =
   | { readonly kind: "fresh"; readonly rootPrompt: string; readonly context: unknown }
   | { readonly kind: "resume"; readonly resume: ReconstructResult & { ok: true }; readonly context: unknown };
-
-export async function prepareRlmContext(context: unknown, cwd: string | undefined, config: RlmConfig = DEFAULT_CONFIG, signal?: AbortSignal): Promise<unknown> {
-  return contextLength(context) === 0 && cwd ? buildProjectManifest(cwd, { signal, limits: config.fsLimits }) : context;
-}
-
-function isProjectMapContext(originalContext: unknown, preparedContext: unknown, cwd: string | undefined): boolean {
-  return Boolean(cwd && contextLength(originalContext) === 0 && contextLength(preparedContext) > 0);
-}
 
 export class RlmController {
   smartModel: Model<Api> | undefined;
@@ -109,24 +99,29 @@ export class RlmController {
       : undefined;
 
     const done = (async () => {
-      const workspaceRoot = ctx.cwd;
       let engineInput: RlmInput;
       if (input.kind === "fresh") {
-        const contextValue = await prepareRlmContext(input.context, workspaceRoot, this.config, abortController.signal);
+        // Auto-pack empty/undefined context via repomix; pass explicit context through.
+        let contextValue: unknown = input.context;
+        if (contextValue === undefined || contextValue === "" || (typeof contextValue === "string" && contextValue.trim() === "")) {
+          const cwd = ctx.cwd ?? process.cwd();
+          const result = await packRepository(cwd, abortController.signal);
+          if (result.ok) {
+            contextValue = serializeForSandbox(result.value);
+          } else {
+            contextValue = `Error: failed to pack repository — ${result.error}`;
+          }
+        }
         engineInput = {
           rootPrompt: input.rootPrompt,
           context: contextValue,
           depth: 0,
-          workspaceRoot,
-          projectMap: isProjectMapContext(input.context, contextValue, workspaceRoot),
         };
       } else {
         engineInput = {
           rootPrompt: input.resume.header.rootPrompt,
           context: input.context, // B5: load the actual context from the sidecar, not ""
           depth: 0,
-          workspaceRoot,
-          projectMap: input.resume.header.context.projectMap,
           resume: input.resume,
         };
       }
@@ -140,9 +135,6 @@ export class RlmController {
         runState,
         onAskUserQuestion: interactive?.onAskUserQuestion,
         onTodo: interactive?.onTodo,
-        onEditRequest: async (request) => ctx.hasUI
-          ? ctx.ui.confirm("Approve RLM diff edit request?", renderUnifiedDiffRequestPreview(request))
-          : false,
         limits: {
           maxBudgetUsd: this.config.maxBudgetUsd,
           maxTimeoutMs: this.config.maxTimeoutMs,

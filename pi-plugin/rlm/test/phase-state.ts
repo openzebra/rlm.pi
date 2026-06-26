@@ -92,9 +92,9 @@ function testPhasePersistence(): void {
     const header: RunHeader = {
       kind: "header", v: STATE_SCHEMA_VERSION, runId, ts: "2026-01-01T00:00:00Z",
       rootPrompt: "test",
-      context: { type: "none", chars: 0, json: false, projectMap: false },
+      context: { type: "none", chars: 0, json: false },
       models: { smart: "p/id", worker: "p/wid" },
-      meta: { maxIterations: 10, maxDepth: 2, orchestrator: false, editEnabled: false, fsTools: false, pipeline: true },
+      meta: { maxIterations: 10, maxDepth: 2, orchestrator: false, pipeline: true },
     };
     if (!writeContextSidecar(tmp, dir, runId, "test context", false)) {
       console.log("✗ sidecar write failed — check perms?");
@@ -164,9 +164,9 @@ function testPhasePersistence(): void {
     const v2RunId = "2025-12-31_23-59-59-bbbb";
     const v2Header: RunHeader = {
       kind: "header", v: 2, runId: v2RunId, ts: "2025-12-31T23:59:59Z",
-      rootPrompt: "v2", context: { type: "none", chars: 0, json: false, projectMap: false },
+      rootPrompt: "v2", context: { type: "none", chars: 0, json: false },
       models: { smart: "p/id", worker: "p/wid" },
-      meta: { maxIterations: 5, maxDepth: 1, orchestrator: false, editEnabled: false, fsTools: false },
+      meta: { maxIterations: 5, maxDepth: 1, orchestrator: false },
     };
     writeContextSidecar(tmp, dir, v2RunId, "v2 context", false);
     appendRow(tmp, dir, v2RunId, v2Header);
@@ -181,27 +181,27 @@ function testPhasePersistence(): void {
     const v2Recon = reconstructRlmState(tmp, dir, v2RunId, system);
     check("v2 trail fails version-mismatch", !v2Recon.ok && v2Recon.reason === "version-mismatch", v2Recon.ok ? "unexpected ok" : `${v2Recon.reason}: ${v2Recon.detail}`);
 
-    // Schema v3 header without pipeline field
-    const v3RunId = "2026-06-01_12-00-00-cccc";
-    const v3Header: RunHeader = {
-      kind: "header", v: 3, runId: v3RunId, ts: "2026-06-01T12:00:00Z",
-      rootPrompt: "v3", context: { type: "none", chars: 0, json: false, projectMap: false },
+    // Schema v4 header without phase rows
+    const v4RunId = "2026-06-01_12-00-00-cccc";
+    const v4Header: RunHeader = {
+      kind: "header", v: 4, runId: v4RunId, ts: "2026-06-01T12:00:00Z",
+      rootPrompt: "v3", context: { type: "none", chars: 0, json: false },
       models: { smart: "p/id", worker: "p/wid" },
-      meta: { maxIterations: 5, maxDepth: 1, orchestrator: false, editEnabled: false, fsTools: false },
+      meta: { maxIterations: 5, maxDepth: 1, orchestrator: false },
     };
-    writeContextSidecar(tmp, dir, v3RunId, "v3 context", false);
-    appendRow(tmp, dir, v3RunId, v3Header);
-    const v3Turn: TurnRow = {
+    writeContextSidecar(tmp, dir, v4RunId, "v4 context", false);
+    appendRow(tmp, dir, v4RunId, v4Header);
+    const v4Turn: TurnRow = {
       kind: "turn", turn: 1, ts: "2026-06-01T12:00:01Z",
-      response: "v3 turn", error: false,
+      response: "v4 turn", error: false,
       usage: { costUsd: 0, inputTokens: 0, outputTokens: 0 },
       cumulativeDurationMs: 0, snapshotOk: false,
     };
-    appendRow(tmp, dir, v3RunId, v3Turn);
-    const v3Recon = reconstructRlmState(tmp, dir, v3RunId, system);
-    check("v3 trail without phase rows reconstructs ok", v3Recon.ok, v3Recon.ok ? "ok" : `${v3Recon.reason}: ${v3Recon.detail}`);
-    if (v3Recon.ok) {
-      check("v3 trail phase is undefined", v3Recon.phase === undefined);
+    appendRow(tmp, dir, v4RunId, v4Turn);
+    const v4Recon = reconstructRlmState(tmp, dir, v4RunId, system);
+    check("v4 trail without phase rows reconstructs ok", v4Recon.ok, v4Recon.ok ? "ok" : `${v4Recon.reason}: ${v4Recon.detail}`);
+    if (v4Recon.ok) {
+      check("v4 trail phase is undefined", v4Recon.phase === undefined);
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -229,7 +229,7 @@ function testIntents(): void {
   check("isPhase rejects wrong kind", !isPhase({ kind: "turn", turn: 1, phase: "blueprint" }));
   check("isPhase rejects null", !isPhase(null));
   check("isPhase rejects string", !isPhase("phase"));
-  check("STATE_SCHEMA_VERSION = 3", STATE_SCHEMA_VERSION === 3, String(STATE_SCHEMA_VERSION));
+  check("STATE_SCHEMA_VERSION = 4", STATE_SCHEMA_VERSION === 4, String(STATE_SCHEMA_VERSION));
 }
 
 // ── Run ──

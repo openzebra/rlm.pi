@@ -3,16 +3,10 @@
  * Run: bun run pi-plugin/rlm/test/phase1.ts
  */
 
-import { createFsBridge, globToRegExp } from "../src/bridge/fs-tools.ts";
-import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { prepareRlmContext, RlmController } from "../src/mode/rlm-mode.ts";
+import { RlmController } from "../src/mode/rlm-mode.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { loadSettings, mergeConfig, saveSettings } from "../src/config/settings.ts";
 import { turnHadError } from "../src/core/answer.ts";
-import { applyAnchorEdits } from "../src/text/edits.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { buildMetadataLine, buildRlmSystemPrompt } from "../src/prompts/system.ts";
 import { findReplBlocks, truncateOutput } from "../src/text/parsing.ts";
@@ -34,24 +28,16 @@ async function main() {
   check("findReplBlocks extracts 2 blocks", blocks.length === 2, JSON.stringify(blocks));
   check("truncateOutput elides", truncateOutput("a".repeat(100), 40).includes("elided"));
   const sp = buildRlmSystemPrompt(
-    { contextType: "str", contextChars: 0, fsTools: true, projectMap: true, workspaceRoot: "/x" },
+    { contextType: "json", contextChars: 5000 },
     { orchestrator: true },
   );
-  check("prompt forbids dumping files", sp.includes("ORCHESTRATOR over the repository") && sp.includes("never into your own output"));
-  check("prompt shows batched delegation idiom", sp.includes("llm_query_batched(["));
-  check("prompt includes read_file truncation guidance", sp.includes("including `read_file`") && sp.includes("slice them and pass the slices"));
-  check("prompt hides propose_edit by default", !sp.includes("propose_edit(path, old, new)"));
-  const editPrompt = buildRlmSystemPrompt(
-    { contextType: "str", contextChars: 0, fsTools: true, projectMap: true, workspaceRoot: "/x" },
-    { orchestrator: true, edit: true },
-  );
-  check("prompt documents rlm_edit when enabled", editPrompt.includes("rlm_edit(diff: str)") && editPrompt.includes("SHOW_DIFFS"));
-  check("prompt documents SHOW_EDITS", editPrompt.includes("SHOW_EDITS()"));
-  const metadata = buildMetadataLine({ contextType: "str", contextChars: 0, projectMap: true, workspaceRoot: "/x" });
+  check("prompt describes context as JSON array", sp.includes("list[dict]") && sp.includes("path"));
+  check("prompt shows chunking example", sp.includes("chunk_size") && sp.includes("llm_query_batched"));
+  check("prompt includes batched delegation idiom", sp.includes("llm_query_batched(["));
+  const metadata = buildMetadataLine({ contextType: "json", contextChars: 5000 });
   check(
-    "metadata routes file contents through sub-LLMs",
-    metadata.includes("read file CONTENTS only through llm_query/llm_query_batched") &&
-      !metadata.includes("file contents are available via read_file/grep/find"),
+    "metadata describes JSON array context",
+    metadata.includes("JSON array") && metadata.includes('"path"') && metadata.includes('"content"') && metadata.includes('"tokens"'),
   );
 
   const sandbox = await PythonSandbox.spawn({
@@ -96,132 +82,6 @@ async function main() {
     "import os; print('A=' + str(os.environ.get('ANTHROPIC_API_KEY')) + ' O=' + str(os.environ.get('OPENAI_API_KEY')))",
   );
   check("sandbox cannot read provider keys", r.stdout.trim() === "A=None O=None", r.stdout.trim());
-
-  // file-backed environment tools (host-enforced workspace boundary)
-  const fs = createFsBridge(process.cwd());
-  const fsSb = await PythonSandbox.spawn({
-    depth: 1,
-    execTimeoutS: 2,
-    workspaceRoot: process.cwd(),
-    handlers: { readFile: fs.readFile, grep: fs.grep, find: fs.find },
-  });
-  r = await fsSb.exec("print(read_file('pi-plugin/rlm/README.md')[:20])");
-  check("read_file reads workspace files", r.stdout.trim().length > 0 && !r.stdout.includes("Error:"), r.stdout.trim());
-  r = await fsSb.exec("print(grep('RLM', 'pi-plugin/rlm/**/*.ts', 5))");
-  check("grep searches workspace files", r.stdout.includes("RLM") || r.stdout.includes("(no matches)"), r.stdout.trim().slice(0, 80));
-  r = await fsSb.exec("print(grep('[', None, 5))");
-  check("grep reports invalid patterns as errors", r.stdout.includes("Error:"), r.stdout.trim().slice(0, 80));
-  r = await fsSb.exec("print(find('pi-plugin/rlm/**/*.ts'))");
-  check("find lists matching project files", r.stdout.includes("pi-plugin/rlm/src"), r.stdout.trim().slice(0, 80));
-  r = await fsSb.exec("print(read_file('../../etc/passwd'))");
-  check("read_file rejects workspace escape", r.stdout.includes("outside the workspace root"), r.stdout.trim());
-  r = await fsSb.exec("print(read_file('definitely/missing.ts'))");
-  check(
-    "read_file missing-file error is relative and tidy",
-    r.stdout.includes("'definitely/missing.ts' not found") && !r.stdout.includes(process.cwd()),
-    r.stdout.trim(),
-  );
-  r = await fsSb.exec("print(propose_edit('pi-plugin/rlm/README.md', 'RLM', 'RLM'))");
-  check("propose_edit is gated when handler absent", r.stdout.includes("edit tools are not enabled") && r.edits.length === 0, r.stdout.trim());
-  check("globstar matches zero directories", globToRegExp("a/**/b").test("a/b") && globToRegExp("a/**/b").test("a/x/b"));
-
-  const editRoot = await mkdtemp(join(tmpdir(), "rlm-edit-"));
-  try {
-    await writeFile(join(editRoot, "a.txt"), "alpha\nbeta\ngamma\n");
-    await writeFile(join(editRoot, "dup.txt"), "same\nsame\n");
-    await writeFile(join(editRoot, "overlap.txt"), "abcdef\n");
-    const editFs = createFsBridge(editRoot);
-    const editSb = await PythonSandbox.spawn({
-      depth: 0,
-      execTimeoutS: 2,
-      workspaceRoot: editRoot,
-      handlers: { readFile: editFs.readFile, grep: editFs.grep, find: editFs.find, proposeEdit: editFs.proposeEdit },
-    });
-    r = await editSb.exec("print(propose_edit('a.txt', 'beta\\n', 'BETA\\n'))");
-    check("propose_edit unique anchor previews ok", r.stdout.includes("ok — a.txt:2") && r.edits.length === 1, r.stdout.trim());
-    r = await editSb.exec("print(propose_edit('a.txt', 'beta\\n', 'BETA\\n'))");
-    check("propose_edit exact duplicate is deduped", r.stdout.includes("duplicate edit already proposed") && r.edits.length === 1, r.stdout.trim());
-    r = await editSb.exec("print(SHOW_EDITS())");
-    check("SHOW_EDITS reports accumulated edits", r.stdout.includes("Proposed edits: 1") && r.stdout.includes("a.txt"), r.stdout.trim());
-    r = await editSb.exec("print(propose_edit('overlap.txt', 'bcd', 'BCD'))");
-    check("propose_edit first overlapping candidate is accepted", r.stdout.includes("ok — overlap.txt:1") && r.edits.length === 2, r.stdout.trim());
-    r = await editSb.exec("print(propose_edit('overlap.txt', 'cd', 'CD'))");
-    check("propose_edit catches conflicts before apply", r.stdout.includes("overlapping edits") && r.edits.length === 2, r.stdout.trim());
-    r = await editSb.exec("print(propose_edit('dup.txt', 'same\\n', 'SAME\\n'))");
-    check("propose_edit duplicate anchor rejects and does not append", r.stdout.includes("anchor occurs 2×") && r.edits.length === 2, r.stdout.trim());
-    r = await editSb.exec("print(propose_edit('a.txt', 'missing', 'MISSING'))");
-    check("propose_edit missing anchor rejects and does not append", r.stdout.includes("anchor not found") && r.edits.length === 2, r.stdout.trim());
-    const smallOut = await createFsBridge(editRoot, { limits: { ...DEFAULT_CONFIG.fsLimits, maxReadBytes: 3 } }).proposeEdit("a.txt", "alpha", "ALPHA", []);
-    check("propose_edit honors maxReadBytes", smallOut.includes("exceeds the 3 byte limit"), smallOut);
-    const duplicateApply = applyAnchorEdits("one\ntwo\n", "dup-apply.txt", [
-      { oldText: "two\n", newText: "TWO\n" },
-      { oldText: "two\n", newText: "TWO\n" },
-    ]);
-    check("applyAnchorEdits tolerates exact duplicate edits", duplicateApply.ok && duplicateApply.applied === 1, duplicateApply.ok ? duplicateApply.text : duplicateApply.error);
-    await editSb.dispose();
-  } finally {
-    await rm(editRoot, { recursive: true, force: true });
-  }
-
-  const dashRoot = await mkdtemp(join(tmpdir(), "rlm-dash-"));
-  try {
-    await writeFile(join(dashRoot, "a.txt"), "hello\n-u literal\n");
-    // If ripgrep is unavailable, the bridge falls back to git grep; make the temp tree a repo
-    // so the same assertion still exercises the safe `-e pattern` path.
-    execFileSync("git", ["init"], { cwd: dashRoot, stdio: "ignore" });
-    execFileSync("git", ["add", "a.txt"], { cwd: dashRoot, stdio: "ignore" });
-    const dashFs = createFsBridge(dashRoot);
-    const dashOut = await dashFs.grep("-u", null, 20);
-    check("grep treats leading-dash patterns as literals", dashOut.includes("-u literal") && !dashOut.includes("hello"), dashOut);
-  } finally {
-    await rm(dashRoot, { recursive: true, force: true });
-  }
-
-  const sliceRoot = await mkdtemp(join(tmpdir(), "rlm-slice-"));
-  try {
-    await writeFile(join(sliceRoot, "big.txt"), Array.from({ length: 30_000 }, (_, i) => `line ${i}`).join("\n"));
-    const fullOut = await createFsBridge(sliceRoot).readFile("big.txt", null, null);
-    check("read_file whole-file reads are not output-capped", fullOut.length > 20_000 && !fullOut.includes("truncated to 20000 characters"), fullOut.slice(-80));
-    const sliceOut = await createFsBridge(sliceRoot).readFile("big.txt", 1, 30_000);
-    check("read_file slices are preview-capped", sliceOut.includes("truncated to 20000 characters"), sliceOut.slice(-80));
-    const limitedOut = await createFsBridge(sliceRoot, { limits: { ...DEFAULT_CONFIG.fsLimits, maxOutputChars: 40 } }).readFile("big.txt", 1, 30_000);
-    check("read_file honors configured output limit", limitedOut.includes("truncated to 40 characters"), limitedOut.slice(-80));
-  } finally {
-    await rm(sliceRoot, { recursive: true, force: true });
-  }
-
-  const manyFiles = Array.from({ length: 2_005 }, (_, i) => `src/file-${i}.ts`);
-  const findOut = await createFsBridge(process.cwd(), { initialFiles: manyFiles }).find("src/*.ts");
-  check("find marks truncated output", findOut.includes("truncated to 2000 files"), findOut.slice(-80));
-
-  const outside = await mkdtemp(join(tmpdir(), "rlm-outside-"));
-  const inside = await mkdtemp(join(tmpdir(), "rlm-inside-"));
-  try {
-    await writeFile(join(outside, "secret.txt"), "SECRET");
-    await symlink(outside, join(inside, "evil"));
-    const evilFs = createFsBridge(inside);
-    const evilSb = await PythonSandbox.spawn({
-      depth: 1,
-      execTimeoutS: 2,
-      workspaceRoot: inside,
-      handlers: { readFile: evilFs.readFile, grep: evilFs.grep, find: evilFs.find },
-    });
-    r = await evilSb.exec("print(read_file('evil/secret.txt'))");
-    check("read_file rejects symlink workspace escape", r.stdout.includes("outside the workspace root"), r.stdout.trim());
-    const unsafeFs = createFsBridge(inside, { allowReadOutsideWorkspace: true });
-    const unsafeOut = await unsafeFs.readFile("evil/secret.txt", null, null);
-    check("read_file can allow workspace escape when configured", unsafeOut.trim() === "SECRET", unsafeOut.trim());
-    await evilSb.dispose();
-  } finally {
-    await rm(inside, { recursive: true, force: true });
-    await rm(outside, { recursive: true, force: true });
-  }
-  await fsSb.dispose();
-
-  const manifest = await prepareRlmContext("", process.cwd());
-  check("empty context becomes project manifest", typeof manifest === "string" && manifest.startsWith("# Project map"), String(manifest).slice(0, 80));
-  const explicitContext = await prepareRlmContext("explicit", process.cwd());
-  check("explicit context is not replaced by manifest", explicitContext === "explicit", String(explicitContext));
 
   // answer.ready -> final answer surfaced
   r = await sandbox.exec("answer['content'] = 'draft partial'");
@@ -314,10 +174,6 @@ async function main() {
       ...DEFAULT_CONFIG,
       smartReasoning: "high",
       subSampling: { ...DEFAULT_CONFIG.subSampling, reasoning: "low" },
-      fsLimits: { ...DEFAULT_CONFIG.fsLimits, maxOutputChars: 1234 },
-      allowReadOutsideWorkspace: true,
-      editEnabled: true,
-      editRequestApproval: "yolo" as never,
     });
     const saved = saveSettings({ config, smart: "test/smart", worker: "test/worker" });
     const loaded = loadSettings();
@@ -325,7 +181,6 @@ async function main() {
     check("settings save reports success", saved);
     check("settings round-trips model refs", loaded.smart === "test/smart" && loaded.worker === "test/worker");
     check("settings round-trips reasoning", roundTrip.smartReasoning === "high" && roundTrip.subSampling.reasoning === "low");
-    check("settings sanitizes old yolo edit approval to ask", roundTrip.fsLimits.maxOutputChars === 1234 && roundTrip.allowReadOutsideWorkspace && roundTrip.editEnabled && roundTrip.editRequestApproval === "ask");
     saveSettings(previous);
   }
 

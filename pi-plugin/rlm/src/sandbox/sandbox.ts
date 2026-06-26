@@ -17,8 +17,6 @@ import {
   type AskAnswer,
   type AskQuestion,
   type ParentMessage,
-  type ProposedDiffEdit,
-  type ProposedEdit,
   type ReplResult,
   type WorkerInterrupt,
   type WorkerMessage,
@@ -32,11 +30,6 @@ export interface SubLlmHandlers {
   llmQueryBatched(prompts: readonly string[], model: string | null, depth: number): Promise<string[]>;
   rlmQuery(prompt: string, model: string | null, depth: number): Promise<string>;
   rlmQueryBatched(prompts: readonly string[], model: string | null, depth: number): Promise<string[]>;
-  readFile(path: string, start: number | null, end: number | null): Promise<string>;
-  grep(pattern: string, glob: string | null, maxMatches: number | null): Promise<string>;
-  find(glob: string | null): Promise<string>;
-  proposeEdit(path: string, oldText: string, newText: string, existingEdits: readonly ProposedEdit[]): Promise<string>;
-  rlmEdit(diff: string, existingDiffs: readonly ProposedDiffEdit[], depth: number): Promise<string>;
   advancePhase(phase: string, summary: string | undefined, depth: number): Promise<string>;
   askUserQuestion(questions: readonly AskQuestion[], depth: number): Promise<AskAnswer[]>;
   todo(action: string, params: Record<string, unknown>, depth: number): Promise<string>;
@@ -55,8 +48,6 @@ export interface SandboxOptions {
   handlers?: Partial<SubLlmHandlers>;
   /** AbortSignal — immediate SIGKILL on abort, bypassing the shutdown handshake. */
   signal?: AbortSignal;
-  /** Workspace root for host-side filesystem tools. Enforcement happens in the handlers. */
-  workspaceRoot?: string;
   /** Worker startup wait before init failure (ms). */
   initTimeoutMs?: number;
 }
@@ -80,11 +71,6 @@ const REJECT: SubLlmHandlers = {
   llmQueryBatched: async (p) => p.map(() => "Error: sub-LLM bridge not configured"),
   rlmQuery: async () => "Error: sub-LLM bridge not configured",
   rlmQueryBatched: async (p) => p.map(() => "Error: sub-LLM bridge not configured"),
-  readFile: async () => "Error: filesystem tools are not available in this run",
-  grep: async () => "Error: filesystem tools are not available in this run",
-  find: async () => "Error: filesystem tools are not available in this run",
-  proposeEdit: async () => "Error: edit tools are not enabled in this run",
-  rlmEdit: async () => "Error: diff edit tools are not enabled in this run",
   advancePhase: async () => "Error: phase advancement not available",
   askUserQuestion: async (questions) => questions.map((q) => ({
     question: q.question,
@@ -339,21 +325,6 @@ export class PythonSandbox {
       } else if (msg.type === "rlm_query_batched") {
         const responses = await h.rlmQueryBatched(msg.prompts ?? [], msg.model ?? null, d);
         this.reply(msg.rid, { responses });
-      } else if (msg.type === "read_file") {
-        const response = await h.readFile(msg.path ?? "", msg.start ?? null, msg.end ?? null);
-        this.reply(msg.rid, { response });
-      } else if (msg.type === "grep") {
-        const response = await h.grep(msg.pattern ?? "", msg.glob ?? null, msg.maxMatches ?? null);
-        this.reply(msg.rid, { response });
-      } else if (msg.type === "find") {
-        const response = await h.find(msg.glob ?? null);
-        this.reply(msg.rid, { response });
-      } else if (msg.type === "propose_edit") {
-        const response = await h.proposeEdit(msg.path ?? "", msg.old ?? "", msg.new ?? "", msg.existingEdits ?? []);
-        this.reply(msg.rid, { response });
-      } else if (msg.type === "rlm_edit") {
-        const response = await h.rlmEdit(msg.diff ?? "", msg.existingDiffs ?? [], d);
-        this.reply(msg.rid, { response });
       } else if (msg.type === "advance_phase") {
         const response = await h.advancePhase(msg.phase ?? "", msg.summary, d);
         this.reply(msg.rid, { response });

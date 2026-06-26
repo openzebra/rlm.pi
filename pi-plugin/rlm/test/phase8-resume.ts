@@ -47,10 +47,9 @@ async function main(): Promise<void> {
     const header: RunHeader = {
       kind: "header", v: STATE_SCHEMA_VERSION, runId, ts: new Date().toISOString(),
       rootPrompt: "test resume prompt",
-      context: { type: "str", chars: contextText.length, json: false, projectMap: false },
-      workspaceRoot: cwd,
+      context: { type: "str", chars: contextText.length, json: false },
       models: { smart: "test/smart", worker: "test/worker" },
-      meta: { maxIterations: 30, maxDepth: 2, orchestrator: true, editEnabled: false, fsTools: false },
+      meta: { maxIterations: 30, maxDepth: 2, orchestrator: true },
     };
     check("header written", appendRow(cwd, dir, runId, header));
     check("context sidecar written", writeContextSidecar(cwd, dir, runId, contextText, false));

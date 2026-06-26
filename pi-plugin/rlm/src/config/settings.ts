@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import type { EditRequestApprovalMode, FsLimits, RlmConfig, RunLogConfig, Sampling, TelemetryConfig } from "../core/types.ts";
+import type { RlmConfig, RunLogConfig, Sampling, TelemetryConfig } from "../core/types.ts";
 import { DEFAULT_CONFIG } from "./defaults.ts";
 
 export interface PersistedSettings {
@@ -25,10 +25,6 @@ function validateNumber(v: unknown, min: number): number | undefined {
 
 function validateBoolean(v: unknown): boolean | undefined {
   return typeof v === "boolean" ? v : undefined;
-}
-
-function validateEditRequestApprovalMode(v: unknown): EditRequestApprovalMode | undefined {
-  return v === "ask" || v === "yolo" ? "ask" : undefined;
 }
 
 function validateString(v: unknown): string | undefined {
@@ -69,26 +65,6 @@ function validateRunLog(raw: unknown): Partial<RunLogConfig> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function validateFsLimits(raw: unknown): Partial<FsLimits> | undefined {
-  if (typeof raw !== "object" || raw === null) return undefined;
-  const r = raw as Record<string, unknown>;
-  const out: Partial<FsLimits> = {};
-  const fields: ReadonlyArray<readonly [keyof FsLimits, number]> = Object.freeze([
-    ["maxReadBytes", 1],
-    ["maxOutputChars", 1],
-    ["maxFindFiles", 1],
-    ["maxManifestFiles", 1],
-    ["commandTimeoutMs", 100],
-    ["grepDefaultMaxMatches", 1],
-    ["grepMaxMatchesCeiling", 1],
-  ]);
-  for (const [key, min] of fields) {
-    const value = validateNumber(r[key], min);
-    if (value !== undefined) out[key] = value;
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
 function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (typeof raw !== "object" || raw === null) return {};
   const r = raw as Record<string, unknown>;
@@ -116,19 +92,11 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (telemetry) out.telemetry = telemetry;
   const runLog = validateRunLog(r.runLog);
   if (runLog) out.runLog = runLog;
-  const fsLimits = validateFsLimits(r.fsLimits);
-  if (fsLimits) out.fsLimits = fsLimits as FsLimits;
   if (validateNumber(r.sandboxInitTimeoutMs, 100) !== undefined) out.sandboxInitTimeoutMs = r.sandboxInitTimeoutMs as number;
-  const editEnabled = validateBoolean(r.editEnabled);
-  if (editEnabled !== undefined) out.editEnabled = editEnabled;
   const askUserQuestion = validateBoolean(r.askUserQuestion);
   if (askUserQuestion !== undefined) out.askUserQuestion = askUserQuestion;
   const todo = validateBoolean(r.todo);
   if (todo !== undefined) out.todo = todo;
-  const editRequestApproval = validateEditRequestApprovalMode(r.editRequestApproval);
-  if (editRequestApproval !== undefined) out.editRequestApproval = editRequestApproval;
-  const allowReadOutsideWorkspace = validateBoolean(r.allowReadOutsideWorkspace);
-  if (allowReadOutsideWorkspace !== undefined) out.allowReadOutsideWorkspace = allowReadOutsideWorkspace;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
     const ss = r.subSampling as Record<string, unknown>;
     const sampling: Partial<Sampling> = {};
@@ -171,7 +139,6 @@ export function mergeConfig(partial: Partial<RlmConfig>): RlmConfig {
   return {
     ...DEFAULT_CONFIG,
     ...partial,
-    fsLimits: { ...DEFAULT_CONFIG.fsLimits, ...partial.fsLimits },
     subSampling: { ...DEFAULT_CONFIG.subSampling, ...partial.subSampling },
     ...(partial.telemetry ? { telemetry: { ...partial.telemetry } } : {}),
     ...(partial.runLog ? { runLog: Object.freeze({ ...DEFAULT_CONFIG.runLog, ...partial.runLog }) } : {}), // QC: freeze to match DEFAULT_CONFIG

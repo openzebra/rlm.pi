@@ -16,19 +16,9 @@ const CHOICES = Object.freeze({
   maxErrors: Object.freeze(["3", "5", "10", "none"]),
   orchestrator: Object.freeze(["on", "off"]),
   compaction: Object.freeze(["on", "off"]),
-  maxReadMb: Object.freeze(["1", "10", "25", "100"]),
-  maxOutputChars: Object.freeze(["5000", "20000", "50000", "100000"]),
-  maxFindFiles: Object.freeze(["500", "2000", "5000", "10000"]),
-  maxManifestFiles: Object.freeze(["1000", "5000", "10000", "20000"]),
-  commandTimeoutMs: Object.freeze(["5000", "15000", "30000", "60000"]),
-  grepDefaultMaxMatches: Object.freeze(["50", "200", "500", "1000"]),
-  grepMaxMatchesCeiling: Object.freeze(["200", "1000", "2500", "5000"]),
   sandboxInitTimeoutMs: Object.freeze(["10000", "30000", "60000", "120000"]),
-  editEnabled: Object.freeze(["off", "on"]),
   askUserQuestion: Object.freeze(["on", "off"]),
   todo: Object.freeze(["on", "off"]),
-  editRequestApproval: Object.freeze(["ask"]),
-  allowReadOutsideWorkspace: Object.freeze(["off", "on"]),
 });
 
 function item(id: string, label: string, currentValue: string, values: readonly string[], description: string): SettingItem {
@@ -48,19 +38,9 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("maxErrors", "Max consecutive errors", config.maxErrors != null ? String(config.maxErrors) : "none", CHOICES.maxErrors, "Stop after this many consecutive failing turns; none disables the guard."),
     item("orchestrator", "Orchestrator addendum", config.orchestrator ? "on" : "off", CHOICES.orchestrator, "Append extra divide-and-conquer guidance to the smart model system prompt."),
     item("compaction", "Trajectory compaction", config.compaction ? "on" : "off", CHOICES.compaction, "Summarize old turns when history approaches the model context window."),
-    item("maxReadMb", "[Limits] Max file read (MB)", String(Math.round(config.fsLimits.maxReadBytes / (1024 * 1024))), CHOICES.maxReadMb, "Maximum file size read_file will load."),
-    item("maxOutputChars", "Max tool output (chars)", String(config.fsLimits.maxOutputChars), CHOICES.maxOutputChars, "Maximum returned characters from grep and ranged read_file slices before truncation."),
-    item("maxFindFiles", "Max find files", String(config.fsLimits.maxFindFiles), CHOICES.maxFindFiles, "Maximum number of find() results returned to the model."),
-    item("maxManifestFiles", "Max project-map files", String(config.fsLimits.maxManifestFiles), CHOICES.maxManifestFiles, "Maximum files listed when building the initial project map."),
-    item("commandTimeoutMs", "Command timeout (ms)", String(config.fsLimits.commandTimeoutMs), CHOICES.commandTimeoutMs, "Timeout for grep/git subprocesses used by filesystem tools."),
-    item("grepDefaultMaxMatches", "Grep default matches", String(config.fsLimits.grepDefaultMaxMatches), CHOICES.grepDefaultMaxMatches, "Default grep result cap when the model does not pass maxMatches."),
-    item("grepMaxMatchesCeiling", "Grep hard max matches", String(config.fsLimits.grepMaxMatchesCeiling), CHOICES.grepMaxMatchesCeiling, "Maximum grep result cap even if the model requests more."),
     item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
-    item("editEnabled", "[Editing] rlm_edit", config.editEnabled ? "on" : "off", CHOICES.editEnabled, "Allow RLM to propose unified diff edits with mandatory preview approval."),
     item("askUserQuestion", "[Interactive] Ask user", config.askUserQuestion ? "on" : "off", CHOICES.askUserQuestion, "Allow root REPL code to present structured ask_user_question dialogs."),
     item("todo", "[Interactive] Todo", config.todo ? "on" : "off", CHOICES.todo, "Allow REPL code to manage a visible todo task list."),
-    item("editRequestApproval", "[Editing] Request popup", config.editRequestApproval, CHOICES.editRequestApproval, "Mandatory popup preview for every validated unified diff proposal."),
-    item("allowReadOutsideWorkspace", "[Security] Read outside workspace", config.allowReadOutsideWorkspace ? "on" : "off", CHOICES.allowReadOutsideWorkspace, "UNSAFE: lets read_file/grep/find escape the project root."),
     item("__save__", "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
   ];
 
@@ -102,18 +82,8 @@ function applySetting(config: RlmConfig, id: string, value: string): void {
     case "maxErrors": config.maxErrors = value === "none" ? undefined : Number(value); break;
     case "orchestrator": config.orchestrator = value === "on"; break;
     case "compaction": config.compaction = value === "on"; break;
-    case "maxReadMb": config.fsLimits.maxReadBytes = Number(value) * 1024 * 1024; break;
-    case "maxOutputChars": config.fsLimits.maxOutputChars = Number(value); break;
-    case "maxFindFiles": config.fsLimits.maxFindFiles = Number(value); break;
-    case "maxManifestFiles": config.fsLimits.maxManifestFiles = Number(value); break;
-    case "commandTimeoutMs": config.fsLimits.commandTimeoutMs = Number(value); break;
-    case "grepDefaultMaxMatches": config.fsLimits.grepDefaultMaxMatches = Number(value); break;
-    case "grepMaxMatchesCeiling": config.fsLimits.grepMaxMatchesCeiling = Number(value); break;
     case "sandboxInitTimeoutMs": config.sandboxInitTimeoutMs = Number(value); break;
-    case "editEnabled": config.editEnabled = value === "on"; break;
     case "askUserQuestion": config.askUserQuestion = value === "on"; break;
     case "todo": config.todo = value === "on"; break;
-    case "editRequestApproval": config.editRequestApproval = "ask"; break;
-    case "allowReadOutsideWorkspace": config.allowReadOutsideWorkspace = value === "on"; break;
   }
 }

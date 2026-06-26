@@ -27,7 +27,7 @@ export function collectEdits(results: ReplResult[]): ProposedEdit[] {
   return [];
 }
 
-/** Last cumulative unified-diff proposal set reported by a turn. */
+/** Last cumulative diff proposal set reported by a turn. */
 export function collectDiffs(results: ReplResult[]): ProposedDiffEdit[] {
   for (let i = results.length - 1; i >= 0; i--) {
     const diffs = results[i]?.diffs;

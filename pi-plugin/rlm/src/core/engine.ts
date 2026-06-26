@@ -9,7 +9,6 @@
 
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { createFsBridge, resolveWorkspacePath } from "../bridge/fs-tools.ts";
 import { buildInteractiveHandlers } from "../bridge/interactive.ts";
 import { createLlmBridge } from "../bridge/llm-query.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
@@ -19,10 +18,7 @@ import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
 import { PythonSandbox } from "../sandbox/sandbox.ts";
-import type { ProposedDiffEdit, ProposedEdit } from "../sandbox/protocol.ts";
 import { advancePhase as validatePhaseTransition, phaseGatePrompt, type PhaseState } from "./pipeline.ts";
-import { applyUnifiedDiffSet, parseUnifiedDiff } from "../text/unified-diff.ts";
-import type { DiffEditRequestPreview } from "../text/edit-preview.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
 import { contextLength, contextTypeLabel } from "../text/tokens.ts";
 import { collectDiffs, collectEdits, finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
@@ -32,52 +28,12 @@ import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
 import type { InteractiveDeps, RlmConfig, RlmInput, RlmResult, RunRlm } from "./types.ts";
 import { randomUUID } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
 import { appendRow, appendTodoRow, generateRunId, pruneRuns, snapshotPath, writeContextSidecar } from "../state/index.ts";
 import { STATE_SCHEMA_VERSION } from "../state/rows.ts";
 import type { PhaseRow, RunHeader } from "../state/rows.ts";
+import { serializeForSandbox, type ContextBundle } from "../context/repomix-context.ts";
+import type { ProposedDiffEdit, ProposedEdit } from "../sandbox/protocol.ts";
 
-
-async function validateUnifiedDiffAgainstWorkspace(root: string, diff: string, config: RlmConfig): Promise<string> {
-  const parsed = parseUnifiedDiff(diff);
-  if (!parsed.ok) return `Error: ${parsed.error}`;
-
-  const files = new Map<string, string>();
-  for (const file of parsed.files) {
-    const abs = resolveWorkspacePath(root, file.path, config.allowReadOutsideWorkspace);
-    try {
-      const st = await stat(abs);
-      if (file.isNewFile) return `Error: new file '${file.path}' already exists`;
-      if (!st.isFile()) return `Error: '${file.path}' is not a file`;
-      if (st.size > config.fsLimits.maxReadBytes) return `Error: file '${file.path}' exceeds the ${config.fsLimits.maxReadBytes} byte limit`;
-      files.set(file.path, await readFile(abs, "utf8"));
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException | undefined)?.code;
-      if (file.isNewFile && code === "ENOENT") continue;
-      return `Error: ${code === "ENOENT" ? `'${file.path}' not found` : error instanceof Error ? error.message : String(error)}`;
-    }
-  }
-
-  const applied = applyUnifiedDiffSet(diff, files);
-  if (!applied.ok) return `Error: ${applied.error}`;
-  const hunkCount = parsed.files.reduce((sum, file) => sum + file.hunks.length, 0);
-  const changeCount = applied.files.reduce((sum, file) => sum + file.applied, 0);
-  return `ok — unified diff validated (${parsed.files.length} file${parsed.files.length === 1 ? "" : "s"}, ${hunkCount} hunk${hunkCount === 1 ? "" : "s"}, ${changeCount} change${changeCount === 1 ? "" : "s"})`;
-}
-
-export async function handleDiffEditRequest(
-  root: string,
-  diff: string,
-  existingDiffs: readonly ProposedDiffEdit[],
-  config: RlmConfig,
-  onEditRequest?: (request: DiffEditRequestPreview) => Promise<boolean>,
-): Promise<string> {
-  if (existingDiffs.some((item) => item.diff === diff)) return "ok — duplicate diff already proposed";
-  const validationPreview = await validateUnifiedDiffAgainstWorkspace(root, diff, config);
-  if (validationPreview.startsWith("Error:")) return validationPreview;
-  const approved = await onEditRequest?.({ diff, validationPreview }) ?? false;
-  return approved ? validationPreview : "Error: edit request declined by user";
-}
 
 export interface EngineDeps extends InteractiveDeps {
   smartModel: Model<Api>;
@@ -90,8 +46,6 @@ export interface EngineDeps extends InteractiveDeps {
   emitter: RlmEmitter;
   /** Called with each completion's usage (root + sub-LLM) for cost/token rollups. */
   onUsage?: (usage: Usage, role: "root" | "sub") => void;
-  /** Called after rlm_edit validates and before the worker records the diff. */
-  onEditRequest?: (request: DiffEditRequestPreview) => Promise<boolean>;
   /** Run-state persistence handle. undefined ⇒ persistence off. */
   runState?: { cwd: string; dir: string; snapshot: boolean };
 }
@@ -173,7 +127,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
       onChildUsage: (costUsd, inputTokens, outputTokens) => {
         limits.addRaw(costUsd, inputTokens, outputTokens);
       },
-      workspaceRoot: input.workspaceRoot,
     });
     let sandbox: PythonSandbox | undefined;
     let best = "";
@@ -185,7 +138,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let phaseState: PhaseState | undefined;
     let nodeStatus: "done" | "error" = "done";
     let persistOn = persist;
-    const fsTools = Boolean(input.workspaceRoot); // B1: compute before header — `const fs` is created later in the try block
     if (persist && deps.runState && !input.resume && runId) {
       const json = typeof input.context !== "string";
       const sidecarOk = writeContextSidecar(deps.runState.cwd, deps.runState.dir, runId, input.context, json);
@@ -195,10 +147,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
         const header: RunHeader = {
           kind: "header", v: STATE_SCHEMA_VERSION, runId, ts: nowIso(),
           rootPrompt: input.rootPrompt,
-          context: { type: contextTypeLabel(input.context), chars: contextLength(input.context), json, projectMap: input.projectMap ?? false },
-          workspaceRoot: input.workspaceRoot,
+          context: { type: contextTypeLabel(input.context), chars: contextLength(input.context), json },
           models: { smart: smartModel.id, worker: deps.workerModel.id },
-          meta: { maxIterations: deps.config.maxIterations, maxDepth: deps.config.maxDepth, orchestrator: deps.config.orchestrator, editEnabled: deps.config.editEnabled && fsTools, fsTools, pipeline: true },
+          meta: { maxIterations: deps.config.maxIterations, maxDepth: deps.config.maxDepth, orchestrator: deps.config.orchestrator, pipeline: true },
         };
         persistOn = appendRow(deps.runState.cwd, deps.runState.dir, runId, header);
       }
@@ -214,28 +165,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
     };
 
     try {
-      const fsInitialFiles = input.projectMap && typeof input.context === "string"
-        ? input.context.split("\n").filter((line) => line && !line.startsWith("#"))
-        : undefined;
-      const fs = input.workspaceRoot
-        ? createFsBridge(input.workspaceRoot, {
-            signal: deps.signal,
-            initialFiles: fsInitialFiles,
-            emitter,
-            parentId: selfReportId,
-            depth: input.depth,
-            limits: deps.config.fsLimits,
-            allowReadOutsideWorkspace: deps.config.allowReadOutsideWorkspace,
-          })
-        : undefined;
-
-      const editRoot = input.workspaceRoot;
-      const diffEditHandlers = fs && deps.config.editEnabled && input.depth === 0 && editRoot
-        ? {
-            rlmEdit: async (diff: string, existingDiffs: readonly ProposedDiffEdit[]) =>
-              handleDiffEditRequest(editRoot, diff, existingDiffs, deps.config, deps.onEditRequest),
-          }
-        : {};
       const phaseHandlers = input.depth === 0
         ? {
             advancePhase: async (phase: string, summary: string | undefined) => {
@@ -274,23 +203,18 @@ export function createEngine(deps: EngineDeps): RunRlm {
         requestTimeoutMs: deps.config.requestTimeoutMs,
         python: deps.config.python,
         signal: deps.signal,
-        workspaceRoot: input.workspaceRoot,
         initTimeoutMs: deps.config.sandboxInitTimeoutMs,
-        handlers: { ...llm, ...rlm, ...(fs ? { readFile: fs.readFile, grep: fs.grep, find: fs.find } : {}), ...diffEditHandlers, ...phaseHandlers, ...interactiveHandlers },
+        handlers: { ...llm, ...rlm, ...phaseHandlers, ...interactiveHandlers },
       });
 
       const meta = {
         contextType: contextTypeLabel(input.context),
         contextChars: contextLength(input.context),
         rootPrompt: input.rootPrompt || undefined,
-        workspaceRoot: input.workspaceRoot,
-        fsTools: Boolean(fs),
-        projectMap: input.projectMap ?? false,
       };
       const system = buildRlmSystemPrompt(meta, {
         orchestrator: deps.config.orchestrator,
         recursion: input.depth + 1 < deps.config.maxDepth,
-        edit: Boolean(fs) && deps.config.editEnabled && input.depth === 0,
         askUserQuestion: deps.config.askUserQuestion && input.depth === 0,
         todo: deps.config.todo,
       });
@@ -300,7 +224,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
       if (input.resume) {
         limits.addRaw(input.resume.usageSeed.costUsd, input.resume.usageSeed.inputTokens, input.resume.usageSeed.outputTokens);
         best = input.resume.best;
-        editsAcc = [...input.resume.editsAcc];
+        editsAcc = [];
         diffsAcc = [];
         compactions = input.resume.compactions;
         completedTurns = input.resume.completedTurns;
@@ -309,7 +233,12 @@ export function createEngine(deps: EngineDeps): RunRlm {
           phaseState = { current: resumePhase.current as PhaseState["current"], advancedAt: resumePhase.advancedAt, summary: resumePhase.summary };
         }
       }
-      await sandbox.loadContext(input.context);
+
+      // Context: serialize ContextBundle to sandbox-ready JSON array, pass raw strings through.
+      const contextValue = typeof input.context === "object" && input.context !== null && "files" in input.context
+        ? serializeForSandbox(input.context as ContextBundle)
+        : input.context;
+      await sandbox.loadContext(contextValue);
       if (input.resume?.snapshotTurn !== undefined && deps.runState && runId && sessionNonce) // R-C1: restore only for same-session (sessionNonce present)
         await sandbox.restore(snapshotPath(deps.runState.cwd, deps.runState.dir, runId, input.resume.snapshotTurn), sessionNonce);
       for (let i = startTurn; i < deps.config.maxIterations; i++) {

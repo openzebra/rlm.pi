@@ -24,6 +24,7 @@
     "typebox": "*"
   },
   "dependencies": {
-    "@mlflow/core": "~0.2.0"
+    "@mlflow/core": "~0.2.0",
+    "repomix": "^1.15.0"
   }
 }

@@ -34,9 +34,9 @@ async function main(): Promise<void> {
     const runId = generateRunId();
     const header: RunHeader = {
       kind: "header", v: STATE_SCHEMA_VERSION, runId, ts: new Date().toISOString(),
-      rootPrompt: "test", context: { type: "str", chars: 4, json: false, projectMap: false },
-      workspaceRoot: cwd, models: { smart: "a", worker: "b" },
-      meta: { maxIterations: 30, maxDepth: 2, orchestrator: true, editEnabled: false, fsTools: true },
+      rootPrompt: "test", context: { type: "str", chars: 4, json: false },
+      models: { smart: "a", worker: "b" },
+      meta: { maxIterations: 30, maxDepth: 2, orchestrator: true },
     };
     check("appendRow succeeds", appendRow(cwd, dir, runId, header));
     const tp = trailPath(cwd, dir, runId);

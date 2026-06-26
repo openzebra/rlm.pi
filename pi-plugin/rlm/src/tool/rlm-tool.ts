@@ -22,7 +22,7 @@ import { RlmEventAggregator } from "./rlm-aggregator.ts";
 
 export const RlmToolParams = Type.Object({
   prompt: Type.String({ description: "The task or question for the RLM engine" }),
-  context: Type.Optional(Type.String({ description: "Optional additional context" })),
+  context: Type.Optional(Type.String({ description: "Optional context. If omitted, repo is auto-packed via repomix." })),
 });
 
 // ── Rendering helpers ──
@@ -64,7 +64,7 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
   return {
     name: "rlm",
     label: "RLM",
-    description: "Run the Recursive Language Model engine to answer complex questions with code execution, file system tools, and recursive sub-agent calls.",
+    description: "Run the Recursive Language Model engine to answer complex questions with code execution and recursive sub-agent calls.",
     parameters: RlmToolParams,
 
     async execute(_toolCallId, rawParams, signal, onUpdate, ctx) {
@@ -104,7 +104,7 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
         const input: StartInput = {
           kind: "fresh",
           rootPrompt: params.prompt,
-          context: params.context ?? "",
+          context: params.context ?? undefined,
         };
         const interactive = createPiInteractiveDeps(ctx);
         const { done } = controller.start(ctx, input, emitter, {

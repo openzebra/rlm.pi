@@ -7,11 +7,11 @@ This is NOT a security sandbox: __import__ and open are available, so code can i
 Protocol (parent -> worker):  {"id","type":"exec"|"load_context"|"shutdown", ...}
 Protocol (worker -> parent):  {"id","ok",...result}            # response to a request
                               {"type":"llm_query"|"llm_query_batched"|"rlm_query"|...
-                               "read_file"|"grep"|"find","rid",...}
+                               "advance_phase"|"ask_user_question"|"todo","rid",...}
                                                                 # mid-exec helper request
-When sandbox code calls llm_query/rlm_query/read_file/grep/find, the worker writes a request line
+When sandbox code calls llm_query/rlm_query/advance_phase/ask_user_question/todo, the worker writes a request line
 and BLOCKS reading stdin until the matching {"type":"llm_reply","rid",...} arrives. The parent
-services the request in-process (it holds API keys and implements ergonomic file helpers).
+services the request in-process (it holds API keys).
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ for _blocked in ("eval", "exec", "compile", "input", "globals", "locals"):
 RESERVED = frozenset(
     {
         "llm_query", "llm_query_batched", "rlm_query", "rlm_query_batched",
-        "read_file", "grep", "find", "propose_edit", "rlm_edit", "advance_phase",
+        "advance_phase",
         "ask_user_question", "todo",
         "SHOW_EDITS", "SHOW_DIFFS", "SHOW_VARS", "answer", "context", "context_0",
     }
@@ -96,8 +96,6 @@ class Worker:
         self.exec_timeout_s = exec_timeout_s
         self._rid = 0
         self._final_answer: str | None = None
-        self._edits: list[dict[str, str]] = []
-        self._diffs: list[dict[str, str]] = []
         self._context_count = 0
         self.ns: dict[str, Any] = {}
         self._setup()
@@ -116,11 +114,6 @@ class Worker:
         ns["llm_query_batched"] = self._llm_query_batched
         ns["rlm_query"] = self._rlm_query
         ns["rlm_query_batched"] = self._rlm_query_batched
-        ns["read_file"] = self._read_file
-        ns["grep"] = self._grep
-        ns["find"] = self._find
-        ns["propose_edit"] = self._propose_edit
-        ns["rlm_edit"] = self._rlm_edit
         ns["advance_phase"] = self._advance_phase
         ns["ask_user_question"] = self._ask_user_question
         ns["todo"] = self._todo
@@ -149,28 +142,10 @@ class Worker:
         return f"Available variables: {avail}" if avail else "No variables created yet."
 
     def _show_edits(self) -> str:
-        if not self._edits:
-            return "No proposed edits."
-        lines = [f"Proposed edits: {len(self._edits)}"]
-        for i, e in enumerate(self._edits, 1):
-            old_lines = str(e.get("oldText", "")).count("\n") + 1
-            new_lines = str(e.get("newText", "")).count("\n") + 1
-            lines.append(
-                f"{i}. {e.get('path', '')}: old {len(e.get('oldText', ''))} chars/{old_lines} lines -> "
-                f"new {len(e.get('newText', ''))} chars/{new_lines} lines"
-            )
-        return "\n".join(lines)
+        return "No edits — edit tools are not available in this run."
 
     def _show_diffs(self) -> str:
-        if not self._diffs:
-            return "No proposed unified diffs."
-        lines = [f"Proposed unified diffs: {len(self._diffs)}"]
-        for i, e in enumerate(self._diffs, 1):
-            diff = str(e.get("diff", ""))
-            files = [line[6:].strip() for line in diff.splitlines() if line.startswith("+++ b/")]
-            label = ", ".join(files) if files else "unknown files"
-            lines.append(f"{i}. {label}: {len(diff)} chars")
-        return "\n".join(lines)
+        return "No diffs — edit tools are not available in this run."
 
     # ---- sub-LLM bridge over stdio --------------------------------------------------------
 
@@ -216,18 +191,6 @@ class Worker:
 
     def _rlm_query(self, prompt: str, model: str | None = None) -> str:
         r = self._rpc("rlm_query", {"prompt": str(prompt), "model": model})
-        return f"Error: {r['error']}" if r.get("error") else r.get("response", "")
-
-    def _read_file(self, path: str, start: int | None = None, end: int | None = None) -> str:
-        r = self._rpc("read_file", {"path": str(path), "start": start, "end": end})
-        return f"Error: {r['error']}" if r.get("error") else r.get("response", "")
-
-    def _grep(self, pattern: str, glob: str | None = None, max_matches: int | None = None) -> str:
-        r = self._rpc("grep", {"pattern": str(pattern), "glob": glob, "maxMatches": max_matches})
-        return f"Error: {r['error']}" if r.get("error") else r.get("response", "")
-
-    def _find(self, glob: str | None = None) -> str:
-        r = self._rpc("find", {"glob": glob})
         return f"Error: {r['error']}" if r.get("error") else r.get("response", "")
 
     def _ask_user_question(self, questions: list[dict]) -> list[dict]:
@@ -287,47 +250,6 @@ class Worker:
         if r.get("error"):
             return f"Error: {r['error']}"
         return str(r.get("response", "ok"))
-
-    def _propose_edit(self, path: str, old: str, new: str) -> str:
-        """Validate an anchor edit with the parent; record it on success.
-
-        Does NOT write to disk — the parent applies edits after the run, with approval.
-        Returns a short preview, or an `Error: …` string the model can act on.
-        """
-        path_s = str(path)
-        old_s = str(old)
-        new_s = str(new)
-        proposed = {"path": path_s, "oldText": old_s, "newText": new_s}
-        if proposed in self._edits:
-            return "ok — duplicate edit already proposed"
-        existing = [e for e in self._edits if e.get("path") == path_s]
-        r = self._rpc("propose_edit", {"path": path_s, "old": old_s, "new": new_s, "existingEdits": existing})
-        if r.get("error"):
-            return f"Error: {r['error']}"
-        response = r.get("response", "ok")
-        if isinstance(response, str) and response.startswith("Error:"):
-            return response
-        self._edits.append(proposed)
-        return response if isinstance(response, str) else "ok"
-
-    def _rlm_edit(self, diff: str) -> str:
-        """Validate a unified diff with the parent; record it on success.
-
-        Does NOT write to disk. The parent handler decides whether the diff is valid for this run.
-        Returns a short preview, or an `Error: …` string the model can act on.
-        """
-        diff_s = str(diff)
-        proposed = {"diff": diff_s}
-        if proposed in self._diffs:
-            return "ok — duplicate diff already proposed"
-        r = self._rpc("rlm_edit", {"diff": diff_s, "existingDiffs": list(self._diffs)})
-        if r.get("error"):
-            return f"Error: {r['error']}"
-        response = r.get("response", "ok")
-        if isinstance(response, str) and response.startswith("Error:"):
-            return response
-        self._diffs.append(proposed)
-        return response if isinstance(response, str) else "ok"
 
     def _advance_phase(self, phase: str, summary: str | None = None) -> str:
         """Transition the root RLM pipeline to a new phase.
@@ -420,8 +342,8 @@ class Worker:
             "stderr": stderr,
             "final_answer": final,
             "answer_content": str(answer_content),
-            "edits": list(self._edits),
-            "diffs": list(self._diffs),
+            "edits": [],
+            "diffs": [],
             "raised": raised,
             "execution_time": time.perf_counter() - start,
         }

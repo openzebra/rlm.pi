@@ -12,7 +12,7 @@ import type { ChatMsg } from "../bridge/model.ts";
 import type { ProposedEdit } from "../sandbox/protocol.ts";
 
 /** Bump when a row shape changes such that the resume fold cannot replay older files. */
-export const STATE_SCHEMA_VERSION = 3;
+export const STATE_SCHEMA_VERSION = 4;
 
 export interface UsageRow {
   readonly costUsd: number;
@@ -27,17 +27,14 @@ export interface RunHeader {
   readonly runId: string;
   readonly ts: string;
   readonly rootPrompt: string;
-  readonly context: { readonly type: string; readonly chars: number; readonly json: boolean; readonly projectMap: boolean };
-  readonly workspaceRoot?: string;
+  readonly context: { readonly type: string; readonly chars: number; readonly json: boolean };
   readonly models: { readonly smart: string; readonly worker: string };
-  /** Snapshot of the replay-affecting config (maxIterations, orchestrator, editEnabled, fsTools, pipeline…). */
+  /** Snapshot of the replay-affecting config (maxIterations, orchestrator, pipeline…). */
   readonly meta: {
     readonly maxIterations: number;
     readonly maxDepth: number;
     readonly orchestrator: boolean;
-    readonly editEnabled: boolean;
-    readonly fsTools: boolean;
-    /** pipeline-enabled gate behaviour (always true from v3 on). */
+    /** pipeline-enabled gate behaviour (always true from v4 on). */
     readonly pipeline?: boolean;
   };
 }

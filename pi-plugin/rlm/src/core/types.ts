@@ -9,18 +9,6 @@ export interface Sampling {
   reasoning?: ThinkingLevel;
 }
 
-export interface FsLimits {
-  maxReadBytes: number;
-  maxOutputChars: number;
-  maxFindFiles: number;
-  maxManifestFiles: number;
-  commandTimeoutMs: number;
-  grepDefaultMaxMatches: number;
-  grepMaxMatchesCeiling: number;
-}
-
-export type EditRequestApprovalMode = "ask";
-
 export interface TelemetryConfig {
   /** Default: enabled iff a tracking URI resolves from config or MLFLOW_TRACKING_URI. */
   readonly enabled?: boolean;
@@ -74,20 +62,12 @@ export interface RlmConfig {
   compactionThresholdPct: number;
   /** Python executable used to launch the sandbox worker. */
   python: string;
-  /** Filesystem tool limits for read_file/grep/find/project-map generation. */
-  fsLimits: FsLimits;
   /** Worker startup wait before treating sandbox init as failed (ms). */
   sandboxInitTimeoutMs: number;
-  /** Enable RLM to propose unified diff edits for explicit approval and final application after the run. */
-  editEnabled: boolean;
   /** Allow ask_user_question() calls from the root REPL. */
   askUserQuestion: boolean;
   /** Allow todo() calls from the REPL. */
   todo: boolean;
-  /** Diff edit requests always ask before being recorded; old persisted values sanitize to ask. */
-  editRequestApproval: EditRequestApprovalMode;
-  /** SECURITY: allow first-class fs tools to read outside the workspace root. */
-  allowReadOutsideWorkspace: boolean;
   /** Sampling for the root smart model. */
   smartReasoning?: ThinkingLevel;
   /** Sampling for sub-LLM (worker) calls. */
@@ -114,10 +94,6 @@ export interface RlmInput {
   remainingBudgetUsd?: number;
   /** Remaining timeout for this subtree (set by parent from its LimitGuard). */
   remainingTimeoutMs?: number;
-  /** Workspace root exposed to sanctioned file-backed REPL tools. */
-  workspaceRoot?: string;
-  /** True when context was synthesized by buildProjectManifest. */
-  projectMap?: boolean;
   /** Depth-0 resume payload — controller rebuilds this from the trail's `reconstructRlmState()`. */
   readonly resume?: ReconstructResult & { readonly ok: true };
 }
