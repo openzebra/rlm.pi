@@ -214,6 +214,34 @@ export function serializeForSandbox(
   return bundle.files;
 }
 
+/** Maximum files shown in the compact LLM listing before truncation. */
+const MAX_LLM_LISTING_FILES = 200;
+
+/**
+ * Produces a compact human-readable text block for the parent LLM's context window.
+ * Shows file paths and token estimates — NOT full file contents (those are too large
+ * for the context window). The LLM uses its file-reading tools to inspect specific files.
+ */
+export function formatForLLM(bundle: ContextBundle): string {
+  const files = bundle.files.slice(0, MAX_LLM_LISTING_FILES);
+  const truncated = bundle.totalFiles > MAX_LLM_LISTING_FILES
+    ? `... and ${bundle.totalFiles - MAX_LLM_LISTING_FILES} more files (truncated)`
+    : "";
+
+  const listing = files.map((f) =>
+    `${f.path} (${f.tokens.toLocaleString()} tok, ${f.content.length.toLocaleString()} chars)`,
+  ).join("\n");
+
+  return [
+    `Repository context: ${bundle.totalFiles.toLocaleString()} files, ${bundle.totalTokens.toLocaleString()} estimated tokens, ${bundle.totalChars.toLocaleString()} total characters.`,
+    "",
+    listing,
+    truncated,
+    "",
+    "To read a file, use the file-reading tools with the exact path.",
+  ].join("\n");
+}
+
 export function patchCachedContext(
   cwd: string,
   edits: readonly { readonly path: string; readonly newContent: string }[],

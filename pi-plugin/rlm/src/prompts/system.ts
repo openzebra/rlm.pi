@@ -134,6 +134,17 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
   return parts.join("\n");
 }
 
+const NATIVE_INTRO = [
+  "[NATIVE RLM MODE] You are in native RLM mode. A persistent Python REPL with the full",
+  "repository context is available via the `repl` tool. Use your normal tools (read, grep,",
+  "search, bash) alongside the REPL to explore, analyze, and answer questions.",
+].join(" ");
+
+/** Build the native-mode system prompt addendum for the main Pi agent. */
+export function buildNativeSystemPrompt(): string {
+  return NATIVE_INTRO;
+}
+
 /** The one-line context metadata, also reused by the per-turn prompt in headless mode. */
 export function buildMetadataLine(meta: PromptMeta): string {
   const contextDesc = `Your context is a JSON array of ${meta.contextChars.toLocaleString()} total characters — list[dict] where each dict has keys "path" (str), "content" (str), and "tokens" (int). Use Python list slicing to chunk it into batches for sub-LLM delegation.`;
