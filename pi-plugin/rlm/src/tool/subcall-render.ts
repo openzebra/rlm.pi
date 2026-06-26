@@ -6,7 +6,7 @@
  * used by their renderResult() implementations.
  */
 
-import { Container, Spacer, Text, type Component } from "@earendil-works/pi-tui";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import type { RlmSubcall, SubcallStatus } from "./rlm-details.ts";
 import { formatCost, formatDuration, formatTokens, spinnerFrame } from "../ui/theme.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -68,7 +68,8 @@ export function renderCollapsedSubcallTree(
     const lines: string[] = [];
     const direct = byParent.get(parentId) ?? [];
     for (let i = 0; i < direct.length; i++) {
-      const sc = direct[i]!;
+      const sc = direct[i];
+      if (!sc) continue;
       const isLast = i === direct.length - 1;
       const branch = isLast ? "└─" : "├─";
       const gGlyph = subcallStatusGlyph(sc, theme);

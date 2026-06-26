@@ -117,14 +117,14 @@ const completedDetails: RlmDetails = {
   rootPrompt: params.prompt,
   turns: { current: 3, max: 30 },
   subcalls: [
-    { id: "s1", kind: "llm", label: "llm_query", model: "gpt-4o-mini", status: "done", args: "prompt: analyze the codebase structure", resultPreview: "The project uses React 18 with TypeScript and Recharts for charting.", startedAt: 1000, endedAt: 5000, costUsd: 0.0045, tokens: 2100 },
-    { id: "s2", kind: "tool", label: "read_file", status: "done", args: "src/App.tsx:1-50", resultPreview: "50 lines · 1.2k chars", startedAt: 5000, endedAt: 5100, costUsd: 0, tokens: 0 },
-    { id: "s3", kind: "tool", label: "read_file", status: "done", args: "src/components/Chart.tsx", resultPreview: "95 lines · 2.8k chars", startedAt: 5100, endedAt: 5200, costUsd: 0, tokens: 0 },
-    { id: "s4", kind: "tool", label: "grep", status: "done", args: "useState src/**/*.tsx (max 20)", resultPreview: "5 matches in 3 files", startedAt: 5200, endedAt: 5300, costUsd: 0, tokens: 0 },
-    { id: "s5", kind: "llm", label: "llm_query", model: "gpt-4o-mini", status: "done", args: "prompt: create the dashboard component", resultPreview: "I'll create the Dashboard component with the following structure...", startedAt: 10000, endedAt: 15000, costUsd: 0.0085, tokens: 3600 },
-    { id: "s6", kind: "tool", label: "write", status: "done", args: "src/components/Dashboard.tsx", resultPreview: "188 lines written", startedAt: 15000, endedAt: 15100, costUsd: 0, tokens: 0 },
-    { id: "s7", kind: "tool", label: "edit", status: "done", args: "src/App.tsx", resultPreview: "applied", startedAt: 15100, endedAt: 15200, costUsd: 0, tokens: 0 },
-    { id: "s8", kind: "rlm", label: "rlm_query", model: "gpt-4o-mini", status: "done", detail: "verify chart responsiveness", resultPreview: "The charts are responsive with proper viewport handling.", startedAt: 20000, endedAt: 45000, costUsd: 0.0150, tokens: 3200 },
+    { id: "s1", depth: 0, kind: "llm", label: "llm_query", model: "gpt-4o-mini", status: "done", args: "prompt: analyze the codebase structure", resultPreview: "The project uses React 18 with TypeScript and Recharts for charting.", startedAt: 1000, endedAt: 5000, costUsd: 0.0045, tokens: 2100 },
+    { id: "s2", depth: 0, kind: "tool", label: "read_file", status: "done", args: "src/App.tsx:1-50", resultPreview: "50 lines · 1.2k chars", startedAt: 5000, endedAt: 5100, costUsd: 0, tokens: 0 },
+    { id: "s3", depth: 0, kind: "tool", label: "read_file", status: "done", args: "src/components/Chart.tsx", resultPreview: "95 lines · 2.8k chars", startedAt: 5100, endedAt: 5200, costUsd: 0, tokens: 0 },
+    { id: "s4", depth: 0, kind: "tool", label: "grep", status: "done", args: "useState src/**/*.tsx (max 20)", resultPreview: "5 matches in 3 files", startedAt: 5200, endedAt: 5300, costUsd: 0, tokens: 0 },
+    { id: "s5", depth: 0, kind: "llm", label: "llm_query", model: "gpt-4o-mini", status: "done", args: "prompt: create the dashboard component", resultPreview: "I'll create the Dashboard component with the following structure...", startedAt: 10000, endedAt: 15000, costUsd: 0.0085, tokens: 3600 },
+    { id: "s6", depth: 0, kind: "tool", label: "write", status: "done", args: "src/components/Dashboard.tsx", resultPreview: "188 lines written", startedAt: 15000, endedAt: 15100, costUsd: 0, tokens: 0 },
+    { id: "s7", depth: 0, kind: "tool", label: "edit", status: "done", args: "src/App.tsx", resultPreview: "applied", startedAt: 15100, endedAt: 15200, costUsd: 0, tokens: 0 },
+    { id: "s8", depth: 0, kind: "rlm", label: "rlm_query", model: "gpt-4o-mini", status: "done", detail: "verify chart responsiveness", resultPreview: "The charts are responsive with proper viewport handling.", startedAt: 20000, endedAt: 45000, costUsd: 0.0150, tokens: 3200 },
   ],
   totals: { costUsd: 0.0423, tokens: 12300 },
   answer: "I've created the dashboard component with responsive charts and tables.\n\nThe component supports:\n- Auto-sizing charts via Recharts ResponsiveContainer\n- Dark/light theme support\n- Loading and error states\n- TypeScript props for chart configuration",
@@ -139,8 +139,8 @@ const runningDetails: RlmDetails = {
   rootPrompt: params.prompt,
   turns: { current: 1, max: 30 },
   subcalls: [
-    { id: "s1", kind: "llm", label: "llm_query", model: "gpt-4o-mini", status: "done", args: "prompt: analyze the codebase", startedAt: 1000, endedAt: 5000, costUsd: 0.0045, tokens: 2100 },
-    { id: "s2", kind: "tool", label: "read_file", status: "running", args: "src/App.tsx", startedAt: 5000, costUsd: 0, tokens: 0 },
+    { id: "s1", depth: 0, kind: "llm", label: "llm_query", model: "gpt-4o-mini", status: "done", args: "prompt: analyze the codebase", startedAt: 1000, endedAt: 5000, costUsd: 0.0045, tokens: 2100 },
+    { id: "s2", depth: 0, kind: "tool", label: "read_file", status: "running", args: "src/App.tsx", startedAt: 5000, costUsd: 0, tokens: 0 },
   ],
   totals: { costUsd: 0.0045, tokens: 2100 },
 };
@@ -150,7 +150,7 @@ const errorDetails: RlmDetails = {
   rootPrompt: params.prompt,
   turns: { current: 1, max: 30 },
   subcalls: [
-    { id: "s1", kind: "llm", label: "llm_query", model: "gpt-4o-mini", status: "error", detail: "rate limit exceeded", startedAt: 1000, endedAt: 2000, costUsd: 0, tokens: 0 },
+    { id: "s1", depth: 0, kind: "llm", label: "llm_query", model: "gpt-4o-mini", status: "error", detail: "rate limit exceeded", startedAt: 1000, endedAt: 2000, costUsd: 0, tokens: 0 },
   ],
   totals: { costUsd: 0, tokens: 0 },
 };
@@ -190,7 +190,7 @@ console.log("\n=== renderResult collapsed (done) ===");
 
   // Grouped subcalls
   // Subcalls display their label (e.g. "read_file", "grep") not the generic kind ("tool").
-  check("collapsed groups read_file calls", text.includes("read_file") && text.includes("×2"));
+  check("collapsed shows both read_file calls", text.includes("read_file") && (text.match(/read_file/g) || []).length >= 2);
   check("collapsed shows grep", text.includes("grep"));
   check("collapsed shows edit label", text.includes("edit"));
   check("collapsed shows write label", text.includes("write"));

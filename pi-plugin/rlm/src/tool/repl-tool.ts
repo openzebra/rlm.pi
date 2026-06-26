@@ -29,8 +29,8 @@ import { SandboxManager } from "../sandbox/sandbox-manager.ts";
 import type { SubLlmHandlers } from "../sandbox/sandbox.ts";
 import type { ReplResult } from "../sandbox/protocol.ts";
 import { RlmEmitter } from "./rlm-events.ts";
+import { SubcallStore } from "./subcall-store.ts";
 import type { ReplDetails } from "./repl-details.ts";
-import type { RlmSubcall } from "./rlm-details.ts";
 import { createEngine } from "../core/engine.ts";
 import { formatCost, formatTokens, spinnerFrame } from "../ui/theme.ts";
 import {
@@ -165,30 +165,6 @@ class NativeBridgeState {
   }): Pick<SubLlmHandlers, "rlmQuery" | "rlmQueryBatched"> {
     const state = this;
 
-    // Separate emitter for the recursion sub-tree — child engines emit here,
-    // and the parent's per-invocation emitter gets subcall events forwarded.
-    const engineEmitter = new RlmEmitter();
-
-    // Create the headless engine once; reuse across all rlm_query calls.
-    // Each invocation swaps fresh limits/budget via remainingBudget/remainingTimeout.
-    const runRlm = createEngine({
-      smartModel: deps.smartModel,
-      workerModel: deps.workerModel,
-      registry: deps.registry,
-      config: deps.config,
-      signal: deps.signal,
-      emitter: engineEmitter,
-      // Cast: ReplToolDeps.onUsage is role:"sub" but EngineDeps accepts role:"root"|"sub".
-      // Child engines always report as "sub" at this level — safe to widen.
-      onUsage: deps.onUsage as ((usage: Usage, role: "root" | "sub") => void) | undefined,
-      limits: {
-        maxBudgetUsd: deps.config.maxBudgetUsd,
-        maxTimeoutMs: deps.config.maxTimeoutMs,
-        maxTokens: deps.config.maxTokens,
-        maxErrors: deps.config.maxErrors,
-      },
-    });
-
     async function rlmQueryImpl(prompt: string, model: string | null, depth: number): Promise<string> {
       const emitter = state.currentEmitter;
       const limits = state.currentLimits;
@@ -196,7 +172,7 @@ class NativeBridgeState {
 
       const childDepth = state.currentDepth + 1;
 
-      // Depth cap: degrade to a one-shot llm_query (same as headless engine recursion).
+      // Depth cap: degrade to a one-shot llm_query.
       if (childDepth >= deps.config.maxDepth) {
         return deps.llmHandlers.llmQuery(prompt, model, depth);
       }
@@ -213,6 +189,25 @@ class NativeBridgeState {
         depth: childDepth,
       });
 
+      // Per-call engine creation with the visible emitter — child llm_query subcalls,
+      // turn progress, and cost deltas land on the per-invocation emitter, visible to
+      // SubcallStore and the live visual tree.
+      const runRlm = createEngine({
+        smartModel: deps.smartModel,
+        workerModel: deps.workerModel,
+        registry: deps.registry,
+        config: deps.config,
+        signal: deps.signal,
+        emitter: emitter,
+        onUsage: deps.onUsage as ((usage: Usage, role: "root" | "sub") => void) | undefined,
+        limits: {
+          maxBudgetUsd: deps.config.maxBudgetUsd,
+          maxTimeoutMs: deps.config.maxTimeoutMs,
+          maxTokens: deps.config.maxTokens,
+          maxErrors: deps.config.maxErrors,
+        },
+      });
+
       try {
         const res = await runRlm({
           rootPrompt: "",
@@ -224,14 +219,15 @@ class NativeBridgeState {
           remainingTimeoutMs: remTimeout,
         });
 
-        // Debit the parent limit guard for the entire child run.
+        // Debit parent limit guard for the entire child run.
         limits.addRaw(res.costUsd, res.inputTokens, res.outputTokens);
 
+        // Child engine emits live usage deltas via the shared emitter — SubcallStore
+        // accumulates them. No final aggregate costUsd/tokens to prevent double-counting
+        // (matches canonical rlm-query.ts:60-63).
         emitter.emitSubcallUpdated({
           id: subId,
           status: "done",
-          costUsd: res.costUsd,
-          tokens: res.inputTokens + res.outputTokens,
           resultPreview: res.answer.slice(0, 200),
         });
 
@@ -248,43 +244,6 @@ class NativeBridgeState {
       rlmQueryBatched: (prompts, model, depth) =>
         mapPool([...prompts], deps.config.maxConcurrentSubcalls, (p) => rlmQueryImpl(p, model, depth)),
     };
-  }
-}
-
-// ── Sub-call collector ──
-
-/** Collects sub-call state from RlmEmitter events for a single repl() invocation. */
-class SubcallCollector {
-  readonly subcalls: RlmSubcall[] = [];
-  totals = { costUsd: 0, tokens: 0 };
-  capturedStdout = "";
-  capturedStderr = "";
-  startedAt = Date.now();
-  finished = false;
-  private readonly unsubs: (() => void)[];
-
-  constructor(emitter: RlmEmitter) {
-    this.unsubs = [
-      emitter.onSubcallCreated((e) => {
-        this.subcalls.push({ id: e.id, parentId: e.parentId, kind: e.kind, label: e.label,
-          model: e.model, status: "running", detail: e.detail, args: e.args,
-          startedAt: Date.now(), costUsd: 0, tokens: 0 });
-      }),
-      emitter.onSubcallUpdated((e) => {
-        const sc = this.subcalls.find((s) => s.id === e.id);
-        if (!sc) return;
-        if (e.status !== undefined) { sc.status = e.status; if (e.status !== "running") sc.endedAt = Date.now(); }
-        if (e.detail !== undefined) sc.detail = e.detail;
-        if (e.args !== undefined) sc.args = e.args;
-        if (e.resultPreview !== undefined) sc.resultPreview = e.resultPreview;
-        if (e.costUsd !== undefined) { sc.costUsd = (sc.costUsd ?? 0) + e.costUsd; this.totals.costUsd += e.costUsd; }
-        if (e.tokens !== undefined) { sc.tokens = (sc.tokens ?? 0) + e.tokens; this.totals.tokens += e.tokens; }
-      }),
-    ];
-  }
-
-  dispose(): void {
-    for (const unsub of this.unsubs) unsub();
   }
 }
 
@@ -343,7 +302,11 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       const params = rawParams;
 
       const emitter = new RlmEmitter();
-      const collector = new SubcallCollector(emitter);
+      const store = new SubcallStore(emitter);
+      let capturedStdout = "";
+      let capturedStderr = "";
+      let finished = false;
+      const startedAt = Date.now();
       const limits = new LimitGuard({
         maxBudgetUsd: config.maxBudgetUsd,
         maxTimeoutMs: config.maxTimeoutMs,
@@ -355,23 +318,23 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       let spinnerHandle: ReturnType<typeof setInterval> | undefined;
       const notify = (overrideStatus?: ReplDetails["status"]) => {
         if (!onUpdate) return;
-        const output = collector.capturedStdout ?? "";
+        const output = capturedStdout ?? "";
         onUpdate({
           content: [{ type: "text", text: output.slice(0, 500) || (overrideStatus === "running" ? `${spinnerFrame()} Running…` : "(no output)") }],
           details: {
             status: overrideStatus ?? "running",
             output,
-            stderr: collector.capturedStderr ?? "",
-            executionTimeMs: Date.now() - collector.startedAt,
-            subcalls: [...collector.subcalls],
-            totals: { ...collector.totals },
+            stderr: capturedStderr ?? "",
+            executionTimeMs: Date.now() - startedAt,
+            subcalls: store.getSubcalls(),
+            totals: store.getTotals(),
           },
         });
       };
       if (onUpdate) {
         notify("running");
         spinnerHandle = setInterval(() => {
-          if (collector.finished) { clearInterval(spinnerHandle); spinnerHandle = undefined; return; }
+          if (finished) { clearInterval(spinnerHandle); spinnerHandle = undefined; return; }
           notify("running");
         }, 100);
       }
@@ -387,9 +350,6 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       }
 
       try {
-        // Wire per-invocation mutable state for sandbox handlers
-        bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
-
         // Build interactive handlers (session-stable callbacks)
         const interactive = createPiInteractiveDeps(ctx);
         const interactiveHandlers = buildInteractiveHandlers({
@@ -418,15 +378,21 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         }
 
         const start = Date.now();
-        const result: ReplResult = await sandboxManager.exec(params.code);
+        const result: ReplResult = await sandboxManager.execWithSetup(params.code, () => {
+          // Wire per-invocation mutable state only after the serialized exec slot
+          // is active. Swapping earlier would let queued repl() calls overwrite
+          // emitter/limits for the currently running REPL execution.
+          bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
+        });
         const elapsed = Date.now() - start;
-        collector.capturedStdout = result.stdout;
-        collector.capturedStderr = result.stderr;
-        collector.finished = true;
+        capturedStdout = result.stdout;
+        capturedStderr = result.stderr;
+        finished = true;
 
+        const totals = store.getTotals();
         const subUsage: Usage = {
-          input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: collector.totals.tokens,
-          cost: { total: collector.totals.costUsd, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: totals.tokens,
+          cost: { total: totals.costUsd, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         };
         onUsage?.(subUsage, "sub");
 
@@ -437,22 +403,22 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           output: result.stdout,
           stderr: result.stderr,
           executionTimeMs: elapsed,
-          subcalls: collector.subcalls,
-          totals: collector.totals,
+          subcalls: store.getSubcalls(),
+          totals: store.getTotals(),
         };
         // Final progressive update
         onUpdate?.({ content: [{ type: "text", text: result.stdout.slice(0, 500) || "(no output)" }], details });
         return { content: [{ type: "text", text: result.stdout || result.answerContent || "(no output)" }], details };
       } catch (e) {
-        collector.finished = true;
+        finished = true;
         const msg = e instanceof Error ? e.message : String(e);
         const details: ReplDetails = {
           status: "error",
           output: "",
           stderr: msg,
           executionTimeMs: 0,
-          subcalls: collector.subcalls,
-          totals: collector.totals,
+          subcalls: store.getSubcalls(),
+          totals: store.getTotals(),
         };
         onUpdate?.({ content: [{ type: "text", text: `REPL error: ${msg}` }], details });
         return {
@@ -461,7 +427,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         };
       } finally {
         if (spinnerHandle) clearInterval(spinnerHandle);
-        collector.dispose();
+        store.dispose();
         emitter.shutdown();
       }
     },

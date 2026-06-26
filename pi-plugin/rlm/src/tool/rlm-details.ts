@@ -16,6 +16,8 @@ export interface RlmSubcall {
   id: string;
   /** Parent subcall ID for recursive grouping (undefined = direct child of root). */
   parentId?: string;
+  /** Recursion depth (0 = root tool call). */
+  depth: number;
   kind: SubcallKind;
   label: string;
   model?: string;
