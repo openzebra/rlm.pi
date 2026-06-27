@@ -2,12 +2,15 @@
 
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import type { AskAnswer, AskQuestion, ProposedDiffEdit, ProposedEdit } from "../sandbox/protocol.ts";
+import type { ReconstructResult } from "../state/resume.ts";
 
 export interface Sampling {
-  maxTokens?: number;
-  temperature?: number;
-  reasoning?: ThinkingLevel;
+  readonly maxTokens?: number;
+  readonly temperature?: number;
+  readonly reasoning?: ThinkingLevel;
 }
+
+type MutableSampling = { -readonly [Key in keyof Sampling]?: Sampling[Key] };
 
 export interface TelemetryConfig {
   /** Default: enabled iff a tracking URI resolves from config or MLFLOW_TRACKING_URI. */
@@ -17,8 +20,6 @@ export interface TelemetryConfig {
   /** Bearer token is env-only via MLFLOW_TRACKING_TOKEN; never persisted in rlm.json. */
   readonly maxQueueSize?: number;
 }
-
-import type { ReconstructResult } from "../state/resume.ts";
 
 export interface RunLogConfig {
   /** Default: true — always-on, opt-out. */
@@ -71,7 +72,7 @@ export interface RlmConfig {
   /** Sampling for the root smart model. */
   smartReasoning?: ThinkingLevel;
   /** Sampling for sub-LLM (worker) calls. */
-  subSampling: Sampling;
+  subSampling: MutableSampling;
   /** Optional MLflow telemetry export configuration. Omitted by default. */
   readonly telemetry?: TelemetryConfig;
   /** Optional run-state persistence configuration. Enabled by default. */
@@ -81,42 +82,42 @@ export interface RlmConfig {
 /** Input to a (headless) RLM run. */
 export interface RlmInput {
   /** The question for the root model (folded into the metadata prompt). */
-  rootPrompt: string;
+  readonly rootPrompt: string;
   /** The (possibly huge) context loaded into the sandbox REPL. */
-  context: unknown;
+  readonly context: unknown;
   /** Recursion depth; 0 = top-level root. */
-  depth: number;
+  readonly depth: number;
   /** AgentTree node to attach this run's node under (set when recursing). */
-  parentNodeId?: string;
+  readonly parentNodeId?: string;
   /** "provider/id" — overrides deps.smartModel for this run (set by recursive rlm_query). */
-  smartModelOverride?: string;
+  readonly smartModelOverride?: string;
   /** Remaining budget for this subtree (set by parent from its LimitGuard). */
-  remainingBudgetUsd?: number;
+  readonly remainingBudgetUsd?: number;
   /** Remaining timeout for this subtree (set by parent from its LimitGuard). */
-  remainingTimeoutMs?: number;
+  readonly remainingTimeoutMs?: number;
   /** Depth-0 resume payload — controller rebuilds this from the trail's `reconstructRlmState()`. */
   readonly resume?: ReconstructResult & { readonly ok: true };
 }
 
 /** Result of a completed RLM run. */
 export interface RlmResult {
-  answer: string;
+  readonly answer: string;
   /** Legacy anchor edits retained for compatibility while older run-state rows exist. */
-  edits?: ProposedEdit[];
-  diffs?: ProposedDiffEdit[];
-  iterations: number;
-  costUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  durationMs: number;
+  readonly edits?: readonly ProposedEdit[];
+  readonly diffs?: readonly ProposedDiffEdit[];
+  readonly iterations: number;
+  readonly costUsd: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly durationMs: number;
 }
 
 /** A function that runs an RLM to completion — used to wire recursion (rlm_query). */
 export interface InteractiveDeps {
   /** Called when the sandbox issues ask_user_question; undefined = feature disabled. */
-  onAskUserQuestion?: (questions: readonly AskQuestion[]) => Promise<AskAnswer[]>;
+  readonly onAskUserQuestion?: (questions: readonly AskQuestion[]) => Promise<AskAnswer[]>;
   /** Called when the sandbox issues todo; undefined = feature disabled. */
-  onTodo?: (action: string, params: Record<string, unknown>) => Promise<string>;
+  readonly onTodo?: (action: string, params: Record<string, unknown>) => Promise<string>;
 }
 
 export type RunRlm = (input: RlmInput) => Promise<RlmResult>;

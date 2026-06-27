@@ -5,26 +5,27 @@
  * accumulates RlmSubcall[] state with O(1) running totals. Used by both
  * RlmEventAggregator (rlm tool) and repl() tool to eliminate duplicated
  * subcall accumulation logic.
- *
- * Follows the same subscribe→accumulate→getters→dispose pattern as
- * RlmEventAggregator and the original SubcallCollector.
  */
 import type { RlmEmitter, SubcallCreatedEvent, SubcallUpdatedEvent } from "./rlm-events.ts";
-import type { RlmSubcall } from "./rlm-details.ts";
+import type { RlmSubcall, SubcallStatus } from "./rlm-details.ts";
+import { EmitterListener } from "./emitter-listener.ts";
 
-export class SubcallStore {
-  private readonly subcalls = new Map<string, RlmSubcall>();
+type MutableSubcall = {
+  -readonly [Key in keyof RlmSubcall]: RlmSubcall[Key];
+};
+
+export class SubcallStore extends EmitterListener {
+  private readonly subcalls = new Map<string, MutableSubcall>();
 
   private totalCostUsd = 0;
   private totalTokens = 0;
 
-  private readonly unsubs: (() => void)[];
-
   constructor(emitter: RlmEmitter, private readonly onChange?: () => void) {
-    this.unsubs = [
+    super();
+    this.trackAll([
       emitter.onSubcallCreated((e) => { this.handleSubcallCreated(e); this.onChange?.(); }),
       emitter.onSubcallUpdated((e) => { this.handleSubcallUpdated(e); this.onChange?.(); }),
-    ];
+    ]);
   }
 
   // ── Event handlers ──
@@ -71,11 +72,11 @@ export class SubcallStore {
 
   /** Snapshot subcall array. Allocates a new array from Map values. */
   getSubcalls(): RlmSubcall[] {
-    return [...this.subcalls.values()];
+    return Array.from(this.subcalls.values(), (subcall) => Object.freeze({ ...subcall, status: subcall.status as SubcallStatus }));
   }
 
   /** Snapshot running totals. O(1). */
-  getTotals(): { costUsd: number; tokens: number } {
+  getTotals(): { readonly costUsd: number; readonly tokens: number } {
     return { costUsd: this.totalCostUsd, tokens: this.totalTokens };
   }
 
@@ -85,12 +86,5 @@ export class SubcallStore {
   addRootUsage(costUsd: number, tokens: number): void {
     this.totalCostUsd += costUsd;
     this.totalTokens += tokens;
-  }
-
-  // ── Lifecycle ──
-
-  /** Detach all emitter listeners. Call after the run completes. */
-  dispose(): void {
-    for (const unsub of this.unsubs) unsub();
   }
 }

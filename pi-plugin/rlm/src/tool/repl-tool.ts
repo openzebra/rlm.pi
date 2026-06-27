@@ -12,18 +12,18 @@
  */
 
 import { Type } from "typebox";
-import { Value } from "typebox/value";
 import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import type { Model, Usage, Api } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { resolveModelId } from "../config/settings.ts";
+import { modelRef, resolveModelId } from "../config/settings.ts";
 import { buildInteractiveHandlers } from "../bridge/interactive.ts";
 import { createPiInteractiveDeps } from "../bridge/pi-interactive.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { previewText } from "../text/preview.ts";
 import { mapPool } from "../util/concurrency.ts";
 import { LimitGuard } from "../core/limits.ts";
+import { checkResourceLimits } from "../core/resource-limits.ts";
 import type { RlmConfig, Sampling } from "../core/types.ts";
 import { SandboxManager } from "../sandbox/sandbox-manager.ts";
 import type { SubLlmHandlers } from "../sandbox/sandbox.ts";
@@ -33,17 +33,19 @@ import { SubcallStore } from "./subcall-store.ts";
 import type { ReplDetails } from "./repl-details.ts";
 import { createEngine } from "../core/engine.ts";
 import { formatCost, formatTokens, spinnerFrame } from "../ui/theme.ts";
+import { errorMessage, formatError, isErrorText } from "../util/errors.ts";
 import {
   headlineStatusGlyph,
   renderCollapsedSubcallTree,
   renderExpandedSubcallTree,
 } from "./subcall-render.ts";
+import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 
 // ── Parameter schema ──
 
-export const ReplToolParams = Type.Object({
+export const ReplToolParams = Object.freeze(Type.Object({
   code: Type.String({ description: "Python code to execute in the persistent REPL sandbox" }),
-});
+}));
 
 // ── Mutable bridge state (handler indirection) ──
 
@@ -68,6 +70,7 @@ class NativeBridgeState {
 
   buildLlmHandlers(deps: {
     workerModel: Model<Api>;
+    getWorkerModel?: () => Model<Api> | undefined;
     registry: ModelRegistry;
     maxPromptChars: number;
     maxConcurrent: number;
@@ -76,16 +79,20 @@ class NativeBridgeState {
   }): Pick<SubLlmHandlers, "llmQuery" | "llmQueryBatched"> {
     const state = this;
 
+    const workerModel = (): Model<Api> => deps.getWorkerModel?.() ?? deps.workerModel;
+    const displayModel = (model: string | null): string =>
+      modelRef(model ? (resolveModelId(deps.registry, model) ?? workerModel()) : workerModel()) ?? workerModel().id;
+
     async function complete1(prompt: string, model: string | null, track: (u: Usage) => void): Promise<string> {
       if (prompt.length > deps.maxPromptChars) {
-        return `Error: sub-LLM prompt exceeded size limit (${prompt.length.toLocaleString()} chars > ${deps.maxPromptChars.toLocaleString()})`;
+        return formatError(`sub-LLM prompt exceeded size limit (${prompt.length.toLocaleString()} chars > ${deps.maxPromptChars.toLocaleString()})`);
       }
       const resolved = model ? resolveModelId(deps.registry, model) : undefined;
-      if (model && !resolved) return `Error: unknown model override '${model}'`;
+      if (model && !resolved) return formatError(`unknown model override '${model}'`);
       try {
         const messages: ChatMsg[] = [{ role: "user", content: prompt }];
         const res = await modelComplete(messages, {
-          model: resolved ?? deps.workerModel,
+          model: resolved ?? workerModel(),
           registry: deps.registry,
           maxTokens: deps.sampling?.maxTokens,
           temperature: deps.sampling?.temperature,
@@ -95,11 +102,11 @@ class NativeBridgeState {
         track(res.usage);
         return res.text;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         const hint = /credit|402|payment|quota|rate.limit/i.test(msg)
           ? " — try smaller batches or individual llm_query calls"
           : "";
-        return `Error: ${msg}${hint}`;
+        return formatError(`${msg}${hint}`);
       }
     }
 
@@ -107,15 +114,15 @@ class NativeBridgeState {
       async llmQuery(prompt, model, _depth) {
         const id = state.currentEmitter?.emitSubcallCreated({
           kind: "llm", parentId: state.currentParentId, label: "llm_query",
-          model: deps.workerModel.id, args: `prompt: ${previewText(prompt)}`,
+          model: displayModel(model), args: `prompt: ${previewText(prompt)}`,
           depth: state.currentDepth,
         });
         let cost = 0; let tokens = 0;
         const out = await complete1(prompt, model, (u) => { cost += u.cost.total; tokens += u.totalTokens; });
         if (id) state.currentEmitter?.emitSubcallUpdated({ id,
-          status: out.startsWith("Error:") ? "error" : "done",
+          status: isErrorText(out) ? "error" : "done",
           costUsd: cost, tokens, resultPreview: previewText(out),
-          detail: out.startsWith("Error:") ? out : undefined,
+          detail: isErrorText(out) ? out : undefined,
         });
         state.currentLimits?.addRaw(cost, 0, tokens);
         return out;
@@ -124,14 +131,14 @@ class NativeBridgeState {
       async llmQueryBatched(prompts: readonly string[], model, _depth): Promise<string[]> {
         const id = state.currentEmitter?.emitSubcallCreated({
           kind: "batch", parentId: state.currentParentId, label: `llm_query ×${prompts.length}`,
-          model: deps.workerModel.id, args: `prompt: ${previewText(prompts[0] ?? "")}`,
+          model: displayModel(model), args: `prompt: ${previewText(prompts[0] ?? "")}`,
           depth: state.currentDepth,
         });
         let cost = 0; let tokens = 0;
-        const out: string[] = await mapPool([...prompts], deps.maxConcurrent, (p) =>
+        const out: string[] = await mapPool(prompts, deps.maxConcurrent, (p) =>
           complete1(p, model, (u) => { cost += u.cost.total; tokens += u.totalTokens; }),
         );
-        const failed = out.filter((o: string) => o.startsWith("Error:")).length;
+        const failed = out.filter(isErrorText).length;
         const allFailed = failed === out.length;
         const error = allFailed
           ? `all ${out.length} sub-calls failed — reduce batch size or try llm_query individually`
@@ -157,6 +164,8 @@ class NativeBridgeState {
   buildRlmHandlers(deps: {
     smartModel: Model<Api>;
     workerModel: Model<Api>;
+    getSmartModel?: () => Model<Api> | undefined;
+    getWorkerModel?: () => Model<Api> | undefined;
     registry: ModelRegistry;
     config: RlmConfig;
     signal?: AbortSignal;
@@ -168,7 +177,7 @@ class NativeBridgeState {
     async function rlmQueryImpl(prompt: string, model: string | null, depth: number): Promise<string> {
       const emitter = state.currentEmitter;
       const limits = state.currentLimits;
-      if (!emitter || !limits) return "Error: RLM bridge not wired for this invocation";
+      if (!emitter || !limits) return formatError("RLM bridge not wired for this invocation");
 
       const childDepth = state.currentDepth + 1;
 
@@ -179,12 +188,15 @@ class NativeBridgeState {
 
       const remBudget = limits.remainingBudgetUsd();
       const remTimeout = limits.remainingTimeoutMs();
-      if (remBudget !== undefined && remBudget <= 0) return "Error: budget exhausted";
-      if (remTimeout !== undefined && remTimeout <= 0) return "Error: timeout exhausted";
+      const limitError = checkResourceLimits({ budgetUsd: remBudget, timeoutMs: remTimeout });
+      if (limitError) return limitError;
 
+      const smartModel = deps.getSmartModel?.() ?? deps.smartModel;
+      const workerModel = deps.getWorkerModel?.() ?? deps.workerModel;
+      const resolvedOverride = model ? resolveModelId(deps.registry, model) : undefined;
       const subId = emitter.emitSubcallCreated({
         kind: "rlm", parentId: state.currentParentId, label: "rlm_query",
-        model: model ?? deps.smartModel.id,
+        model: model ? (modelRef(resolvedOverride) ?? `unknown/${model}`) : (modelRef(smartModel) ?? smartModel.id),
         detail: prompt.slice(0, 60),
         depth: childDepth,
       });
@@ -193,8 +205,8 @@ class NativeBridgeState {
       // turn progress, and cost deltas land on the per-invocation emitter, visible to
       // SubcallStore and the live visual tree.
       const runRlm = createEngine({
-        smartModel: deps.smartModel,
-        workerModel: deps.workerModel,
+        smartModel,
+        workerModel,
         registry: deps.registry,
         config: deps.config,
         signal: deps.signal,
@@ -233,16 +245,16 @@ class NativeBridgeState {
 
         return res.answer;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         emitter.emitSubcallUpdated({ id: subId, status: "error", detail: msg });
-        return `Error: child RLM failed - ${msg}`;
+        return formatError(`child RLM failed - ${msg}`);
       }
     }
 
     return {
       rlmQuery: rlmQueryImpl,
       rlmQueryBatched: (prompts, model, depth) =>
-        mapPool([...prompts], deps.config.maxConcurrentSubcalls, (p) => rlmQueryImpl(p, model, depth)),
+        mapPool(prompts, deps.config.maxConcurrentSubcalls, (p) => rlmQueryImpl(p, model, depth)),
     };
   }
 }
@@ -250,13 +262,15 @@ class NativeBridgeState {
 // ── Tool factory ──
 
 export interface ReplToolDeps {
-  sandboxManager: SandboxManager;
-  smartModel: Model<Api>;
-  workerModel: Model<Api>;
-  registry: ModelRegistry;
-  config: RlmConfig;
-  signal?: AbortSignal;
-  onUsage?: (usage: Usage, role: "sub") => void;
+  readonly sandboxManager: SandboxManager;
+  readonly smartModel: Model<Api>;
+  readonly workerModel: Model<Api>;
+  readonly getSmartModel?: () => Model<Api> | undefined;
+  readonly getWorkerModel?: () => Model<Api> | undefined;
+  readonly registry: ModelRegistry;
+  readonly config: RlmConfig;
+  readonly signal?: AbortSignal;
+  readonly onUsage?: (usage: Usage, role: "sub") => void;
 }
 
 export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplToolParams, ReplDetails> {
@@ -265,7 +279,9 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
 
   // Build handlers once — llm/rlm use mutable refs, interactive is session-stable
   const llmHandlers = bridgeState.buildLlmHandlers({
-    workerModel, registry,
+    workerModel,
+    getWorkerModel: deps.getWorkerModel,
+    registry,
     maxPromptChars: config.maxPromptChars,
     maxConcurrent: config.maxConcurrentSubcalls,
     sampling: config.subSampling,
@@ -277,6 +293,8 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
   const rlmHandlers = bridgeState.buildRlmHandlers({
     smartModel: deps.smartModel,
     workerModel,
+    getSmartModel: deps.getSmartModel,
+    getWorkerModel: deps.getWorkerModel,
     registry,
     config,
     signal,
@@ -291,21 +309,22 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     parameters: ReplToolParams,
 
     async execute(_toolCallId, rawParams, _execSignal, onUpdate, ctx) {
-      if (!Value.Check(ReplToolParams, rawParams)) {
-        const errors = [...Value.Errors(ReplToolParams, rawParams)]
-          .map((e) => `${e.instancePath}: ${e.message}`).join("; ");
-        return {
-          content: [{ type: "text", text: `Invalid REPL parameters: ${errors}` }],
-          details: { status: "error", output: "", stderr: errors, executionTimeMs: 0, subcalls: [], totals: { costUsd: 0, tokens: 0 } },
-        };
-      }
-      const params = rawParams;
+      const validation = validateToolParams(ReplToolParams, rawParams, "REPL", (errors): ReplDetails => ({
+        status: "error",
+        output: "",
+        stderr: errors,
+        executionTimeMs: 0,
+        subcalls: [],
+        totals: { costUsd: 0, tokens: 0 },
+      }));
+      if (!validation.ok) return validation.error;
+      const params = validation.value;
 
       const emitter = new RlmEmitter();
       const store = new SubcallStore(emitter);
       let capturedStdout = "";
       let capturedStderr = "";
-      let finished = false;
+      let progressStatus: ReplDetails["status"] = "running";
       const startedAt = Date.now();
       const limits = new LimitGuard({
         maxBudgetUsd: config.maxBudgetUsd,
@@ -315,29 +334,20 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       });
 
       // ── Progressive rendering: spinner + live sub-call tree ──
-      let spinnerHandle: ReturnType<typeof setInterval> | undefined;
-      const notify = (overrideStatus?: ReplDetails["status"]) => {
-        if (!onUpdate) return;
-        const output = capturedStdout ?? "";
-        onUpdate({
-          content: [{ type: "text", text: output.slice(0, 500) || (overrideStatus === "running" ? `${spinnerFrame()} Running…` : "(no output)") }],
-          details: {
-            status: overrideStatus ?? "running",
-            output,
-            stderr: capturedStderr ?? "",
-            executionTimeMs: Date.now() - startedAt,
-            subcalls: store.getSubcalls(),
-            totals: store.getTotals(),
-          },
-        });
-      };
-      if (onUpdate) {
-        notify("running");
-        spinnerHandle = setInterval(() => {
-          if (finished) { clearInterval(spinnerHandle); spinnerHandle = undefined; return; }
-          notify("running");
-        }, 100);
-      }
+      const progress = createProgressNotifier<ReplDetails>({
+        onUpdate,
+        getDetails: () => ({
+          status: progressStatus,
+          output: capturedStdout,
+          stderr: capturedStderr,
+          executionTimeMs: Date.now() - startedAt,
+          subcalls: store.getSubcalls(),
+          totals: store.getTotals(),
+        }),
+        isRunning: (details) => details.status === "running",
+        renderText: (details) => details.output.slice(0, 500) || (details.status === "running" ? `${spinnerFrame()} Running…` : "(no output)"),
+      });
+      progress.start();
 
       // Detect queue contention: notify if another repl() is already executing
       let queuedId: string | undefined;
@@ -387,7 +397,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         const elapsed = Date.now() - start;
         capturedStdout = result.stdout;
         capturedStderr = result.stderr;
-        finished = true;
+        progressStatus = "done";
 
         const totals = store.getTotals();
         const subUsage: Usage = {
@@ -410,8 +420,8 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         onUpdate?.({ content: [{ type: "text", text: result.stdout.slice(0, 500) || "(no output)" }], details });
         return { content: [{ type: "text", text: result.stdout || result.answerContent || "(no output)" }], details };
       } catch (e) {
-        finished = true;
-        const msg = e instanceof Error ? e.message : String(e);
+        progressStatus = "error";
+        const msg = errorMessage(e);
         const details: ReplDetails = {
           status: "error",
           output: "",
@@ -426,7 +436,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           details,
         };
       } finally {
-        if (spinnerHandle) clearInterval(spinnerHandle);
+        progress.stop();
         store.dispose();
         emitter.shutdown();
       }

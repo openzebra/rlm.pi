@@ -1,13 +1,13 @@
 import type { InputSource } from "@earendil-works/pi-coding-agent";
 
 export interface InputRouteState {
-  enabled: boolean;
-  busy: boolean;
+  readonly enabled: boolean;
+  readonly busy: boolean;
 }
 
 export interface InputRouteEvent {
-  source: InputSource;
-  text: string;
+  readonly source: InputSource;
+  readonly text: string;
 }
 
 export type InputRouteDecision = "continue" | "route" | "busy";

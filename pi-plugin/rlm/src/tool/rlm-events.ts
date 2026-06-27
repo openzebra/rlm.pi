@@ -58,7 +58,7 @@ export interface AnswerEvent {
 }
 
 export interface EditsEvent {
-  readonly edits: ProposedEdit[];
+  readonly edits: readonly ProposedEdit[];
 }
 
 export interface StatusEvent {
@@ -113,7 +113,7 @@ export class RlmEmitter {
   }
 
   /** Set proposed edits (root-only). */
-  emitEdits(edits: ProposedEdit[]): void {
+  emitEdits(edits: readonly ProposedEdit[]): void {
     this.ee.emit("edits", { edits } satisfies EditsEvent);
   }
 

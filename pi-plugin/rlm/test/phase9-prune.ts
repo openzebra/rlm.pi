@@ -11,6 +11,7 @@
  * - warn() prefix and formatting (G5)
  */
 
+import { check, failureCount } from "./helpers.ts";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,13 +19,9 @@ import { appendRow, generateRunId, pruneRuns, runDir } from "../src/state/index.
 import { STATE_SCHEMA_VERSION } from "../src/state/rows.ts";
 import type { RunHeader } from "../src/state/rows.ts";
 import { appendUserMessage } from "../src/core/history.ts";
+import type { ChatMsg } from "../src/bridge/model.ts";
 import { errorMessage, warn } from "../src/state/internal.ts";
 
-let failures = 0;
-function check(name: string, cond: boolean, extra = ""): void {
-  console.log(`${cond ? "✓" : "✗"} ${name}${extra ? `  — ${extra}` : ""}`);
-  if (!cond) failures++;
-}
 
 async function main(): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), "rlm-phase9-prune-"));
@@ -44,13 +41,13 @@ async function main(): Promise<void> {
         models: { smart: "a", worker: "b" },
         meta: { maxIterations: 30, maxDepth: 2, orchestrator: true },
       };
-      appendRow(cwd, dir, id, header);
+      await appendRow(cwd, dir, id, header);
     }
     check("5 runs created", true);
 
     // Prune to maxRuns=2
-    pruneRuns(cwd, dir, 2);
-    const { readdirSync, existsSync } = require("node:fs");
+    await pruneRuns(cwd, dir, 2);
+    const { readdirSync, existsSync } = await import("node:fs");
     const remaining = readdirSync(join(cwd, dir)).length;
     check("pruneRuns: maxRuns=2 respected", remaining === 2, `remaining: ${remaining}`);
 
@@ -62,29 +59,31 @@ async function main(): Promise<void> {
     // Edge case: empty directory
     const emptyDir = join(tmp, "empty-runs");
     mkdirSync(emptyDir, { recursive: true });
-    pruneRuns(emptyDir, ".rlm/runs", 50); // should not throw
+    await pruneRuns(emptyDir, ".rlm/runs", 50); // should not throw
     check("pruneRuns: empty directory tolerated", true);
 
     // --- Q24: validateRunLog ---
     // Import dynamically to avoid top-level issues
     const cfg1 = { enabled: true, runLog: { enabled: true, dir: "/tmp/test", snapshot: false, maxRuns: 25 } };
-    const merged1 = require("../src/config/settings.ts").mergeConfig(cfg1);
+    const { mergeConfig } = await import("../src/config/settings.ts");
+    const merged1 = mergeConfig(cfg1);
     check("validateRunLog: valid config passes", merged1.runLog?.maxRuns === 25 && merged1.runLog?.dir === "/tmp/test");
 
     // --- G1: appendUserMessage adjacency coalescing ---
-    const history: { role: string; content: string }[] = [];
-    appendUserMessage(history as any, "first message");
-    check("appendUserMessage: starts with user message", history.length === 1 && history[0].role === "user");
+    const history: ChatMsg[] = [];
+    appendUserMessage(history, "first message");
+    check("appendUserMessage: starts with user message", history.length === 1 && history[0]?.role === "user");
 
-    appendUserMessage(history as any, "second message");
-    check("appendUserMessage: coalesces adjacent user", history.length === 1 && (history[0] as any).content.includes("first") && (history[0] as any).content.includes("second"));
+    appendUserMessage(history, "second message");
+    const first = history[0];
+    check("appendUserMessage: coalesces adjacent user", history.length === 1 && first !== undefined && first.content.includes("first") && first.content.includes("second"));
 
-    history.push({ role: "assistant", content: "reply" } as any);
-    appendUserMessage(history as any, "third message");
+    history.push({ role: "assistant", content: "reply" });
+    appendUserMessage(history, "third message");
     check("appendUserMessage: new message after assistant", history.length === 3 && history[2].role === "user");
 
     // --- G2: RunLogConfig round-trip ---
-    const defaults = require("../src/config/defaults.ts").DEFAULT_CONFIG;
+    const { DEFAULT_CONFIG: defaults } = await import("../src/config/defaults.ts");
     check("RunLogConfig: defaults has runLog", defaults.runLog !== undefined);
     check("RunLogConfig: defaults.maxRuns = 50", defaults.runLog?.maxRuns === 50);
 
@@ -105,8 +104,8 @@ async function main(): Promise<void> {
     rmSync(tmp, { recursive: true, force: true });
   }
 
-  console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
-  process.exit(failures === 0 ? 0 : 1);
+  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
+  process.exit(failureCount() === 0 ? 0 : 1);
 }
 
 main().catch((err) => { console.error("FATAL", err); process.exit(1); });

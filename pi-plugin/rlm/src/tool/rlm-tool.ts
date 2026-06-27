@@ -9,11 +9,11 @@
 import { getMarkdownTheme, type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { Value } from "typebox/value";
 import { createPiInteractiveDeps } from "../bridge/pi-interactive.ts";
 import type { RlmController, StartInput } from "../mode/rlm-mode.ts";
 import { createTelemetrySink } from "../telemetry/index.ts";
 import { formatCost, formatTokens, spinnerFrame } from "../ui/theme.ts";
+import { errorMessage } from "../util/errors.ts";
 import { type RlmDetails } from "./rlm-details.ts";
 import { RlmEmitter } from "./rlm-events.ts";
 import { RlmEventAggregator } from "./rlm-aggregator.ts";
@@ -22,13 +22,14 @@ import {
   renderCollapsedSubcallTree,
   renderExpandedSubcallTree,
 } from "./subcall-render.ts";
+import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 
 // ── Parameter schema ──
 
-export const RlmToolParams = Type.Object({
+export const RlmToolParams = Object.freeze(Type.Object({
   prompt: Type.String({ description: "The task or question for the RLM engine" }),
   context: Type.Optional(Type.String({ description: "Optional context. If omitted, repo is auto-packed via repomix." })),
-});
+}));
 
 // ── Rendering helpers ──
 
@@ -50,15 +51,15 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
     parameters: RlmToolParams,
 
     async execute(_toolCallId, rawParams, signal, onUpdate, ctx) {
-      // TypeBox runtime validation before engine start
-      if (!Value.Check(RlmToolParams, rawParams)) {
-        const errors = [...Value.Errors(RlmToolParams, rawParams)].map(e => `${e.instancePath}: ${e.message}`).join("; ");
-        return {
-          content: [{ type: "text", text: `Invalid RLM parameters: ${errors}` }],
-          details: { status: "error" as const, rootPrompt: "", turns: { current: 0, max: 0 }, subcalls: [], totals: { costUsd: 0, tokens: 0 } },
-        };
-      }
-      const params = rawParams; // narrowed by Value.Check
+      const validation = validateToolParams(RlmToolParams, rawParams, "RLM", (_errors): RlmDetails => ({
+        status: "error",
+        rootPrompt: "",
+        turns: { current: 0, max: 0 },
+        subcalls: [],
+        totals: { costUsd: 0, tokens: 0 },
+      }));
+      if (!validation.ok) return validation.error;
+      const params = validation.value;
 
       const sink = await createTelemetrySink(controller.config.telemetry);
       const emitter = new RlmEmitter();
@@ -73,14 +74,13 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
       }
 
       // Animated spinner: cycle through braille frames while running
-      let spinnerHandle: ReturnType<typeof setInterval> | undefined;
-      if (onUpdate) {
-        spinnerHandle = setInterval(() => {
-          const snap = aggregator.getState();
-          if (snap.status !== "running") { clearInterval(spinnerHandle); spinnerHandle = undefined; return; }
-          onUpdate({ content: [{ type: "text", text: `${spinnerFrame()} RLM running…` }], details: snap });
-        }, 100);
-      }
+      const progress = createProgressNotifier<RlmDetails>({
+        onUpdate,
+        getDetails: () => aggregator.getState(),
+        isRunning: (details) => details.status === "running",
+        renderText: () => `${spinnerFrame()} RLM running…`,
+      });
+      progress.start();
 
       try {
         const input: StartInput = {
@@ -104,18 +104,18 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
         };
       } catch (e) {
         emitter.emitStatus("error");
-        const msg = `RLM failed: ${e instanceof Error ? e.message : String(e)}`;
+        const msg = `RLM failed: ${errorMessage(e)}`;
         return {
           content: [{ type: "text", text: msg }],
           details: aggregator.getState(),
         };
       } finally {
-        if (spinnerHandle) clearInterval(spinnerHandle);
+        progress.stop();
         detachSink?.();
         aggregator.dispose();
         emitter.shutdown();
         try { await sink?.shutdown(); }
-        catch (err) { console.warn(`[rlm] telemetry shutdown failed: ${err instanceof Error ? err.message : String(err)}`); }
+        catch (err) { console.warn(`[rlm] telemetry shutdown failed: ${errorMessage(err)}`); }
       }
     },
 

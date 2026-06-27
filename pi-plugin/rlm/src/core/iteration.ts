@@ -13,20 +13,20 @@ import { findReplBlocks } from "../text/parsing.ts";
 import type { Sampling } from "./types.ts";
 
 export interface Turn {
-  response: string;
-  results: ReplResult[];
-  usage: Usage;
-  blocks: string[];
+  readonly response: string;
+  readonly results: readonly ReplResult[];
+  readonly usage: Usage;
+  readonly blocks: readonly string[];
 }
 
 export interface TurnDeps {
-  model: Model<Api>;
-  registry: ModelRegistry;
-  sampling?: Sampling;
-  signal?: AbortSignal;
+  readonly model: Model<Api>;
+  readonly registry: ModelRegistry;
+  readonly sampling?: Sampling;
+  readonly signal?: AbortSignal;
 }
 
-export async function runTurn(history: ChatMsg[], sandbox: PythonSandbox, deps: TurnDeps): Promise<Turn> {
+export async function runTurn(history: readonly ChatMsg[], sandbox: PythonSandbox, deps: TurnDeps): Promise<Turn> {
   const { text, usage } = await modelComplete(history, {
     model: deps.model,
     registry: deps.registry,
@@ -37,9 +37,9 @@ export async function runTurn(history: ChatMsg[], sandbox: PythonSandbox, deps: 
   });
 
   const blocks = findReplBlocks(text);
-  const results: ReplResult[] = [];
-  for (const code of blocks) {
-    results.push(await sandbox.exec(code));
+  const results = new Array<ReplResult>(blocks.length);
+  for (let i = 0; i < blocks.length; i++) {
+    results[i] = await sandbox.exec(blocks[i]);
   }
   return { response: text, results, usage, blocks };
 }

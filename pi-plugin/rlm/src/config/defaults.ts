@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 export const DEFAULT_RUN_DIR = join(tmpdir(), "rlm-runs");
 
-export const DEFAULT_CONFIG: RlmConfig = {
+export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   enabled: true,
   maxDepth: 4,
   maxIterations: 30,
@@ -27,4 +27,4 @@ export const DEFAULT_CONFIG: RlmConfig = {
     snapshot: true,
     maxRuns: 50,
   }),
-};
+});

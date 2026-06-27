@@ -14,6 +14,7 @@
  * Requires: python3 on PATH
  */
 
+import { check, failureCount } from "./helpers.ts";
 import { mkdtempSync, rmSync, unlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,11 +30,6 @@ import {
 import { STATE_SCHEMA_VERSION } from "../src/state/rows.ts";
 import type { RunHeader, TurnRow } from "../src/state/rows.ts";
 
-let failures = 0;
-function check(name: string, cond: boolean, extra = ""): void {
-  console.log(`${cond ? "✓" : "✗"} ${name}${extra ? `  — ${extra}` : ""}`);
-  if (!cond) failures++;
-}
 
 async function main(): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), "rlm-phase8-resume-"));
@@ -51,8 +47,8 @@ async function main(): Promise<void> {
       models: { smart: "test/smart", worker: "test/worker" },
       meta: { maxIterations: 30, maxDepth: 2, orchestrator: true },
     };
-    check("header written", appendRow(cwd, dir, runId, header));
-    check("context sidecar written", writeContextSidecar(cwd, dir, runId, contextText, false));
+    check("header written", await appendRow(cwd, dir, runId, header));
+    check("context sidecar written", await writeContextSidecar(cwd, dir, runId, contextText, false));
 
     // --- Simulate turns 1+2 in a SINGLE sandbox (matching engine flow: one sandbox per run) ---
     const sb = await PythonSandbox.spawn({
@@ -82,7 +78,7 @@ async function main(): Promise<void> {
       error: false, usage: { costUsd: 0.01, inputTokens: 100, outputTokens: 50 },
       cumulativeDurationMs: 1500, snapshotOk: true,
     };
-    check("turn 1 row written", appendRow(cwd, dir, runId, t1));
+    check("turn 1 row written", await appendRow(cwd, dir, runId, t1));
 
     const t2: TurnRow = {
       kind: "turn", turn: 2, ts: new Date().toISOString(),
@@ -90,11 +86,11 @@ async function main(): Promise<void> {
       error: false, usage: { costUsd: 0.02, inputTokens: 200, outputTokens: 100 },
       cumulativeDurationMs: 3000, snapshotOk: true,
     };
-    check("turn 2 row written", appendRow(cwd, dir, runId, t2));
+    check("turn 2 row written", await appendRow(cwd, dir, runId, t2));
 
     // --- Reconstruct state (simulates /rlm-resume) ---
     const systemPrompt = "You are a test RLM.";
-    const recon = reconstructRlmState(cwd, dir, runId, systemPrompt);
+    const recon = await reconstructRlmState(cwd, dir, runId, systemPrompt);
     check("reconstruct ok", recon.ok);
     if (recon.ok) {
       check("completedTurns = 2", recon.completedTurns === 2, String(recon.completedTurns));
@@ -111,15 +107,20 @@ async function main(): Promise<void> {
         depth: 1, execTimeoutS: 5,
         handlers: { llmQuery: async () => "stub", llmQueryBatched: async (ps) => ps.map(() => "stub") },
       });
-      const restorePath = snapshotPath(cwd, dir, runId, recon.snapshotTurn!);
-      check("sandbox restored from turn 2", await sb3.restore(restorePath, rnonce));
-      r = await sb3.exec("print(x, y)");
-      check("REPL vars survive: x=42 y=hello", r.stdout.trim() === "42 hello", r.stdout.trim());
+      const snapshotTurn = recon.snapshotTurn;
+      if (snapshotTurn === undefined) {
+        check("sandbox restored from turn 2", false, "missing snapshot turn");
+      } else {
+        const restorePath = snapshotPath(cwd, dir, runId, snapshotTurn);
+        check("sandbox restored from turn 2", await sb3.restore(restorePath, rnonce));
+        r = await sb3.exec("print(x, y)");
+        check("REPL vars survive: x=42 y=hello", r.stdout.trim() === "42 hello", r.stdout.trim());
+      }
       await sb3.dispose();
 
       // --- R-C1: fallback — delete turn 2 pkl, reconstruct should fall back to turn 1 ---
       unlinkSync(snap2);
-      const recon2 = reconstructRlmState(cwd, dir, runId, systemPrompt);
+      const recon2 = await reconstructRlmState(cwd, dir, runId, systemPrompt);
       check("R-C1: fallback snapshotTurn = 1", recon2.ok && recon2.snapshotTurn === 1, recon2.ok ? String(recon2.snapshotTurn) : "not ok");
       if (recon2.ok && recon2.snapshotTurn !== undefined) {
         const sb4 = await PythonSandbox.spawn({
@@ -158,7 +159,7 @@ async function main(): Promise<void> {
     // --- R-C2: missing context sidecar warning ---
     const runId2 = generateRunId();
     const header2: RunHeader = { ...header, runId: runId2 };
-    appendRow(cwd, dir, runId2, header2);
+    await appendRow(cwd, dir, runId2, header2);
     // No writeContextSidecar call — sidecar is missing
     const snapR2 = snapshotPath(cwd, dir, runId2, 1);
     const sb6 = await PythonSandbox.spawn({
@@ -174,16 +175,16 @@ async function main(): Promise<void> {
       usage: { costUsd: 0.01, inputTokens: 50, outputTokens: 25 },
       cumulativeDurationMs: 500, snapshotOk: true,
     };
-    appendRow(cwd, dir, runId2, t1r2);
-    const recon3 = reconstructRlmState(cwd, dir, runId2, systemPrompt);
+    await appendRow(cwd, dir, runId2, t1r2);
+    const recon3 = await reconstructRlmState(cwd, dir, runId2, systemPrompt);
     check("R-C2: reconstruct ok without sidecar", recon3.ok);
     // The caller (rlm.ts) would check readContextSidecar and warn — here we just verify it doesn't crash.
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 
-  console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
-  process.exit(failures === 0 ? 0 : 1);
+  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
+  process.exit(failureCount() === 0 ? 0 : 1);
 }
 
 main().catch((err) => { console.error("FATAL", err); process.exit(1); });

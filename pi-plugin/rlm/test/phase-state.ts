@@ -4,6 +4,7 @@
  * Run: bun run pi-plugin/rlm/test/phase-state.ts
  */
 
+import { check, fail, failureCount } from "./helpers.ts";
 import { advancePhase, currentPhase, phaseGatePrompt, turnsInPhase, type AdvancePhaseOutcome } from "../src/core/pipeline.ts";
 import { STATE_SCHEMA_VERSION, isPhase, type PhaseRow } from "../src/state/rows.ts";
 import { reconstructRlmState } from "../src/state/resume.ts";
@@ -16,11 +17,6 @@ import type { RunHeader, TurnRow } from "../src/state/rows.ts";
 import { buildTurnPrompt } from "../src/prompts/user.ts";
 import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
 
-let failures = 0;
-function check(name: string, cond: boolean, extra = ""): void {
-  console.log(`${cond ? "✓" : "✗"} ${name}${extra ? `  — ${extra}` : ""}`);
-  if (!cond) failures++;
-}
 
 function outcomeDetail(o: AdvancePhaseOutcome): string {
   return o.ok ? o.phase : o.error;
@@ -82,7 +78,7 @@ function testGateHelpers(): void {
 
 // ── Phase 3: Phase rows, persistence & resume ──
 
-function testPhasePersistence(): void {
+async function testPhasePersistence(): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), "rlm-phase-state-"));
   const runId = "2026-01-01_00-00-00-aaaa";
   const dir = ".rlm-test";
@@ -96,12 +92,12 @@ function testPhasePersistence(): void {
       models: { smart: "p/id", worker: "p/wid" },
       meta: { maxIterations: 10, maxDepth: 2, orchestrator: false, pipeline: true },
     };
-    if (!writeContextSidecar(tmp, dir, runId, "test context", false)) {
+    if (!await writeContextSidecar(tmp, dir, runId, "test context", false)) {
       console.log("✗ sidecar write failed — check perms?");
-      failures++;
+      fail();
       return;
     }
-    check("header written", appendRow(tmp, dir, runId, header));
+    check("header written", await appendRow(tmp, dir, runId, header));
 
     // Write a turn row
     const turn: TurnRow = {
@@ -111,14 +107,14 @@ function testPhasePersistence(): void {
       cumulativeDurationMs: 100,
       snapshotOk: false,
     };
-    check("turn row written", appendRow(tmp, dir, runId, turn));
+    check("turn row written", await appendRow(tmp, dir, runId, turn));
 
     // Write a phase row
     const phaseRow: PhaseRow = {
       kind: "phase", turn: 2, ts: "2026-01-01T00:00:02Z",
       phase: "blueprint", summary: "research complete",
     };
-    check("phase row written", appendRow(tmp, dir, runId, phaseRow));
+    check("phase row written", await appendRow(tmp, dir, runId, phaseRow));
 
     // Write another turn and another phase row
     const turn2: TurnRow = {
@@ -128,13 +124,13 @@ function testPhasePersistence(): void {
       cumulativeDurationMs: 200,
       snapshotOk: false,
     };
-    check("turn2 row written", appendRow(tmp, dir, runId, turn2));
+    check("turn2 row written", await appendRow(tmp, dir, runId, turn2));
 
     const phaseRow2: PhaseRow = {
       kind: "phase", turn: 3, ts: "2026-01-01T00:00:04Z",
       phase: "implement", summary: "blueprint complete",
     };
-    check("phase2 row written", appendRow(tmp, dir, runId, phaseRow2));
+    check("phase2 row written", await appendRow(tmp, dir, runId, phaseRow2));
 
     // Verify trail file has rows
     const trail = readFileSync(trailPath(tmp, dir, runId), "utf8");
@@ -150,7 +146,7 @@ function testPhasePersistence(): void {
 
     // Reconstruct and verify phase state
     const system = buildRlmSystemPrompt({ contextType: "none", contextChars: 0 });
-    const recon = reconstructRlmState(tmp, dir, runId, system);
+    const recon = await reconstructRlmState(tmp, dir, runId, system);
     check("reconstruct ok", recon.ok, recon.ok ? "ok" : `${recon.reason}: ${recon.detail}`);
     if (recon.ok) {
       check("recon has phase", recon.phase !== undefined);
@@ -168,9 +164,9 @@ function testPhasePersistence(): void {
       models: { smart: "p/id", worker: "p/wid" },
       meta: { maxIterations: 5, maxDepth: 1, orchestrator: false },
     };
-    writeContextSidecar(tmp, dir, v2RunId, "v2 context", false);
-    appendRow(tmp, dir, v2RunId, v2Header);
-    appendRow(tmp, dir, v2RunId, {
+    await writeContextSidecar(tmp, dir, v2RunId, "v2 context", false);
+    await appendRow(tmp, dir, v2RunId, v2Header);
+    await appendRow(tmp, dir, v2RunId, {
       kind: "turn", turn: 1, ts: "2025-12-31T23:59:59Z",
       response: "v2", error: false,
       usage: { costUsd: 0, inputTokens: 0, outputTokens: 0 },
@@ -178,7 +174,7 @@ function testPhasePersistence(): void {
     } as TurnRow);
 
     // v2 trail should fail resume (version mismatch)
-    const v2Recon = reconstructRlmState(tmp, dir, v2RunId, system);
+    const v2Recon = await reconstructRlmState(tmp, dir, v2RunId, system);
     check("v2 trail fails version-mismatch", !v2Recon.ok && v2Recon.reason === "version-mismatch", v2Recon.ok ? "unexpected ok" : `${v2Recon.reason}: ${v2Recon.detail}`);
 
     // Schema v4 header without phase rows
@@ -189,16 +185,16 @@ function testPhasePersistence(): void {
       models: { smart: "p/id", worker: "p/wid" },
       meta: { maxIterations: 5, maxDepth: 1, orchestrator: false },
     };
-    writeContextSidecar(tmp, dir, v4RunId, "v4 context", false);
-    appendRow(tmp, dir, v4RunId, v4Header);
+    await writeContextSidecar(tmp, dir, v4RunId, "v4 context", false);
+    await appendRow(tmp, dir, v4RunId, v4Header);
     const v4Turn: TurnRow = {
       kind: "turn", turn: 1, ts: "2026-06-01T12:00:01Z",
       response: "v4 turn", error: false,
       usage: { costUsd: 0, inputTokens: 0, outputTokens: 0 },
       cumulativeDurationMs: 0, snapshotOk: false,
     };
-    appendRow(tmp, dir, v4RunId, v4Turn);
-    const v4Recon = reconstructRlmState(tmp, dir, v4RunId, system);
+    await appendRow(tmp, dir, v4RunId, v4Turn);
+    const v4Recon = await reconstructRlmState(tmp, dir, v4RunId, system);
     check("v4 trail without phase rows reconstructs ok", v4Recon.ok, v4Recon.ok ? "ok" : `${v4Recon.reason}: ${v4Recon.detail}`);
     if (v4Recon.ok) {
       check("v4 trail phase is undefined", v4Recon.phase === undefined);
@@ -236,9 +232,9 @@ function testIntents(): void {
 
 testTransitions();
 testGateHelpers();
-testPhasePersistence();
+await testPhasePersistence();
 testGatePromptIntegration();
 testIntents();
 
-console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
-process.exit(failures === 0 ? 0 : 1);
+console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
+process.exit(failureCount() === 0 ? 0 : 1);

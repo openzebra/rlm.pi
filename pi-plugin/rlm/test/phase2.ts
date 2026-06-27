@@ -25,7 +25,11 @@ async function main() {
     process.exit(1);
   }
 
-  const worker = models[0]!;
+  const worker = models[0];
+  if (worker === undefined) {
+    console.log("\nNo worker model available.");
+    process.exit(1);
+  }
   console.log(`\nworker model: ${worker.provider}/${worker.id}`);
   let totalCost = 0;
   const bridge = createLlmBridge({

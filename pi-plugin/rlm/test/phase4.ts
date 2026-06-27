@@ -44,7 +44,9 @@ async function testRecursionBridge(): Promise<boolean> {
   log("rlm_query at depth cap falls back to llm_query", atCap.startsWith("llm("));
   // batched preserves order
   const batched = await handlers.rlmQueryBatched(["one", "two", "three"], null, 0);
-  log("rlm_query_batched preserves order", batched.length === 3 && batched[0]!.includes("one") && batched[2]!.includes("three"));
+  const firstBatch = batched[0];
+  const thirdBatch = batched[2];
+  log("rlm_query_batched preserves order", batched.length === 3 && firstBatch !== undefined && thirdBatch !== undefined && firstBatch.includes("one") && thirdBatch.includes("three"));
 
   return pass;
 }
@@ -171,7 +173,12 @@ async function main() {
   const registry = MR.create(authStorage);
   const available = registry.getAvailable();
   if (available.length > 0) {
-    const model = cheapestModel(registry) ?? available[0]!;
+    const fallbackModel = available[0];
+    const model = cheapestModel(registry) ?? fallbackModel;
+    if (model === undefined) {
+      console.error("no fallback model available");
+      process.exit(1);
+    }
     const overrideEngine = createEngine({
     emitter: new RlmEmitter(),
       smartModel: model,
@@ -198,8 +205,13 @@ async function main() {
     process.exit(1);
   }
 
-  const smart = pick(registry, "deepseek", "deepseek-v4-pro") ?? available[0]!;
-  const worker = pick(registry, "deepseek", "deepseek-v4-flash") ?? cheapestModel(registry)!;
+  const fallbackSmart = available[0];
+  const smart = pick(registry, "deepseek", "deepseek-v4-pro") ?? fallbackSmart;
+  const worker = pick(registry, "deepseek", "deepseek-v4-flash") ?? cheapestModel(registry) ?? smart;
+  if (smart === undefined || worker === undefined) {
+    console.error("no models available");
+    process.exit(1);
+  }
   console.log(`smart=${smart.provider}/${smart.id}  worker=${worker.provider}/${worker.id}`);
 
   // 20 short "documents"; exactly one carries the needle.

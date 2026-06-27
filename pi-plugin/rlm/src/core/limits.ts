@@ -7,10 +7,10 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
 export interface Limits {
-  maxTimeoutMs?: number;
-  maxTokens?: number;
-  maxBudgetUsd?: number;
-  maxErrors?: number;
+  readonly maxTimeoutMs?: number;
+  readonly maxTokens?: number;
+  readonly maxBudgetUsd?: number;
+  readonly maxErrors?: number;
 }
 
 export class LimitError extends Error {

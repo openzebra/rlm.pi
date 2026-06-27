@@ -8,11 +8,11 @@
 
 /** Requests the parent sends to the worker. */
 export type WorkerRequest =
-  | { id: string; type: "exec"; code: string }
-  | { id: string; type: "load_context"; path: string; index?: number; json: boolean }
-  | { id: string; type: "snapshot"; path: string; nonce: string }
-  | { id: string; type: "restore"; path: string; nonce: string }
-  | { id: string; type: "shutdown" };
+  | { readonly id: string; readonly type: "exec"; readonly code: string }
+  | { readonly id: string; readonly type: "load_context"; readonly path: string; readonly index?: number; readonly json: boolean }
+  | { readonly id: string; readonly type: "snapshot"; readonly path: string; readonly nonce: string }
+  | { readonly id: string; readonly type: "restore"; readonly path: string; readonly nonce: string }
+  | { readonly id: string; readonly type: "shutdown" };
 
 /** Reply the parent sends to satisfy a sub-LLM interrupt. */
 export interface LlmReply {
@@ -38,23 +38,23 @@ export interface ProposedDiffEdit {
 
 /** A normal response to a request (keyed by the request `id`). */
 export interface WorkerResponse {
-  id: string;
-  ok: boolean;
-  error?: string;
+  readonly id: string;
+  readonly ok: boolean;
+  readonly error?: string;
   // exec result fields:
-  stdout?: string;
-  stderr?: string;
-  final_answer?: string | null;
-  answer_content?: string;
-  edits?: ProposedEdit[];
-  diffs?: ProposedDiffEdit[];
-  raised?: boolean;
-  execution_time?: number;
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly final_answer?: string | null;
+  readonly answer_content?: string;
+  readonly edits?: readonly ProposedEdit[];
+  readonly diffs?: readonly ProposedDiffEdit[];
+  readonly raised?: boolean;
+  readonly execution_time?: number;
   // load_context:
-  index?: number;
+  readonly index?: number;
   // snapshot/restore:
-  skipped?: string[];
-  restored?: string[];
+  readonly skipped?: readonly string[];
+  readonly restored?: readonly string[];
 }
 
 /** Kinds of sub-LLM interrupt the worker can raise mid-exec. */
@@ -144,7 +144,7 @@ export type WorkerInterrupt =
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
 
-export const INTERRUPT_KINDS = new Set<InterruptKind>([
+export const INTERRUPT_KINDS = Object.freeze(new Set<InterruptKind>([
   "llm_query",
   "llm_query_batched",
   "rlm_query",
@@ -152,20 +152,36 @@ export const INTERRUPT_KINDS = new Set<InterruptKind>([
   "advance_phase",
   "ask_user_question",
   "todo",
-]);
+]));
 
-export function isInterrupt(msg: WorkerMessage): msg is WorkerInterrupt {
-  return INTERRUPT_KINDS.has((msg as WorkerInterrupt).type);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isWorkerResponse(value: unknown): value is WorkerResponse {
+  return isRecord(value) && typeof value.id === "string" && typeof value.ok === "boolean";
+}
+
+export function isInterrupt(msg: unknown): msg is WorkerInterrupt {
+  return isRecord(msg)
+    && typeof msg.type === "string"
+    && INTERRUPT_KINDS.has(msg.type as InterruptKind)
+    && typeof msg.rid === "string"
+    && typeof msg.depth === "number";
+}
+
+export function isWorkerMessage(msg: unknown): msg is WorkerMessage {
+  return isWorkerResponse(msg) || isInterrupt(msg);
 }
 
 /** Result of a single `repl` block execution, surfaced to the engine/tool. */
 export interface ReplResult {
-  stdout: string;
-  stderr: string;
-  finalAnswer: string | null;
-  answerContent: string;
-  edits: ProposedEdit[];
-  diffs: ProposedDiffEdit[];
-  raised: boolean;
-  executionTimeMs: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly finalAnswer: string | null;
+  readonly answerContent: string;
+  readonly edits: readonly ProposedEdit[];
+  readonly diffs: readonly ProposedDiffEdit[];
+  readonly raised: boolean;
+  readonly executionTimeMs: number;
 }

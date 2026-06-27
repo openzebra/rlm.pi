@@ -33,21 +33,22 @@ import { STATE_SCHEMA_VERSION } from "../state/rows.ts";
 import type { PhaseRow, RunHeader } from "../state/rows.ts";
 import { serializeForSandbox, type ContextBundle } from "../context/repomix-context.ts";
 import type { ProposedDiffEdit, ProposedEdit } from "../sandbox/protocol.ts";
+import { formatError } from "../util/errors.ts";
 
 
 export interface EngineDeps extends InteractiveDeps {
-  smartModel: Model<Api>;
-  workerModel: Model<Api>;
-  registry: ModelRegistry;
-  config: RlmConfig;
-  limits?: Limits;
-  signal?: AbortSignal;
+  readonly smartModel: Model<Api>;
+  readonly workerModel: Model<Api>;
+  readonly registry: ModelRegistry;
+  readonly config: RlmConfig;
+  readonly limits?: Limits;
+  readonly signal?: AbortSignal;
   /** Live RlmDetails reporting via onUpdate. Required — replaces SubcallObserver. */
-  emitter: RlmEmitter;
+  readonly emitter: RlmEmitter;
   /** Called with each completion's usage (root + sub-LLM) for cost/token rollups. */
-  onUsage?: (usage: Usage, role: "root" | "sub") => void;
+  readonly onUsage?: (usage: Usage, role: "root" | "sub") => void;
   /** Run-state persistence handle. undefined ⇒ persistence off. */
-  runState?: { cwd: string; dir: string; snapshot: boolean };
+  readonly runState?: { readonly cwd: string; readonly dir: string; readonly snapshot: boolean };
 }
 
 /** Build a `runRlm` bound to the given deps. The returned function is reused for recursion. */
@@ -76,7 +77,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
       if (selfReportId) emitter.emitSubcallUpdated({ id: selfReportId, status: "error", detail: "unknown model override" });
       else emitter.emitStatus("error");
       return {
-        answer: `Error: unknown model override '${input.smartModelOverride}'`,
+        answer: formatError(`unknown model override '${input.smartModelOverride}'`),
         edits: [],
         iterations: 0,
         costUsd: 0,
@@ -140,7 +141,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let persistOn = persist;
     if (persist && deps.runState && !input.resume && runId) {
       const json = typeof input.context !== "string";
-      const sidecarOk = writeContextSidecar(deps.runState.cwd, deps.runState.dir, runId, input.context, json);
+      const sidecarOk = await writeContextSidecar(deps.runState.cwd, deps.runState.dir, runId, input.context, json);
       if (!sidecarOk) {
         persistOn = false; // QC: skip header if sidecar failed — prevents orphan trail referencing non-existent context
       } else {
@@ -151,14 +152,14 @@ export function createEngine(deps: EngineDeps): RunRlm {
           models: { smart: smartModel.id, worker: deps.workerModel.id },
           meta: { maxIterations: deps.config.maxIterations, maxDepth: deps.config.maxDepth, orchestrator: deps.config.orchestrator, pipeline: true },
         };
-        persistOn = appendRow(deps.runState.cwd, deps.runState.dir, runId, header);
+        persistOn = await appendRow(deps.runState.cwd, deps.runState.dir, runId, header);
       }
-      pruneRuns(deps.runState.cwd, deps.runState.dir, deps.config.runLog?.maxRuns ?? 50); // Ops: retention (always — cleanup even if sidecar failed)
+      await pruneRuns(deps.runState.cwd, deps.runState.dir, deps.config.runLog?.maxRuns ?? 50); // Ops: retention (always — cleanup even if sidecar failed)
     }
 
-    const recordTerminal = (status: "completed" | "finalized" | "aborted" | "stopped", r: RlmResult): boolean => {
+    const recordTerminal = async (status: "completed" | "finalized" | "aborted" | "stopped", r: RlmResult): Promise<boolean> => {
       if (!persistOn || !runId || !deps.runState) return false;
-      return appendRow(deps.runState.cwd, deps.runState.dir, runId, {
+      return await appendRow(deps.runState.cwd, deps.runState.dir, runId, {
         kind: "terminal", ts: nowIso(), status, answer: r.answer, iterations: r.iterations,
         usage: { costUsd: r.costUsd, inputTokens: r.inputTokens, outputTokens: r.outputTokens },
       });
@@ -169,12 +170,12 @@ export function createEngine(deps: EngineDeps): RunRlm {
         ? {
             advancePhase: async (phase: string, summary: string | undefined) => {
               const outcome = validatePhaseTransition(phaseState?.current, phase);
-              if (!outcome.ok) return `Error: ${outcome.error}`;
+              if (!outcome.ok) return formatError(outcome.error);
               const previous = phaseState;
               phaseState = { current: outcome.phase, advancedAt: completedTurns, summary };
               if (persistOn && runId && deps.runState) {
                 const row: PhaseRow = { kind: "phase", turn: completedTurns + 1, ts: nowIso(), phase: outcome.phase, summary };
-                const ok = appendRow(deps.runState.cwd, deps.runState.dir, runId, row);
+                const ok = await appendRow(deps.runState.cwd, deps.runState.dir, runId, row);
                 if (!ok) persistOn = false;
               }
               const prevLabel = previous ? `was '${previous.current}'` : "fresh run";
@@ -185,9 +186,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
       const interactiveHandlers = buildInteractiveHandlers({
         onAskUserQuestion: deps.config.askUserQuestion ? deps.onAskUserQuestion : undefined,
         onTodo: deps.config.todo ? deps.onTodo : undefined,
-        onTodoRow: (action, params, todoResult) => {
+        onTodoRow: async (action, params, todoResult) => {
           if (!persistOn || !runId || !deps.runState) return;
-          const ok = appendTodoRow(deps.runState.cwd, deps.runState.dir, runId, {
+          const ok = await appendTodoRow(deps.runState.cwd, deps.runState.dir, runId, {
             turn: completedTurns + 1, ts: nowIso(), action, params, result: todoResult,
           });
           if (!ok) persistOn = false;
@@ -267,7 +268,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
               compactionUsage = { costUsd: compactionUsage.costUsd + u.cost.total, inputTokens: compactionUsage.inputTokens + u.input, outputTokens: compactionUsage.outputTokens + u.output }; // CC: accumulate
             });
             if (persistOn && runId && deps.runState && history !== prevHistoryRef) {
-              const ok = appendRow(deps.runState.cwd, deps.runState.dir, runId, {
+              const ok = await appendRow(deps.runState.cwd, deps.runState.dir, runId, {
                 kind: "compaction", turn: i + 1, ts: nowIso(), history,
                 usage: compactionUsage,
               });
@@ -308,7 +309,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         const final = finalAnswerOf(turn.results);
         if (final != null) {
           const done = result(final, i + 1, limits, editsAcc, diffsAcc);
-          recordTerminal("completed", done);
+          await recordTerminal("completed", done);
           lastAnswer = done.answer;
           return done;
         }
@@ -323,7 +324,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           const snapOk = deps.runState.snapshot && sandbox && sessionNonce
             ? await sandbox.snapshot(pklPath, sessionNonce)
             : false;
-          const ok = appendRow(deps.runState.cwd, deps.runState.dir, runId, {
+          const ok = await appendRow(deps.runState.cwd, deps.runState.dir, runId, {
             kind: "turn", turn: i + 1, ts: nowIso(),
             response: turn.response, replOutputs: turnReplOutputs || undefined,
             answerContent: answerContent || undefined,
@@ -339,21 +340,21 @@ export function createEngine(deps: EngineDeps): RunRlm {
       }
       if (pendingReplOutputs) appendUserMessage(history, pendingReplOutputs);
       const finalized = result(await finalize(history, deps, limits), deps.config.maxIterations, limits, editsAcc, diffsAcc);
-      recordTerminal("finalized", finalized);
+      await recordTerminal("finalized", finalized);
       lastAnswer = finalized.answer;
       return finalized;
     } catch (err) {
       // Abort is a user action — resolve with the best partial, not an error.
       if (deps.signal?.aborted) {
         const aborted = result(best.trim() || "(aborted)", completedTurns, limits, editsAcc, diffsAcc);
-        recordTerminal("aborted", aborted);
+        await recordTerminal("aborted", aborted);
         lastAnswer = aborted.answer;
         return aborted;
       }
       if (err instanceof LimitError) {
         nodeStatus = "error";
         const stopped = result(best.trim() || `(stopped: ${err.message})`, completedTurns, limits, editsAcc, diffsAcc);
-        recordTerminal("stopped", stopped);
+        await recordTerminal("stopped", stopped);
         lastAnswer = stopped.answer;
         return stopped;
       }

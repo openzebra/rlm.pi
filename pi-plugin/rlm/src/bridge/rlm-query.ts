@@ -9,6 +9,8 @@
 import type { RunRlm } from "../core/types.ts";
 import type { LlmBridge } from "./llm-query.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
+import { checkResourceLimits } from "../core/resource-limits.ts";
+import { formatError } from "../util/errors.ts";
 import { mapPool } from "../util/concurrency.ts";
 
 export interface RlmHandlers {
@@ -17,18 +19,18 @@ export interface RlmHandlers {
 }
 
 export interface RlmBridgeOptions {
-  run: RunRlm;
-  llm: LlmBridge;
+  readonly run: RunRlm;
+  readonly llm: LlmBridge;
   /** Live RlmDetails reporting via onUpdate. Required — replaces SubcallObserver for recursive subcalls. */
-  emitter: RlmEmitter;
-  maxDepth: number;
-  maxConcurrent: number;
+  readonly emitter: RlmEmitter;
+  readonly maxDepth: number;
+  readonly maxConcurrent: number;
   /** Parent subcall ID that this run is attached under. */
-  parentNodeId?: string;
+  readonly parentNodeId?: string;
   /** Returns the parent's remaining budget/timeout for seeding child runs. */
-  remainingBudget?: () => { budgetUsd?: number; timeoutMs?: number };
+  readonly remainingBudget?: () => { readonly budgetUsd?: number; readonly timeoutMs?: number };
   /** Called with a child run's total cost/tokens so the parent LimitGuard debits it. */
-  onChildUsage?: (costUsd: number, inputTokens: number, outputTokens: number) => void;
+  readonly onChildUsage?: (costUsd: number, inputTokens: number, outputTokens: number) => void;
 }
 
 export function createRlmHandlers(opts: RlmBridgeOptions): RlmHandlers {
@@ -41,8 +43,8 @@ export function createRlmHandlers(opts: RlmBridgeOptions): RlmHandlers {
       const rem = opts.remainingBudget?.() ?? {};
       // Pre-spawn guard: refuse if the parent's budget or timeout is already exhausted
       // (reference: _subcall checks remaining_budget/timeout before spawning).
-      if (rem.budgetUsd !== undefined && rem.budgetUsd <= 0) return "Error: budget exhausted";
-      if (rem.timeoutMs !== undefined && rem.timeoutMs <= 0) return "Error: timeout exhausted";
+      const limitError = checkResourceLimits(rem);
+      if (limitError) return limitError;
       subId = opts.emitter.emitSubcallCreated({
         kind: "rlm", parentId: opts.parentNodeId, label: "rlm_query",
         model: model ?? undefined, detail: prompt.slice(0, 60),
@@ -65,7 +67,7 @@ export function createRlmHandlers(opts: RlmBridgeOptions): RlmHandlers {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (subId) opts.emitter.emitSubcallUpdated({ id: subId, status: "error", detail: msg });
-      return `Error: child RLM failed - ${msg}`;
+      return formatError(`child RLM failed - ${msg}`);
     }
   }
 

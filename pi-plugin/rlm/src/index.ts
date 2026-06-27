@@ -14,9 +14,18 @@ import { setRlmModeStatus } from "./ui/status.ts";
 import { SandboxManager } from "./sandbox/sandbox-manager.ts";
 import { packRepository, formatForLLM, serializeForSandbox } from "./context/repomix-context.ts";
 import { buildNativeSystemPrompt } from "./prompts/system.ts";
+import { errorMessage } from "./util/errors.ts";
+
+const BLOCKED_NATIVE_TOOLS = Object.freeze(new Set(["read", "grep", "bash"]));
 
 export default function rlmExtension(pi: ExtensionAPI): void {
-  const persisted = loadSettings();
+  void setupRlmExtension(pi).catch((error) => {
+    console.warn(`[rlm] extension setup failed: ${errorMessage(error)}`);
+  });
+}
+
+async function setupRlmExtension(pi: ExtensionAPI): Promise<void> {
+  const persisted = await loadSettings();
   const config = mergeConfig(persisted.config);
   const controller = new RlmController(config);
   controller.savedSmartRef = persisted.smart;
@@ -55,15 +64,15 @@ export default function rlmExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     // Restore saved model refs for controller — invalidate if provider changed
-    if (persisted.smart) {
-      const resolved = resolveModelId(ctx.modelRegistry, persisted.smart);
+    if (controller.savedSmartRef) {
+      const resolved = resolveModelId(ctx.modelRegistry, controller.savedSmartRef);
       if (resolved) controller.smartModel = resolved;
-      else persisted.smart = undefined; // provider gone, clear stale ref
+      else controller.savedSmartRef = undefined; // provider gone, clear stale ref
     }
-    if (persisted.worker) {
-      const resolved = resolveModelId(ctx.modelRegistry, persisted.worker);
+    if (controller.savedWorkerRef) {
+      const resolved = resolveModelId(ctx.modelRegistry, controller.savedWorkerRef);
       if (resolved) controller.workerModel = resolved;
-      else persisted.worker = undefined;
+      else controller.savedWorkerRef = undefined;
     }
 
     // Register repl tool with current models (re-registers each session for provider changes)
@@ -71,7 +80,15 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const smartModel = controller.smartModel ?? ctx.model;
     if (workerModel && smartModel) {
       try {
-        pi.registerTool(createReplTool({ sandboxManager, smartModel, workerModel, registry: ctx.modelRegistry, config }));
+        pi.registerTool(createReplTool({
+          sandboxManager,
+          smartModel,
+          workerModel,
+          getSmartModel: () => controller.resolveModels(ctx)?.smart,
+          getWorkerModel: () => controller.resolveModels(ctx)?.worker,
+          registry: ctx.modelRegistry,
+          config,
+        }));
       } catch { /* re-registration on provider change — ignore if already registered */ }
     }
 
@@ -134,8 +151,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // ── Tool restriction: block read/grep/bash when RLM is ON ──
   pi.on("tool_call", async (event) => {
     if (!controller.enabled) return;
-    const blocked = new Set(["read", "grep", "bash"]);
-    if (blocked.has(event.toolName)) {
+    if (BLOCKED_NATIVE_TOOLS.has(event.toolName)) {
       return {
         block: true,
         reason: "RLM mode active. Use repl({code}) to access the repository context. All files are pre-loaded in the REPL. If sub-LLM credits are exhausted, report to the user.",

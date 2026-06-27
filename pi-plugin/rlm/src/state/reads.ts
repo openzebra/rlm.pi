@@ -6,28 +6,28 @@
  * by the slug (ISO-like timestamps are self-sorting).
  */
 
-import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
+import { open, readFile } from "node:fs/promises";
 import { runsDir, trailPath, contextPath } from "./paths.ts";
-import { isHeader, type RunHeader, type Row } from "./rows.ts";
-import { errorMessage, warn } from "./internal.ts";
+import { isHeader, isRow, type RunHeader, type Row } from "./rows.ts";
+import { errorMessage, failSoft, listDirectoriesSorted, pathExists, warn } from "./internal.ts";
 
 /** Every well-formed row, in trail order. Malformed line → one warn, skipped. */
-export function readRows(cwd: string, dir: string, runId: string): Row[] {
-  let lines: string[];
-  try {
-    const p = trailPath(cwd, dir, runId);
-    if (!existsSync(p)) return [];
-    const content = readFileSync(p, "utf-8").trim();
-    if (!content) return [];
-    lines = content.split("\n");
-  } catch (e) {
-    warn(e);
-    return [];
-  }
+export async function readRows(cwd: string, dir: string, runId: string): Promise<Row[]> {
+  const path = trailPath(cwd, dir, runId);
+  if (!await pathExists(path)) return [];
+  const content = await failSoft(
+    () => readFile(path, "utf-8"),
+    undefined as string | undefined,
+  );
+  const trimmed = content?.trim();
+  if (!trimmed) return [];
+
   const rows: Row[] = [];
-  for (const line of lines) {
+  for (const line of trimmed.split("\n")) {
     try {
-      rows.push(JSON.parse(line) as Row);
+      const row = JSON.parse(line) as unknown;
+      if (isRow(row)) rows.push(row);
+      else warn("skipping invalid JSONL row shape");
     } catch (e) {
       warn(`skipping malformed JSONL row — ${errorMessage(e)}`);
     }
@@ -36,24 +36,27 @@ export function readRows(cwd: string, dir: string, runId: string): Row[] {
 }
 
 /** Read the first line of a trail file without reading the entire file (P1). */
-function readFirstLine(path: string): string | undefined {
-  try {
-    const fd = openSync(path, "r");
-    const size = Math.min(statSync(path).size, 65536);
-    const buf = Buffer.alloc(size);
-    const bytesRead = readSync(fd, buf, 0, size, 0);
-    closeSync(fd);
-    const content = buf.toString("utf-8", 0, bytesRead);
-    const nl = content.indexOf("\n");
-    return nl >= 0 ? content.slice(0, nl) : content.trim() || undefined;
-  } catch {
-    return undefined;
-  }
+async function readFirstLine(path: string): Promise<string | undefined> {
+  return await failSoft(async () => {
+    const file = await open(path, "r");
+    try {
+      const stats = await file.stat();
+      const size = Math.min(stats.size, 65536);
+      if (size <= 0) return undefined;
+      const buffer = Buffer.alloc(size);
+      const { bytesRead } = await file.read(buffer, 0, size, 0);
+      const content = buffer.toString("utf-8", 0, bytesRead);
+      const nl = content.indexOf("\n");
+      return nl >= 0 ? content.slice(0, nl) : content.trim() || undefined;
+    } finally {
+      await file.close();
+    }
+  }, undefined as string | undefined, { warn: false });
 }
 
 /** First well-formed header row, or undefined. Bounded read — never reads the full trail (P1). */
-export function readHeader(cwd: string, dir: string, runId: string): RunHeader | undefined {
-  const line = readFirstLine(trailPath(cwd, dir, runId));
+export async function readHeader(cwd: string, dir: string, runId: string): Promise<RunHeader | undefined> {
+  const line = await readFirstLine(trailPath(cwd, dir, runId));
   if (!line) return undefined;
   try {
     const row = JSON.parse(line) as unknown;
@@ -64,12 +67,16 @@ export function readHeader(cwd: string, dir: string, runId: string): RunHeader |
 }
 
 /** Reload context from a persistent sidecar file. */
-export function readContextSidecar(cwd: string, dir: string, runId: string, json: boolean): unknown {
+export async function readContextSidecar(cwd: string, dir: string, runId: string, json: boolean): Promise<unknown> {
+  const path = contextPath(cwd, dir, runId, json);
+  if (!await pathExists(path)) return undefined;
+  const content = await failSoft(
+    () => readFile(path, "utf-8"),
+    undefined as string | undefined,
+  );
+  if (content === undefined) return undefined;
   try {
-    const p = contextPath(cwd, dir, runId, json);
-    if (!existsSync(p)) return undefined;
-    const content = readFileSync(p, "utf-8");
-    return json ? JSON.parse(content) : content;
+    return json ? JSON.parse(content) as unknown : content;
   } catch (e) {
     warn(e);
     return undefined;
@@ -77,20 +84,13 @@ export function readContextSidecar(cwd: string, dir: string, runId: string, json
 }
 
 /** Enumerate run-ids by directory listing; newest first (slug sorts chronologically). */
-export function listRunIds(cwd: string, dir: string): string[] {
-  try {
-    return readdirSync(runsDir(cwd, dir), { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name)
-      .sort()
-      .reverse();
-  } catch {
-    return [];
-  }
+export async function listRunIds(cwd: string, dir: string): Promise<string[]> {
+  return await failSoft(() => listDirectoriesSorted(runsDir(cwd, dir)), [], { warn: false });
 }
 
 /** `@latest` / explicit id resolution. */
-export function resolveRunId(cwd: string, dir: string, ref: string): string | undefined {
-  if (ref === "@latest") return listRunIds(cwd, dir)[0];
-  return listRunIds(cwd, dir).includes(ref) ? ref : undefined;
+export async function resolveRunId(cwd: string, dir: string, ref: string): Promise<string | undefined> {
+  const ids = await listRunIds(cwd, dir);
+  if (ref === "@latest") return ids[0];
+  return ids.includes(ref) ? ref : undefined;
 }

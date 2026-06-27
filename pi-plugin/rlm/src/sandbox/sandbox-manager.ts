@@ -9,11 +9,11 @@ import type { ReplResult } from "./protocol.ts";
 
 /** Static configuration for sandbox creation — set once, reused across getOrCreate calls. */
 export interface SandboxManagerConfig {
-  execTimeoutS: number;
-  requestTimeoutMs: number;
-  python: string;
-  sandboxInitTimeoutMs: number;
-  signal?: AbortSignal;
+  readonly execTimeoutS: number;
+  readonly requestTimeoutMs: number;
+  readonly python: string;
+  readonly sandboxInitTimeoutMs: number;
+  readonly signal?: AbortSignal;
 }
 
 export class SandboxManager {

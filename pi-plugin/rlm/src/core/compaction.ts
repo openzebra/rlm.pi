@@ -19,11 +19,11 @@ const SUMMARY_REQUEST =
   "(3) your next action. Be concise (1–3 paragraphs) but preserve all key results.";
 
 export interface CompactionDeps {
-  model: Model<Api>;
-  registry: ModelRegistry;
-  contextWindow?: number;
-  thresholdPct?: number;
-  signal?: AbortSignal;
+  readonly model: Model<Api>;
+  readonly registry: ModelRegistry;
+  readonly contextWindow?: number;
+  readonly thresholdPct?: number;
+  readonly signal?: AbortSignal;
 }
 
 /** True if the history is at/over the compaction threshold. */

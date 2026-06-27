@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   isInterrupt,
+  isWorkerMessage,
   type AskAnswer,
   type AskQuestion,
   type ParentMessage,
@@ -23,6 +24,7 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "./protocol.ts";
+import { formatError } from "../util/errors.ts";
 
 /** Handlers the bridge installs to service sub-LLM interrupts. Return the reply payload. */
 export interface SubLlmHandlers {
@@ -37,19 +39,19 @@ export interface SubLlmHandlers {
 
 export interface SandboxOptions {
   /** Sandbox recursion depth label (passed to the worker, used in interrupt routing). */
-  depth?: number;
+  readonly depth?: number;
   /** Per-`repl`-block wall-clock timeout inside the worker (seconds). */
-  execTimeoutS?: number;
+  readonly execTimeoutS?: number;
   /** Parent-side watchdog per request (ms); on breach the worker is SIGKILLed. */
-  requestTimeoutMs?: number;
+  readonly requestTimeoutMs?: number;
   /** Python executable. */
-  python?: string;
+  readonly python?: string;
   /** Handlers for sub-LLM interrupts. Defaults reject (Phase 1 has no bridge yet). */
-  handlers?: Partial<SubLlmHandlers>;
+  readonly handlers?: Partial<SubLlmHandlers>;
   /** AbortSignal — immediate SIGKILL on abort, bypassing the shutdown handshake. */
-  signal?: AbortSignal;
+  readonly signal?: AbortSignal;
   /** Worker startup wait before init failure (ms). */
-  initTimeoutMs?: number;
+  readonly initTimeoutMs?: number;
 }
 
 const WORKER_PATH = join(dirname(fileURLToPath(import.meta.url)), "worker.py");
@@ -67,28 +69,28 @@ function sanitizedEnv(): NodeJS.ProcessEnv {
 }
 
 const REJECT: SubLlmHandlers = {
-  llmQuery: async () => "Error: sub-LLM bridge not configured",
-  llmQueryBatched: async (p) => p.map(() => "Error: sub-LLM bridge not configured"),
-  rlmQuery: async () => "Error: sub-LLM bridge not configured",
-  rlmQueryBatched: async (p) => p.map(() => "Error: sub-LLM bridge not configured"),
-  advancePhase: async () => "Error: phase advancement not available",
+  llmQuery: async () => formatError("sub-LLM bridge not configured"),
+  llmQueryBatched: async (p) => p.map(() => formatError("sub-LLM bridge not configured")),
+  rlmQuery: async () => formatError("sub-LLM bridge not configured"),
+  rlmQueryBatched: async (p) => p.map(() => formatError("sub-LLM bridge not configured")),
+  advancePhase: async () => formatError("phase advancement not available"),
   askUserQuestion: async (questions) => questions.map((q) => ({
     question: q.question,
     selected: [],
-    custom: "Error: ask_user_question not configured",
+    custom: formatError("ask_user_question not configured"),
   })),
-  todo: async () => "Error: todo not configured",
+  todo: async () => formatError("todo not configured"),
 };
 
 /** Distributive omit so each union member keeps its own fields (plain Omit collapses to shared keys). */
 type RequestBody = WorkerRequest extends infer T ? (T extends { id: string } ? Omit<T, "id"> : never) : never;
 
-interface Pending {
-  resolve(res: WorkerResponse): void;
-  reject(err: Error): void;
+type Pending = {
+  readonly resolve: (res: WorkerResponse) => void;
+  readonly reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
-  requestType: string;
-}
+  readonly requestType: string;
+};
 
 export class PythonSandbox {
   private proc: ChildProcessWithoutNullStreams;
@@ -281,7 +283,9 @@ export class PythonSandbox {
       this.scanOffset = nl + 1;
       if (line) {
         try {
-          this.dispatch(JSON.parse(line) as WorkerMessage);
+          const message = JSON.parse(line) as unknown;
+          if (isWorkerMessage(message)) this.dispatch(message);
+          else this.stderr = `${this.stderr}\n[protocol] skipped invalid stdout message: ${line.slice(0, 200)}`.slice(-8192);
         } catch {
           // Non-JSON line on the protocol stream — likely a subprocess writing to fd 1.
           // Skip it so a rogue write doesn't kill the pump, but retain a breadcrumb for watchdog errors.

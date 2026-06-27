@@ -112,3 +112,6 @@ export const isTerminal = (r: unknown): r is TerminalRow => hasKind(r, "terminal
 
 export const isPhase = (r: unknown): r is PhaseRow =>
   hasKind(r, "phase") && typeof (r as PhaseRow).phase === "string" && typeof (r as PhaseRow).turn === "number";
+
+export const isRow = (r: unknown): r is Row =>
+  isHeader(r) || isTurn(r) || isCompaction(r) || isTodo(r) || isTerminal(r) || isPhase(r);

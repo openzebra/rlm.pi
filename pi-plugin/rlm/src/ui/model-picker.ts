@@ -7,8 +7,8 @@ import { Container, type Component, type SelectItem, SelectList, Text, truncateT
 import { formatCost } from "./theme.ts";
 
 export interface ModelSelection {
-  model: Model<Api>;
-  thinkingLevel?: ThinkingLevel;
+  readonly model: Model<Api>;
+  readonly thinkingLevel?: ThinkingLevel;
 }
 
 const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;

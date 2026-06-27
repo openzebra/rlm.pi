@@ -11,23 +11,23 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 export type Role = "system" | "user" | "assistant";
 export interface ChatMsg {
-  role: Role;
-  content: string;
+  readonly role: Role;
+  readonly content: string;
 }
 
 export interface CompleteOptions {
-  model: Model<Api>;
-  registry: ModelRegistry;
-  system?: string;
-  maxTokens?: number;
-  temperature?: number;
-  reasoning?: ThinkingLevel;
-  signal?: AbortSignal;
+  readonly model: Model<Api>;
+  readonly registry: ModelRegistry;
+  readonly system?: string;
+  readonly maxTokens?: number;
+  readonly temperature?: number;
+  readonly reasoning?: ThinkingLevel;
+  readonly signal?: AbortSignal;
 }
 
 export interface CompleteResult {
-  text: string;
-  usage: Usage;
+  readonly text: string;
+  readonly usage: Usage;
 }
 
 /** Build a synthetic AssistantMessage (pi-ai requires the full shape for history replay). */
@@ -44,7 +44,7 @@ function assistantMessage(text: string, model: Model<Api>): Message {
   };
 }
 
-function toPiMessages(messages: ChatMsg[], model: Model<Api>): { systemPrompt?: string; messages: Message[] } {
+function toPiMessages(messages: readonly ChatMsg[], model: Model<Api>): { readonly systemPrompt?: string; readonly messages: Message[] } {
   let systemPrompt: string | undefined;
   const out: Message[] = [];
   for (const m of messages) {
@@ -60,14 +60,14 @@ function toPiMessages(messages: ChatMsg[], model: Model<Api>): { systemPrompt?: 
 }
 
 /** Extract the assistant's plain text from a completion. */
-function extractText(content: { type: string; text?: string }[]): string {
+function extractText(content: readonly { readonly type: string; readonly text?: string }[]): string {
   return content
     .filter((c) => c.type === "text" && typeof c.text === "string")
     .map((c) => c.text)
     .join("");
 }
 
-export async function modelComplete(messages: ChatMsg[], opts: CompleteOptions): Promise<CompleteResult> {
+export async function modelComplete(messages: readonly ChatMsg[], opts: CompleteOptions): Promise<CompleteResult> {
   const auth = await opts.registry.getApiKeyAndHeaders(opts.model);
   if (!auth.ok) throw new Error(`auth for ${opts.model.provider}/${opts.model.id}: ${auth.error}`);
 

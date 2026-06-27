@@ -6,16 +6,12 @@
  * and ReplDetails type structure.
  */
 
+import { check, fail, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
 import { formatForLLM } from "../src/context/repomix-context.ts";
 import { buildNativeSystemPrompt } from "../src/prompts/system.ts";
 import type { ContextBundle } from "../src/context/repomix-context.ts";
 
-let failures = 0;
-function check(name: string, cond: boolean, extra = "") {
-  console.log(`${cond ? "✓" : "✗"} ${name}${extra ? `  — ${extra}` : ""}`);
-  if (!cond) failures++;
-}
 
 // ── formatForLLM tests ──
 
@@ -114,11 +110,11 @@ async function main() {
     await testSandboxManager();
   } catch (err) {
     console.error("SandboxManager tests failed:", err instanceof Error ? err.message : String(err));
-    failures++;
+    fail();
   }
 
-  console.log(`\n${failures === 0 ? "✓ All tests passed" : `✗ ${failures} failure(s)`}`);
-  process.exit(failures > 0 ? 1 : 0);
+  console.log(`\n${failureCount() === 0 ? "✓ All tests passed" : `✗ ${failureCount()} failure(s)`}`);
+  process.exit(failureCount() > 0 ? 1 : 0);
 }
 
 main();

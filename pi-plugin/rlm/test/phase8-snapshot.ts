@@ -5,17 +5,13 @@
  * Requires: python3 on PATH
  */
 
+import { check, failureCount } from "./helpers.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 
-let failures = 0;
-function check(name: string, cond: boolean, extra = ""): void {
-  console.log(`${cond ? "✓" : "✗"} ${name}${extra ? `  — ${extra}` : ""}`);
-  if (!cond) failures++;
-}
 
 async function main(): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), "rlm-phase8-snapshot-"));
@@ -48,8 +44,8 @@ async function main(): Promise<void> {
     rmSync(tmp, { recursive: true, force: true });
   }
 
-  console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
-  process.exit(failures === 0 ? 0 : 1);
+  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
+  process.exit(failureCount() === 0 ? 0 : 1);
 }
 
 main().catch((err) => { console.error("FATAL", err); process.exit(1); });

@@ -32,7 +32,7 @@ export async function runRlmConfig(pi: ExtensionAPI, controller: RlmController, 
   const effectiveWorker = controller.workerModel ?? cheapestModel(ctx.modelRegistry);
   controller.savedSmartRef = modelRef(controller.smartModel) ?? modelRef(effectiveSmart);
   controller.savedWorkerRef = modelRef(controller.workerModel) ?? modelRef(effectiveWorker);
-  const persisted = controller.persist();
+  const persisted = await controller.persist();
   if (!persisted) ctx.ui.notify("RLM: failed to save settings to ~/.pi/agent/rlm.json", "error");
   setRlmModeStatus(ctx.ui, controller);
 

@@ -1,3 +1,5 @@
+import { formatError } from "../util/errors.ts";
+
 type TaskStatus = "pending" | "in_progress" | "completed" | "deleted";
 
 interface Task {
@@ -10,6 +12,20 @@ interface Task {
   readonly owner?: string;
 }
 
+interface TodoParams {
+  readonly id?: number;
+  readonly subject?: string;
+  readonly description?: string;
+  readonly status?: TaskStatus;
+  readonly activeForm?: string;
+  readonly blockedBy?: readonly number[];
+  readonly addBlockedBy?: readonly number[];
+  readonly removeBlockedBy?: readonly number[];
+  readonly owner?: string;
+  readonly filterStatus?: string;
+  readonly includeDeleted?: boolean;
+}
+
 const TODO_STATUSES = Object.freeze(new Set<unknown>(["pending", "in_progress", "completed", "deleted"]));
 
 function isTaskStatus(value: unknown): value is TaskStatus {
@@ -20,17 +36,33 @@ function numericArray(value: unknown): readonly number[] | undefined {
   return Array.isArray(value) ? Object.freeze(value.filter((n): n is number => typeof n === "number")) : undefined;
 }
 
-function patchedBlockedBy(task: Task, params: Record<string, unknown>): readonly number[] | undefined {
-  const replacement = numericArray(params.blockedBy);
-  if (replacement) return replacement;
+function toTodoParams(raw: Record<string, unknown>): TodoParams {
+  const blockedBy = numericArray(raw.blockedBy);
+  const addBlockedBy = numericArray(raw.addBlockedBy);
+  const removeBlockedBy = numericArray(raw.removeBlockedBy);
+  return Object.freeze({
+    ...(typeof raw.id === "number" ? { id: raw.id } : {}),
+    ...(typeof raw.subject === "string" ? { subject: raw.subject } : {}),
+    ...(typeof raw.description === "string" ? { description: raw.description } : {}),
+    ...(isTaskStatus(raw.status) ? { status: raw.status } : {}),
+    ...(typeof raw.activeForm === "string" ? { activeForm: raw.activeForm } : {}),
+    ...(blockedBy ? { blockedBy } : {}),
+    ...(addBlockedBy ? { addBlockedBy } : {}),
+    ...(removeBlockedBy ? { removeBlockedBy } : {}),
+    ...(typeof raw.owner === "string" ? { owner: raw.owner } : {}),
+    ...(typeof raw.filterStatus === "string" ? { filterStatus: raw.filterStatus } : {}),
+    ...(raw.includeDeleted === true ? { includeDeleted: true } : {}),
+  });
+}
+
+function patchedBlockedBy(task: Task, params: TodoParams): readonly number[] | undefined {
+  if (params.blockedBy) return params.blockedBy;
 
   let next = task.blockedBy ?? Object.freeze([] as readonly number[]);
-  const additions = numericArray(params.addBlockedBy);
-  if (additions) next = Object.freeze([...next, ...additions]);
+  if (params.addBlockedBy) next = Object.freeze([...next, ...params.addBlockedBy]);
 
-  const removals = numericArray(params.removeBlockedBy);
-  if (removals) {
-    const removeSet = new Set(removals);
+  if (params.removeBlockedBy) {
+    const removeSet = new Set(params.removeBlockedBy);
     next = Object.freeze(next.filter((n) => !removeSet.has(n)));
   }
   return next.length ? next : undefined;
@@ -45,16 +77,16 @@ function taskLines(task: Task): readonly string[] {
   return lines;
 }
 
-function withPatch(task: Task, params: Record<string, unknown>): Task {
+function withPatch(task: Task, params: TodoParams): Task {
   const blockedBy = patchedBlockedBy(task, params);
   return Object.freeze({
     ...task,
-    ...(typeof params.subject === "string" ? { subject: params.subject } : {}),
-    ...(typeof params.description === "string" ? { description: params.description } : {}),
-    ...(isTaskStatus(params.status) ? { status: params.status } : {}),
-    ...(typeof params.activeForm === "string" ? { activeForm: params.activeForm } : {}),
+    ...(params.subject !== undefined ? { subject: params.subject } : {}),
+    ...(params.description !== undefined ? { description: params.description } : {}),
+    ...(params.status !== undefined ? { status: params.status } : {}),
+    ...(params.activeForm !== undefined ? { activeForm: params.activeForm } : {}),
     ...(blockedBy ? { blockedBy } : {}),
-    ...(typeof params.owner === "string" ? { owner: params.owner } : {}),
+    ...(params.owner !== undefined ? { owner: params.owner } : {}),
   });
 }
 
@@ -63,7 +95,8 @@ export function createTodoFallback(): (action: string, params: Record<string, un
   let tasks: readonly Task[] = Object.freeze([]);
   const fmt = (task: Task): string => taskLines(task)[0] ?? `#${task.id}`;
 
-  const apply = (action: string, params: Record<string, unknown>): string => {
+  const apply = (action: string, rawParams: Record<string, unknown>): string => {
+    const params = toTodoParams(rawParams);
     if (action === "clear") {
       const count = tasks.length;
       tasks = Object.freeze([]);
@@ -72,21 +105,21 @@ export function createTodoFallback(): (action: string, params: Record<string, un
     }
     if (action === "create") {
       const subject = typeof params.subject === "string" && params.subject.trim() ? params.subject.trim() : undefined;
-      if (!subject) return "Error: create requires subject";
+      if (!subject) return formatError("create requires subject");
       const task = withPatch(Object.freeze({ id: nextId, subject, status: "pending" }), params);
       nextId += 1;
       tasks = Object.freeze([...tasks, task]);
       return `Created ${fmt(task)}`;
     }
     if (action === "list") {
-      const filter = typeof params.filterStatus === "string" ? params.filterStatus : typeof params.status === "string" ? params.status : undefined;
+      const filter = params.filterStatus ?? params.status;
       const includeDeleted = params.includeDeleted === true;
       const rows = tasks.filter((task) => (includeDeleted || task.status !== "deleted") && (!filter || task.status === filter)).map(fmt);
       return rows.length ? rows.join("\n") : "No tasks.";
     }
-    const id = typeof params.id === "number" ? params.id : undefined;
+    const id = params.id;
     const task = id !== undefined ? tasks.find((item) => item.id === id) : undefined;
-    if (!task) return `Error: task #${id ?? "?"} not found`;
+    if (!task) return formatError(`task #${id ?? "?"} not found`);
     if (action === "get") return taskLines(task).join("\n");
     if (action === "delete") {
       const deleted = Object.freeze({ ...task, status: "deleted" as const });
@@ -98,7 +131,7 @@ export function createTodoFallback(): (action: string, params: Record<string, un
       tasks = Object.freeze(tasks.map((item) => item.id === task.id ? updated : item));
       return `Updated ${fmt(updated)}`;
     }
-    return `Error: unknown todo action '${action}'`;
+    return formatError(`unknown todo action '${action}'`);
   };
   return async (action, params) => apply(action, params);
 }

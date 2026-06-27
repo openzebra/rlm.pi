@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { InteractiveDeps } from "../core/types.ts";
 import type { AskAnswer, AskQuestion } from "../sandbox/protocol.ts";
+import { formatError } from "../util/errors.ts";
 import { createTodoFallback } from "./fallback-todo.ts";
 
 interface ToolInvoker {
@@ -32,7 +33,7 @@ async function askViaUi(ctx: ExtensionContext, questions: readonly AskQuestion[]
   for (let i = 0; i < questions.length; i++) {
     const q = questions[i];
     if (!q) {
-      answers[i] = { question: "", selected: [], custom: "Error: malformed question" };
+      answers[i] = { question: "", selected: [], custom: formatError("malformed question") };
       continue;
     }
     if (q.multiSelect) {
@@ -46,7 +47,7 @@ async function askViaUi(ctx: ExtensionContext, questions: readonly AskQuestion[]
       continue;
     }
     const pick = await ctx.ui.select(`${q.header}: ${q.question}`, [...q.options.map((o) => o.label), "Type something."]);
-    if (!pick) answers[i] = { question: q.question, selected: [], custom: "Error: user cancelled" };
+    if (!pick) answers[i] = { question: q.question, selected: [], custom: formatError("user cancelled") };
     else if (pick === "Type something.") answers[i] = { question: q.question, selected: [], custom: await ctx.ui.input(q.question) ?? "" };
     else answers[i] = { question: q.question, selected: [pick] };
   }

@@ -3,6 +3,7 @@
  * Run: bun run pi-plugin/rlm/test/phase1.ts
  */
 
+import { check, failureCount } from "./helpers.ts";
 import { RlmController } from "../src/mode/rlm-mode.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { loadSettings, mergeConfig, saveSettings } from "../src/config/settings.ts";
@@ -11,11 +12,6 @@ import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { buildMetadataLine, buildRlmSystemPrompt } from "../src/prompts/system.ts";
 import { findReplBlocks, truncateOutput } from "../src/text/parsing.ts";
 
-let failures = 0;
-function check(name: string, cond: boolean, extra = "") {
-  console.log(`${cond ? "✓" : "✗"} ${name}${extra ? `  — ${extra}` : ""}`);
-  if (!cond) failures++;
-}
 
 async function main() {
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -169,19 +165,19 @@ async function main() {
 
   // Settings round-trip covers persisted model refs, reasoning, security, and limits.
   {
-    const previous = loadSettings();
+    const previous = await loadSettings();
     const config = mergeConfig({
       ...DEFAULT_CONFIG,
       smartReasoning: "high",
       subSampling: { ...DEFAULT_CONFIG.subSampling, reasoning: "low" },
     });
-    const saved = saveSettings({ config, smart: "test/smart", worker: "test/worker" });
-    const loaded = loadSettings();
+    const saved = await saveSettings({ config, smart: "test/smart", worker: "test/worker" });
+    const loaded = await loadSettings();
     const roundTrip = mergeConfig(loaded.config);
     check("settings save reports success", saved);
     check("settings round-trips model refs", loaded.smart === "test/smart" && loaded.worker === "test/worker");
     check("settings round-trips reasoning", roundTrip.smartReasoning === "high" && roundTrip.subSampling.reasoning === "low");
-    saveSettings(previous);
+    await saveSettings(previous);
   }
 
   // --- Controller toggle() unit test: turning OFF aborts an active run ---
@@ -198,8 +194,8 @@ async function main() {
   }
 
   await sandbox.dispose();
-  console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
-  process.exit(failures === 0 ? 0 : 1);
+  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
+  process.exit(failureCount() === 0 ? 0 : 1);
 }
 
 main().catch((e) => {

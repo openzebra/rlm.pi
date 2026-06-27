@@ -6,16 +6,16 @@
  */
 
 export interface PromptMeta {
-  contextType: string;
-  contextChars: number;
-  rootPrompt?: string;
+  readonly contextType: string;
+  readonly contextChars: number;
+  readonly rootPrompt?: string;
 }
 
 export interface SystemPromptOptions {
-  orchestrator?: boolean;
-  recursion?: boolean;
-  askUserQuestion?: boolean;
-  todo?: boolean;
+  readonly orchestrator?: boolean;
+  readonly recursion?: boolean;
+  readonly askUserQuestion?: boolean;
+  readonly todo?: boolean;
 }
 
 function howToRunCode(): string {

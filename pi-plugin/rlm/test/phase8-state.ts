@@ -4,6 +4,7 @@
  * Run: bun run pi-plugin/rlm/test/phase8-state.ts
  */
 
+import { check, failureCount } from "./helpers.ts";
 import { mkdtempSync, rmSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,11 +12,6 @@ import { appendRow, generateRunId, reconstructRlmState, runDir } from "../src/st
 import type { RunHeader, TurnRow, CompactionRow } from "../src/state/rows.ts";
 import { STATE_SCHEMA_VERSION } from "../src/state/rows.ts";
 
-let failures = 0;
-function check(name: string, cond: boolean, extra = ""): void {
-  console.log(`${cond ? "✓" : "✗"} ${name}${extra ? `  — ${extra}` : ""}`);
-  if (!cond) failures++;
-}
 
 async function main(): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), "rlm-phase8-state-"));
@@ -32,19 +28,19 @@ async function main(): Promise<void> {
       models: { smart: "deepseek/deepseek-v4-pro", worker: "deepseek/deepseek-v4-flash" },
       meta: { maxIterations: 30, maxDepth: 2, orchestrator: true },
     };
-    check("header written", appendRow(cwd, dir, runId, header));
+    check("header written", await appendRow(cwd, dir, runId, header));
 
     const t1: TurnRow = { kind: "turn", turn: 1, ts: new Date().toISOString(), response: "Let me check.", replOutputs: "[block 1]\nlist 3", error: false, usage: { costUsd: 0.01, inputTokens: 100, outputTokens: 50 }, cumulativeDurationMs: 1000, snapshotOk: true };
-    check("turn 1 appended", appendRow(cwd, dir, runId, t1));
+    check("turn 1 appended", await appendRow(cwd, dir, runId, t1));
     const t2: TurnRow = { kind: "turn", turn: 2, ts: new Date().toISOString(), response: "Found something.", replOutputs: "[block 1]\nsome output", answerContent: "partial", edits: [{ path: "a.ts", oldText: "old", newText: "new" }], error: false, usage: { costUsd: 0.02, inputTokens: 200, outputTokens: 100 }, cumulativeDurationMs: 2500, snapshotOk: true };
-    check("turn 2 appended", appendRow(cwd, dir, runId, t2));
+    check("turn 2 appended", await appendRow(cwd, dir, runId, t2));
     const t3: TurnRow = { kind: "turn", turn: 3, ts: new Date().toISOString(), response: "Final answer.", replOutputs: "[block 1]\nfinal output", answerContent: "THE ANSWER", error: false, usage: { costUsd: 0.03, inputTokens: 150, outputTokens: 75 }, cumulativeDurationMs: 5000, snapshotOk: false };
-    check("turn 3 appended", appendRow(cwd, dir, runId, t3));
+    check("turn 3 appended", await appendRow(cwd, dir, runId, t3));
 
     const comp: CompactionRow = { kind: "compaction", turn: 3, ts: new Date().toISOString(), history: [{ role: "system", content: systemPrompt }, { role: "assistant", content: "Summary." }, { role: "user", content: "Continue." }], usage: { costUsd: 0.005, inputTokens: 80, outputTokens: 20 } };
-    check("compaction appended", appendRow(cwd, dir, runId, comp));
+    check("compaction appended", await appendRow(cwd, dir, runId, comp));
 
-    const recon = reconstructRlmState(cwd, dir, runId, systemPrompt);
+    const recon = await reconstructRlmState(cwd, dir, runId, systemPrompt);
     check("fold ok", recon.ok);
     if (recon.ok) {
       check("completedTurns = 3", recon.completedTurns === 3, String(recon.completedTurns));
@@ -61,26 +57,26 @@ async function main(): Promise<void> {
 
     // Corrupt trailing line — tolerated
     appendFileSync(join(runDir(cwd, dir, runId), "trail.jsonl"), "{ broken\n", "utf-8");
-    const recon2 = reconstructRlmState(cwd, dir, runId, systemPrompt);
+    const recon2 = await reconstructRlmState(cwd, dir, runId, systemPrompt);
     check("trailing garbage tolerated", recon2.ok);
 
     // Version mismatch
     const runId2 = generateRunId();
     const headerV999: RunHeader = { ...header, v: 999, runId: runId2 };
-    appendRow(cwd, dir, runId2, headerV999);
-    const recon3 = reconstructRlmState(cwd, dir, runId2, systemPrompt);
+    await appendRow(cwd, dir, runId2, headerV999);
+    const recon3 = await reconstructRlmState(cwd, dir, runId2, systemPrompt);
     check("version mismatch fails", !recon3.ok && recon3.reason === "version-mismatch");
 
     // No header
     const runId3 = generateRunId();
-    const recon4 = reconstructRlmState(cwd, dir, runId3, systemPrompt);
+    const recon4 = await reconstructRlmState(cwd, dir, runId3, systemPrompt);
     check("no header fails", !recon4.ok && recon4.reason === "no-header");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 
-  console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
-  process.exit(failures === 0 ? 0 : 1);
+  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
+  process.exit(failureCount() === 0 ? 0 : 1);
 }
 
 main().catch((err) => { console.error("FATAL", err); process.exit(1); });

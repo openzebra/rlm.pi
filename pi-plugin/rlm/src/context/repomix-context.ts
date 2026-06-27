@@ -13,6 +13,7 @@ import { pack } from "repomix";
 import type { PackResult as RepomixPackResult } from "repomix";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { errorMessage } from "../util/errors.ts";
 
 // ── Public types ──
 
@@ -138,14 +139,14 @@ export async function packRepository(
       }),
     ]);
 
-    const totalFiles = result.totalFiles;
-    const files = new Array<ContextFile>(totalFiles);
+    const processedFiles = result.processedFiles;
+    const files = new Array<ContextFile>(processedFiles.length);
     const tokenCounts = result.fileTokenCounts;
     let totalTokens = 0;
     let totalChars = 0;
 
-    for (let i = 0; i < totalFiles; i++) {
-      const file = result.processedFiles[i]!;
+    for (let i = 0; i < processedFiles.length; i++) {
+      const file = processedFiles[i];
       const tokens = tokenCounts[file.path]
         ?? Math.ceil(file.content.length / ESTIMATED_CHARS_PER_TOKEN);
       files[i] = { path: file.path, content: file.content, tokens };
@@ -155,7 +156,7 @@ export async function packRepository(
 
     const bundle: ContextBundle = {
       files,
-      totalFiles,
+      totalFiles: files.length,
       totalTokens,
       totalChars,
     };
@@ -165,7 +166,7 @@ export async function packRepository(
     if (signal?.aborted) return { ok: false, error: "aborted" };
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     };
   }
 }
@@ -175,18 +176,16 @@ export function patchContextAfterEdits(
   edits: readonly { readonly path: string; readonly newContent: string }[],
 ): ContextBundle {
   const editMap = new Map<string, string>();
-  for (let i = 0; i < edits.length; i++) {
-    const edit = edits[i]!;
+  for (const edit of edits) {
     editMap.set(edit.path, edit.newContent);
   }
 
-  const totalFiles = cached.files.length;
-  const files = new Array<ContextFile>(totalFiles);
+  const files = new Array<ContextFile>(cached.files.length);
   let totalTokens = 0;
   let totalChars = 0;
 
-  for (let i = 0; i < totalFiles; i++) {
-    const file = cached.files[i]!;
+  for (let i = 0; i < cached.files.length; i++) {
+    const file = cached.files[i];
     const newContent = editMap.get(file.path);
     if (newContent !== undefined) {
       const tokens = Math.ceil(newContent.length / ESTIMATED_CHARS_PER_TOKEN);
@@ -202,7 +201,7 @@ export function patchContextAfterEdits(
 
   return {
     files,
-    totalFiles,
+    totalFiles: files.length,
     totalTokens,
     totalChars,
   };

@@ -5,6 +5,7 @@
  *   RLM_TEST_LIVE=1 bun run pi-plugin/rlm/test/phase3.ts # real end-to-end /rlm run
  */
 
+import { check, failureCount } from "./helpers.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -28,11 +29,6 @@ function capableModel(reg: ModelRegistryType) {
   return a.find((m) => m.provider === "deepseek" && m.id === "deepseek-v4-pro") ?? a[0];
 }
 
-let failures = 0;
-const check = (name: string, ok: boolean, extra = "") => {
-  console.log(`${ok ? "✓" : "✗"} ${name}${extra ? `  — ${extra}` : ""}`);
-  if (!ok) failures++;
-};
 
 async function main() {
   const authStorage = AuthStorage.create();
@@ -95,7 +91,7 @@ async function main() {
 
   // Limit-firing: a maxTokens:1 cap guarantees a LimitError on the first completion regardless of
   // model behaviour, proving the root guards fire (the engine stops with a partial/stop answer).
-  const baseCfg = mergeConfig(loadSettings().config);
+  const baseCfg = mergeConfig((await loadSettings()).config);
   const limEngine = createEngine({
     emitter: new RlmEmitter(),
     smartModel: model,
@@ -116,8 +112,8 @@ async function main() {
 }
 
 function finish() {
-  console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
-  process.exit(failures === 0 ? 0 : 1);
+  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
+  process.exit(failureCount() === 0 ? 0 : 1);
 }
 
 main().catch((e) => {

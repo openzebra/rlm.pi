@@ -1,16 +1,16 @@
 /** Persist RLM settings (tunable config + chosen smart/worker model ids). */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import type { RlmConfig, RunLogConfig, Sampling, TelemetryConfig } from "../core/types.ts";
+import type { RlmConfig, RunLogConfig, TelemetryConfig } from "../core/types.ts";
 import { DEFAULT_CONFIG } from "./defaults.ts";
 
 export interface PersistedSettings {
-  config: Partial<RlmConfig>;
-  smart?: string;
-  worker?: string;
+  readonly config: Partial<RlmConfig>;
+  readonly smart?: string;
+  readonly worker?: string;
 }
 
 type MutablePartialRlmConfig = { -readonly [K in keyof RlmConfig]?: RlmConfig[K] };
@@ -48,7 +48,7 @@ function validateTelemetry(raw: unknown): TelemetryConfig | undefined {
   if (experimentId !== undefined) out.experimentId = experimentId;
   const maxQueueSize = validateNumber(r.maxQueueSize, 1);
   if (maxQueueSize !== undefined) out.maxQueueSize = maxQueueSize;
-  return out;
+  return Object.freeze(out);
 }
 
 function validateRunLog(raw: unknown): Partial<RunLogConfig> | undefined {
@@ -61,8 +61,9 @@ function validateRunLog(raw: unknown): Partial<RunLogConfig> | undefined {
   if (dir !== undefined) out.dir = dir;
   const snapshot = validateBoolean(r.snapshot);
   if (snapshot !== undefined) out.snapshot = snapshot;
-  if (validateNumber(r.maxRuns, 1) !== undefined) out.maxRuns = r.maxRuns as number;
-  return Object.keys(out).length > 0 ? out : undefined;
+  const maxRuns = validateNumber(r.maxRuns, 1);
+  if (maxRuns !== undefined) out.maxRuns = maxRuns;
+  return Object.keys(out).length > 0 ? Object.freeze(out) : undefined;
 }
 
 function validateConfig(raw: unknown): Partial<RlmConfig> {
@@ -71,46 +72,61 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   const out: MutablePartialRlmConfig = {};
   const enabled = validateBoolean(r.enabled);
   if (enabled !== undefined) out.enabled = enabled;
-  if (validateNumber(r.maxDepth, 1) !== undefined) out.maxDepth = r.maxDepth as number;
-  if (validateNumber(r.maxIterations, 1) !== undefined) out.maxIterations = r.maxIterations as number;
-  if (validateNumber(r.execTimeoutS, 1) !== undefined) out.execTimeoutS = r.execTimeoutS as number;
-  if (validateNumber(r.requestTimeoutMs, 1000) !== undefined) out.requestTimeoutMs = r.requestTimeoutMs as number;
-  if (validateNumber(r.maxConcurrentSubcalls, 1) !== undefined) out.maxConcurrentSubcalls = r.maxConcurrentSubcalls as number;
-  if (validateNumber(r.maxPromptChars, 1000) !== undefined) out.maxPromptChars = r.maxPromptChars as number;
-  if (validateNumber(r.maxBudgetUsd, 0.01) !== undefined) out.maxBudgetUsd = r.maxBudgetUsd as number;
-  if (validateNumber(r.maxTimeoutMs, 1000) !== undefined) out.maxTimeoutMs = r.maxTimeoutMs as number;
-  if (validateNumber(r.maxTokens, 1) !== undefined) out.maxTokens = r.maxTokens as number;
-  if (validateNumber(r.maxErrors, 1) !== undefined) out.maxErrors = r.maxErrors as number;
+  const maxDepth = validateNumber(r.maxDepth, 1);
+  if (maxDepth !== undefined) out.maxDepth = maxDepth;
+  const maxIterations = validateNumber(r.maxIterations, 1);
+  if (maxIterations !== undefined) out.maxIterations = maxIterations;
+  const execTimeoutS = validateNumber(r.execTimeoutS, 1);
+  if (execTimeoutS !== undefined) out.execTimeoutS = execTimeoutS;
+  const requestTimeoutMs = validateNumber(r.requestTimeoutMs, 1000);
+  if (requestTimeoutMs !== undefined) out.requestTimeoutMs = requestTimeoutMs;
+  const maxConcurrentSubcalls = validateNumber(r.maxConcurrentSubcalls, 1);
+  if (maxConcurrentSubcalls !== undefined) out.maxConcurrentSubcalls = maxConcurrentSubcalls;
+  const maxPromptChars = validateNumber(r.maxPromptChars, 1000);
+  if (maxPromptChars !== undefined) out.maxPromptChars = maxPromptChars;
+  const maxBudgetUsd = validateNumber(r.maxBudgetUsd, 0.01);
+  if (maxBudgetUsd !== undefined) out.maxBudgetUsd = maxBudgetUsd;
+  const maxTimeoutMs = validateNumber(r.maxTimeoutMs, 1000);
+  if (maxTimeoutMs !== undefined) out.maxTimeoutMs = maxTimeoutMs;
+  const maxTokens = validateNumber(r.maxTokens, 1);
+  if (maxTokens !== undefined) out.maxTokens = maxTokens;
+  const maxErrors = validateNumber(r.maxErrors, 1);
+  if (maxErrors !== undefined) out.maxErrors = maxErrors;
   const orchestrator = validateBoolean(r.orchestrator);
   if (orchestrator !== undefined) out.orchestrator = orchestrator;
   const compaction = validateBoolean(r.compaction);
   if (compaction !== undefined) out.compaction = compaction;
-  if (validateNumber(r.compactionThresholdPct, 0) !== undefined && (r.compactionThresholdPct as number) <= 1) out.compactionThresholdPct = r.compactionThresholdPct as number;
-  if (typeof r.python === "string" && r.python.trim()) out.python = r.python;
+  const compactionThresholdPct = validateNumber(r.compactionThresholdPct, 0);
+  if (compactionThresholdPct !== undefined && compactionThresholdPct <= 1) out.compactionThresholdPct = compactionThresholdPct;
+  const python = validateString(r.python);
+  if (python !== undefined) out.python = python;
   if (typeof r.smartReasoning === "string") out.smartReasoning = r.smartReasoning as ThinkingLevel;
   const telemetry = validateTelemetry(r.telemetry);
   if (telemetry) out.telemetry = telemetry;
   const runLog = validateRunLog(r.runLog);
   if (runLog) out.runLog = runLog;
-  if (validateNumber(r.sandboxInitTimeoutMs, 100) !== undefined) out.sandboxInitTimeoutMs = r.sandboxInitTimeoutMs as number;
+  const sandboxInitTimeoutMs = validateNumber(r.sandboxInitTimeoutMs, 100);
+  if (sandboxInitTimeoutMs !== undefined) out.sandboxInitTimeoutMs = sandboxInitTimeoutMs;
   const askUserQuestion = validateBoolean(r.askUserQuestion);
   if (askUserQuestion !== undefined) out.askUserQuestion = askUserQuestion;
   const todo = validateBoolean(r.todo);
   if (todo !== undefined) out.todo = todo;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
     const ss = r.subSampling as Record<string, unknown>;
-    const sampling: Partial<Sampling> = {};
-    if (validateNumber(ss.maxTokens, 1) !== undefined) sampling.maxTokens = ss.maxTokens as number;
-    if (validateNumber(ss.temperature, 0) !== undefined) sampling.temperature = ss.temperature as number;
+    const sampling: { maxTokens?: number; temperature?: number; reasoning?: ThinkingLevel } = {};
+    const maxTokensValue = validateNumber(ss.maxTokens, 1);
+    if (maxTokensValue !== undefined) sampling.maxTokens = maxTokensValue;
+    const temperature = validateNumber(ss.temperature, 0);
+    if (temperature !== undefined) sampling.temperature = temperature;
     if (typeof ss.reasoning === "string") sampling.reasoning = ss.reasoning as ThinkingLevel;
-    out.subSampling = sampling as Sampling;
+    out.subSampling = sampling;
   }
   return out;
 }
 
-export function loadSettings(): PersistedSettings {
+export async function loadSettings(): Promise<PersistedSettings> {
   try {
-    const raw = JSON.parse(readFileSync(settingsPath(), "utf8")) as unknown;
+    const raw = JSON.parse(await readFile(settingsPath(), "utf8")) as unknown;
     if (typeof raw !== "object" || raw === null) return { config: {} };
     const r = raw as Record<string, unknown>;
     return {
@@ -123,11 +139,11 @@ export function loadSettings(): PersistedSettings {
   }
 }
 
-export function saveSettings(s: PersistedSettings): boolean {
+export async function saveSettings(s: PersistedSettings): Promise<boolean> {
   try {
     const p = settingsPath();
-    mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, `${JSON.stringify(s, null, 2)}\n`);
+    await mkdir(dirname(p), { recursive: true });
+    await writeFile(p, `${JSON.stringify(s, null, 2)}\n`);
     return true;
   } catch {
     return false;
@@ -140,8 +156,8 @@ export function mergeConfig(partial: Partial<RlmConfig>): RlmConfig {
     ...DEFAULT_CONFIG,
     ...partial,
     subSampling: { ...DEFAULT_CONFIG.subSampling, ...partial.subSampling },
-    ...(partial.telemetry ? { telemetry: { ...partial.telemetry } } : {}),
-    ...(partial.runLog ? { runLog: Object.freeze({ ...DEFAULT_CONFIG.runLog, ...partial.runLog }) } : {}), // QC: freeze to match DEFAULT_CONFIG
+    ...(partial.telemetry ? { telemetry: Object.freeze({ ...partial.telemetry }) } : {}),
+    ...(partial.runLog ? { runLog: Object.freeze({ ...DEFAULT_CONFIG.runLog, ...partial.runLog }) } : {}),
   };
 }
 

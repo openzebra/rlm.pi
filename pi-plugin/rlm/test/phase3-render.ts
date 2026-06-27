@@ -8,6 +8,7 @@
  * rendering verification.
  */
 
+import { check, failureCount } from "./helpers.ts";
 import { initTheme, Theme } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RlmController } from "../src/mode/rlm-mode.ts";
@@ -92,14 +93,17 @@ const fakeController = {
 } as unknown as RlmController;
 
 const tool = createRlmTool(fakeController);
+type RenderCallFn = NonNullable<typeof tool.renderCall>;
+type RenderResultFn = NonNullable<typeof tool.renderResult>;
+const renderCall: RenderCallFn = tool.renderCall ?? (() => { throw new Error("renderCall missing"); });
+const renderResult: RenderResultFn = tool.renderResult ?? (() => { throw new Error("renderResult missing"); });
+type RenderCallContext = Parameters<RenderCallFn>[2];
+type RenderResultContext = Parameters<RenderResultFn>[3];
+const renderCallContext = {} as RenderCallContext;
+const renderResultContext = {} as RenderResultContext;
 const RENDER_WIDTH = 120;
 
 // ── Helpers ──
-let failures = 0;
-function check(name: string, ok: boolean, extra = "") {
-  console.log(`${ok ? "✓" : "✗"} ${name}${extra ? `  — ${extra}` : ""}`);
-  if (!ok) failures++;
-}
 
 function render(component: { render(width: number): string[] }): string {
   return component.render(RENDER_WIDTH).join("\n");
@@ -160,7 +164,7 @@ const errorDetails: RlmDetails = {
 console.log("=== renderCall ===");
 
 {
-  const result = renderPlain(tool.renderCall!(params, theme, {} as any));
+  const result = renderPlain(renderCall(params, theme, renderCallContext));
   check("renderCall contains 'rlm' label", result.includes("rlm"));
   check("renderCall contains truncated prompt", result.includes("Build a React dashboard component"));
   // For strict snapshot, we check that long prompts are not fully rendered
@@ -173,11 +177,11 @@ console.log("=== renderCall ===");
 console.log("\n=== renderResult collapsed (done) ===");
 
 {
-  const result = createRlmTool(fakeController).renderResult!(
-    { content: [{ type: "text", text: completedDetails.answer! }], details: completedDetails } as AgentToolResult<RlmDetails>,
+  const result = renderResult(
+    { content: [{ type: "text", text: completedDetails.answer ?? "" }], details: completedDetails } as AgentToolResult<RlmDetails>,
     { expanded: false, isPartial: false },
     theme,
-    {} as any,
+    renderResultContext,
   );
   const text = renderPlain(result);
   console.log(`  output:\n${text}`);
@@ -210,11 +214,11 @@ console.log("\n=== renderResult collapsed (done) ===");
 console.log("\n=== renderResult expanded (done) ===");
 
 {
-  const result = createRlmTool(fakeController).renderResult!(
-    { content: [{ type: "text", text: completedDetails.answer! }], details: completedDetails } as AgentToolResult<RlmDetails>,
+  const result = renderResult(
+    { content: [{ type: "text", text: completedDetails.answer ?? "" }], details: completedDetails } as AgentToolResult<RlmDetails>,
     { expanded: true, isPartial: false },
     theme,
-    {} as any,
+    renderResultContext,
   );
   const text = renderPlain(result);
   console.log(`  output:\n${text}`);
@@ -245,11 +249,11 @@ console.log("\n=== renderResult expanded (done) ===");
 console.log("\n=== renderResult collapsed (running) ===");
 
 {
-  const result = createRlmTool(fakeController).renderResult!(
+  const result = renderResult(
     { content: [{ type: "text", text: "(running...)" }], details: runningDetails } as AgentToolResult<RlmDetails>,
     { expanded: false, isPartial: true },
     theme,
-    {} as any,
+    renderResultContext,
   );
   const text = renderPlain(result);
   console.log(`  output:\n${text}`);
@@ -263,11 +267,11 @@ console.log("\n=== renderResult collapsed (running) ===");
 console.log("\n=== renderResult collapsed (error) ===");
 
 {
-  const result = createRlmTool(fakeController).renderResult!(
+  const result = renderResult(
     { content: [{ type: "text", text: "RLM failed: rate limit exceeded" }], details: errorDetails } as AgentToolResult<RlmDetails>,
     { expanded: false, isPartial: false },
     theme,
-    {} as any,
+    renderResultContext,
   );
   const text = renderPlain(result);
   console.log(`  output:\n${text}`);
@@ -280,11 +284,11 @@ console.log("\n=== renderResult collapsed (error) ===");
 console.log("\n=== renderResult expanded (error) ===");
 
 {
-  const result = createRlmTool(fakeController).renderResult!(
+  const result = renderResult(
     { content: [{ type: "text", text: "RLM failed: rate limit exceeded" }], details: errorDetails } as AgentToolResult<RlmDetails>,
     { expanded: true, isPartial: false },
     theme,
-    {} as any,
+    renderResultContext,
   );
   const text = renderPlain(result);
   console.log(`  output:\n${text}`);
@@ -296,15 +300,15 @@ console.log("\n=== renderResult expanded (error) ===");
 console.log("\n=== renderResult null details ===");
 
 {
-  const result = createRlmTool(fakeController).renderResult!(
+  const result = renderResult(
     { content: [{ type: "text", text: "no details" }], details: undefined as unknown as RlmDetails } as AgentToolResult<RlmDetails>,
     { expanded: false, isPartial: false },
     theme,
-    {} as any,
+    renderResultContext,
   );
   const text = renderPlain(result);
   check("null details shows content text", text.includes("no details"));
 }
 
-console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
-process.exit(failures === 0 ? 0 : 1);
+console.log(`\n${failureCount() === 0 ? "ALL PASS" : `${failureCount()} FAILURE(S)`}`);
+process.exit(failureCount() === 0 ? 0 : 1);

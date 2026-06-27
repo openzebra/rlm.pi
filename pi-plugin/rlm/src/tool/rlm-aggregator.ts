@@ -15,9 +15,10 @@
 import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import type { RlmEmitter, TurnEvent, RootUsageEvent, AnswerEvent, EditsEvent, StatusEvent, RootPromptEvent } from "./rlm-events.ts";
 import type { RlmDetails, RlmRunStatus } from "./rlm-details.ts";
+import { EmitterListener } from "./emitter-listener.ts";
 import { SubcallStore } from "./subcall-store.ts";
 
-export class RlmEventAggregator {
+export class RlmEventAggregator extends EmitterListener {
   private readonly store: SubcallStore;
 
   // Root-level state
@@ -28,22 +29,21 @@ export class RlmEventAggregator {
   private answer?: string;
   private edits: RlmDetails["edits"] = [];
 
-  private readonly unsubs: (() => void)[];
-
   constructor(
     emitter: RlmEmitter,
     private readonly onChange?: AgentToolUpdateCallback<RlmDetails>,
   ) {
+    super();
     this.store = new SubcallStore(emitter, () => this.notify());
 
-    this.unsubs = [
+    this.trackAll([
       emitter.onTurn((e) => this.handleTurn(e)),
       emitter.onRootUsage((e) => this.handleRootUsage(e)),
       emitter.onAnswer((e) => this.handleAnswer(e)),
       emitter.onEdits((e) => this.handleEdits(e)),
       emitter.onStatus((e) => this.handleStatus(e)),
       emitter.onRootPrompt((e) => this.handleRootPrompt(e)),
-    ];
+    ]);
   }
 
   // ── Event handlers ──
@@ -97,9 +97,9 @@ export class RlmEventAggregator {
   // ── Lifecycle ──
 
   /** Detach all emitter listeners. Call after the run completes. */
-  dispose(): void {
+  override dispose(): void {
     this.store.dispose();
-    for (const unsub of this.unsubs) unsub();
+    super.dispose();
   }
 
   // ── Internal ──

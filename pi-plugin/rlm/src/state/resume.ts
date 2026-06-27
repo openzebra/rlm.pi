@@ -7,7 +7,7 @@
  * garbage from a crash is tolerated.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { type ChatMsg } from "../bridge/model.ts";
 import { appendUserMessage } from "../core/history.ts";
 import { buildTurnPrompt } from "../prompts/user.ts";
@@ -17,6 +17,7 @@ import {
   isCompaction,
   isHeader,
   isPhase,
+  isRow,
   isTerminal,
   isTodo,
   isTurn,
@@ -25,7 +26,7 @@ import {
   type RunHeader,
 } from "./rows.ts";
 import { trailPath, snapshotPath } from "./paths.ts";
-import { warn } from "./internal.ts";
+import { failSoft, pathExists } from "./internal.ts";
 
 export interface PhaseRecon {
   readonly current: string;
@@ -39,7 +40,7 @@ export type ReconstructResult =
       readonly header: RunHeader;
       readonly history: ChatMsg[];
       readonly pendingReplOutputs?: string;
-      readonly usageSeed: { costUsd: number; inputTokens: number; outputTokens: number; durationMs: number };
+      readonly usageSeed: { readonly costUsd: number; readonly inputTokens: number; readonly outputTokens: number; readonly durationMs: number };
       readonly best: string;
       readonly editsAcc: ProposedEdit[];
       readonly completedTurns: number;
@@ -54,23 +55,23 @@ export type ReconstructResult =
   | { readonly ok: false; readonly reason: "no-header" | "version-mismatch" | "no-turns" | "mid-file-hole"; readonly detail: string };
 
 /** QB: single read + parse — detects mid-file holes without reading the trail twice. */
-function readRowsStrict(cwd: string, dir: string, runId: string): { rows: Row[]; hole: boolean } {
-  let lines: string[];
-  try {
-    const p = trailPath(cwd, dir, runId);
-    if (!existsSync(p)) return { rows: [], hole: false };
-    const content = readFileSync(p, "utf-8").trim();
-    if (!content) return { rows: [], hole: false };
-    lines = content.split("\n");
-  } catch (e) {
-    warn(e);
-    return { rows: [], hole: false };
-  }
+async function readRowsStrict(cwd: string, dir: string, runId: string): Promise<{ readonly rows: Row[]; readonly hole: boolean }> {
+  const path = trailPath(cwd, dir, runId);
+  if (!await pathExists(path)) return { rows: [], hole: false };
+  const content = await failSoft(() => readFile(path, "utf-8"), undefined as string | undefined);
+  const trimmed = content?.trim();
+  if (!trimmed) return { rows: [], hole: false };
+
   const rows: Row[] = [];
   let sawBad = false;
-  for (const line of lines) {
+  for (const line of trimmed.split("\n")) {
     try {
-      rows.push(JSON.parse(line) as Row);
+      const row = JSON.parse(line) as unknown;
+      if (!isRow(row)) {
+        sawBad = true;
+        continue;
+      }
+      rows.push(row);
       if (sawBad) return { rows, hole: true }; // good line after a bad one = mid-file hole
     } catch {
       sawBad = true; // trailing bad line tolerated; a subsequent good line means a hole
@@ -79,20 +80,20 @@ function readRowsStrict(cwd: string, dir: string, runId: string): { rows: Row[];
   return { rows, hole: false };
 }
 
-export function reconstructRlmState(
+export async function reconstructRlmState(
   cwd: string,
   dir: string,
   runId: string,
   systemPrompt: string,
-): ReconstructResult {
-  const header = readHeader(cwd, dir, runId);
+): Promise<ReconstructResult> {
+  const header = await readHeader(cwd, dir, runId);
   if (!header) return { ok: false, reason: "no-header", detail: runId };
   // QB: ??1 backward-compat — when bumping STATE_SCHEMA_VERSION, also bump this default
   // so trails written without an explicit `v` field are rejected rather than silently passed.
   if ((header.v ?? 1) !== STATE_SCHEMA_VERSION)
     return { ok: false, reason: "version-mismatch", detail: `run ${runId} written under schema v${header.v}` };
 
-  const { rows, hole } = readRowsStrict(cwd, dir, runId);
+  const { rows, hole } = await readRowsStrict(cwd, dir, runId);
   if (hole) return { ok: false, reason: "mid-file-hole", detail: runId };
 
   let history: ChatMsg[] = [{ role: "system", content: systemPrompt }];
@@ -131,7 +132,7 @@ export function reconstructRlmState(
       if (row.edits && row.edits.length > 0) editsAcc = [...row.edits];
       completedTurns = row.turn;
       // R-C1: verify the per-turn snapshot file exists — a crashed finalize leaves the row claiming snapshotOk:true with no pkl.
-      if (row.snapshotOk && existsSync(snapshotPath(cwd, dir, runId, row.turn)))
+      if (row.snapshotOk && await pathExists(snapshotPath(cwd, dir, runId, row.turn)))
         snapshotTurn = row.turn;
       usageSeed.durationMs = row.cumulativeDurationMs; // C2: seed wall-clock
       pendingReplOutputs = row.replOutputs;

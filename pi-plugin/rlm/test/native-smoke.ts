@@ -12,17 +12,13 @@
  * Run: bun run pi-plugin/rlm/test/native-smoke.ts
  */
 
+import { check, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
 import { packRepository, formatForLLM, serializeForSandbox } from "../src/context/repomix-context.ts";
 import { buildNativeSystemPrompt, buildRlmSystemPrompt } from "../src/prompts/system.ts";
 import type { ContextBundle } from "../src/context/repomix-context.ts";
 import { contextLength, contextTypeLabel } from "../src/text/tokens.ts";
 
-let failures = 0;
-function check(name: string, cond: boolean, extra = "") {
-  console.log(`${cond ? "✓" : "✗"} ${name}${extra ? `  — ${extra}` : ""}`);
-  if (!cond) failures++;
-}
 
 // ── 1. repomix packs the project ──
 
@@ -100,8 +96,9 @@ print(f"first file tokens: {context[0]['tokens']}")
 `);
 check("REPL — context is a list", r1.stdout.includes("context type: <class 'list'>") || r1.stdout.includes("list"));
 check("REPL — context has items", r1.stdout.includes(`context length: ${bundle.totalFiles}`));
-check("REPL — first file path accessible", r1.stdout.includes(bundle.files[0]!.path));
-check("REPL — first file tokens accessible", r1.stdout.includes(String(bundle.files[0]!.tokens)));
+const firstFile = bundle.files[0];
+check("REPL — first file path accessible", firstFile !== undefined && r1.stdout.includes(firstFile.path));
+check("REPL — first file tokens accessible", firstFile !== undefined && r1.stdout.includes(String(firstFile.tokens)));
 
 // Context content is accessible
 const r2 = await mgr.exec(`
@@ -177,5 +174,5 @@ check("native prompt — includes tool table", nativeOnly.includes("Choosing Bet
 
 // ── Results ──
 
-console.log(`\n${failures === 0 ? "✓ All integration tests passed" : `✗ ${failures} failure(s)`}`);
-process.exit(failures > 0 ? 1 : 0);
+console.log(`\n${failureCount() === 0 ? "✓ All integration tests passed" : `✗ ${failureCount()} failure(s)`}`);
+process.exit(failureCount() > 0 ? 1 : 0);

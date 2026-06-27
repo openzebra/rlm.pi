@@ -8,15 +8,15 @@
 import type { SubcallKind } from "../tool/rlm-details.ts";
 
 export interface SubcallStart {
-  kind: SubcallKind;
-  depth: number;
-  parentId?: string;
-  model?: string;
-  label: string;
-  detail?: string;
-  args?: string;
+  readonly kind: SubcallKind;
+  readonly depth: number;
+  readonly parentId?: string;
+  readonly model?: string;
+  readonly label: string;
+  readonly detail?: string;
+  readonly args?: string;
   /** Run ID for the root node — lets MLflow correlate a resumed trace with the original. */
-  runId?: string;
+  readonly runId?: string;
   /** True when this is a resumed root node (not a fresh start). */
-  resume?: boolean;
+  readonly resume?: boolean;
 }

@@ -15,6 +15,7 @@ import type { InteractiveDeps, RlmConfig, RlmInput, RlmResult } from "../core/ty
 import type { ReconstructResult } from "../state/resume.ts";
 import { packRepository, serializeForSandbox } from "../context/repomix-context.ts";
 import { RlmEmitter } from "../tool/rlm-events.ts";
+import { formatError } from "../util/errors.ts";
 
 export function cheapestModel(registry: ModelRegistry): Model<Api> | undefined {
   const models = registry.getAvailable();
@@ -23,8 +24,8 @@ export function cheapestModel(registry: ModelRegistry): Model<Api> | undefined {
 }
 
 export interface RunHandle {
-  abort: () => void;
-  done: Promise<RlmResult>;
+  readonly abort: () => void;
+  readonly done: Promise<RlmResult>;
 }
 
 /** B5+SA: discriminated union removes non-null `!` assertions and the `context: ""` hack. */
@@ -47,7 +48,7 @@ export class RlmController {
 
   setEnabled(enabled: boolean): void {
     this.config.enabled = enabled;
-    this.persist();
+    void this.persist();
   }
 
   toggle(): boolean {
@@ -61,8 +62,8 @@ export class RlmController {
     return Boolean(this.savedSmartRef || this.savedWorkerRef || this.smartModel || this.workerModel);
   }
 
-  persist(): boolean {
-    return saveSettings({
+  async persist(): Promise<boolean> {
+    return await saveSettings({
       config: this.config,
       smart: modelRef(this.smartModel) ?? this.savedSmartRef,
       worker: modelRef(this.workerModel) ?? this.savedWorkerRef,
@@ -109,7 +110,7 @@ export class RlmController {
           if (result.ok) {
             contextValue = serializeForSandbox(result.value);
           } else {
-            contextValue = `Error: failed to pack repository — ${result.error}`;
+            contextValue = formatError(`failed to pack repository — ${result.error}`);
           }
         }
         engineInput = {

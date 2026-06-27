@@ -16,7 +16,7 @@ export type {
   PhaseRow,
   Row,
 } from "./rows.ts";
-export { STATE_SCHEMA_VERSION, isHeader, isTurn, isCompaction, isPhase, isTodo, isTerminal } from "./rows.ts";
+export { STATE_SCHEMA_VERSION, isHeader, isTurn, isCompaction, isPhase, isTodo, isTerminal, isRow } from "./rows.ts";
 export { appendRow, appendTodoRow, pruneRuns, writeContextSidecar } from "./writes.ts";
 export { readRows, readHeader, readContextSidecar, listRunIds, resolveRunId } from "./reads.ts";
 export { reconstructRlmState } from "./resume.ts";

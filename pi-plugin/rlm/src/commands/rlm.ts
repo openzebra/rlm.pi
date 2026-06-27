@@ -54,9 +54,9 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
       const ref = args.trim() || "@latest";
       const dir = controller.config.runLog?.dir ?? DEFAULT_RUN_DIR;
       const cwd = ctx.cwd ?? process.cwd();
-      const runId = resolveRunId(cwd, dir, ref);
+      const runId = await resolveRunId(cwd, dir, ref);
       if (!runId) { ctx.ui.notify(`No resumable RLM run for '${ref}'.`, "error"); return; }
-      const header = readHeader(cwd, dir, runId);
+      const header = await readHeader(cwd, dir, runId);
       if (!header) { ctx.ui.notify(`Run ${runId} has no header.`, "error"); return; }
       const systemPrompt = buildRlmSystemPrompt(
         { contextType: header.context.type, contextChars: header.context.chars, rootPrompt: header.rootPrompt },
@@ -68,14 +68,14 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
         },
       );
       let recon: ReconstructResult;
-      try { recon = reconstructRlmState(cwd, dir, runId, systemPrompt); }
+      try { recon = await reconstructRlmState(cwd, dir, runId, systemPrompt); }
       catch (e) {
         ctx.ui.notify(`RLM resume failed: corrupt run state — ${e instanceof Error ? e.message : String(e)}`, "error");
         return;
       }
       if (!recon.ok) { ctx.ui.notify(`Cannot resume ${runId}: ${recon.reason}.`, "error"); return; }
       if (recon.terminated) { ctx.ui.notify(`Run ${runId} already finished.`, "info"); return; }
-      const context = readContextSidecar(cwd, dir, runId, header.context.json);
+      const context = await readContextSidecar(cwd, dir, runId, header.context.json);
       if (context === undefined) // R-C2: warn instead of silently resuming on empty context
         ctx.ui.notify(`Warning: context sidecar missing for ${runId} — resuming without original context.`, "warning");
       await executeRlmRunWithResume(pi, controller, ctx, recon, header, context ?? "");
@@ -86,7 +86,7 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
     description: "List recent RLM runs.",
     handler: async (_args, ctx) => {
       const dir = controller.config.runLog?.dir ?? DEFAULT_RUN_DIR;
-      const ids = listRunIds(ctx.cwd ?? process.cwd(), dir).slice(0, 20);
+      const ids = (await listRunIds(ctx.cwd ?? process.cwd(), dir)).slice(0, 20);
       ctx.ui.notify(ids.length ? ids.join("\n") : "No RLM runs recorded.", "info");
     },
   });

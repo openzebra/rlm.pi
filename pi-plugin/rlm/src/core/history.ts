@@ -6,7 +6,7 @@ import type { ChatMsg } from "../bridge/model.ts";
 export function appendUserMessage(history: ChatMsg[], content: string): void {
   const last = history.at(-1);
   if (last?.role === "user") {
-    last.content = [last.content, content].join("\n\n");
+    history[history.length - 1] = { role: "user", content: [last.content, content].join("\n\n") };
     return;
   }
   history.push({ role: "user", content });

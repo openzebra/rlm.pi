@@ -13,42 +13,41 @@ export type SubcallStatus = "running" | "done" | "error";
 export type RlmRunStatus = "running" | "done" | "error" | "aborted";
 
 export interface RlmSubcall {
-  id: string;
+  readonly id: string;
   /** Parent subcall ID for recursive grouping (undefined = direct child of root). */
-  parentId?: string;
+  readonly parentId?: string;
   /** Recursion depth (0 = root tool call). */
-  depth: number;
-  kind: SubcallKind;
-  label: string;
-  model?: string;
-  status: SubcallStatus;
-  detail?: string;
-  args?: string;
-  resultPreview?: string;
-  startedAt: number;
-  endedAt?: number;
-  costUsd: number;
-  tokens: number;
+  readonly depth: number;
+  readonly kind: SubcallKind;
+  readonly label: string;
+  readonly model?: string;
+  readonly status: SubcallStatus;
+  readonly detail?: string;
+  readonly args?: string;
+  readonly resultPreview?: string;
+  readonly startedAt: number;
+  readonly endedAt?: number;
+  readonly costUsd: number;
+  readonly tokens: number;
 }
 
 export interface RlmDetails {
-  status: RlmRunStatus;
-  rootPrompt: string;
-  turns: { current: number; max: number };
-  subcalls: RlmSubcall[];
-  totals: { costUsd: number; tokens: number };
-  answer?: string;
-  edits?: ProposedEdit[];
+  readonly status: RlmRunStatus;
+  readonly rootPrompt: string;
+  readonly turns: { readonly current: number; readonly max: number };
+  readonly subcalls: readonly RlmSubcall[];
+  readonly totals: { readonly costUsd: number; readonly tokens: number };
+  readonly answer?: string;
+  readonly edits?: readonly ProposedEdit[];
 }
 
 export interface SubcallInit {
-  parentId?: string;
-  kind: SubcallKind;
-  label: string;
-  model?: string;
-  detail?: string;
-  args?: string;
+  readonly parentId?: string;
+  readonly kind: SubcallKind;
+  readonly label: string;
+  readonly model?: string;
+  readonly detail?: string;
+  readonly args?: string;
   /** Recursion depth. Required — all call sites pass this. */
-  depth: number;
+  readonly depth: number;
 }
-

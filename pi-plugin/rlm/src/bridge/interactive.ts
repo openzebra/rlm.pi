@@ -1,14 +1,15 @@
 import type { AskAnswer, AskQuestion } from "../sandbox/protocol.ts";
 import type { SubLlmHandlers } from "../sandbox/sandbox.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
+import { formatError } from "../util/errors.ts";
 
 export interface InteractiveBridgeOpts {
-  onAskUserQuestion?: (questions: readonly AskQuestion[]) => Promise<AskAnswer[]>;
-  onTodo?: (action: string, params: Record<string, unknown>) => Promise<string>;
-  onTodoRow?: (action: string, params: Record<string, unknown>, result: string) => void;
-  emitter?: RlmEmitter;
-  depth: number;
-  parentId?: string;
+  readonly onAskUserQuestion?: (questions: readonly AskQuestion[]) => Promise<AskAnswer[]>;
+  readonly onTodo?: (action: string, params: Record<string, unknown>) => Promise<string>;
+  readonly onTodoRow?: (action: string, params: Record<string, unknown>, result: string) => void | Promise<void>;
+  readonly emitter?: RlmEmitter;
+  readonly depth: number;
+  readonly parentId?: string;
 }
 
 export function buildInteractiveHandlers(opts: InteractiveBridgeOpts): {
@@ -20,7 +21,7 @@ export function buildInteractiveHandlers(opts: InteractiveBridgeOpts): {
       if (depth > 0) return questions.map((q) => ({
         question: q.question,
         selected: [],
-        custom: "Error: ask_user_question not available inside rlm_query sub-calls",
+        custom: formatError("ask_user_question not available inside rlm_query sub-calls"),
       }));
 
       const id = opts.emitter?.emitSubcallCreated({
@@ -52,7 +53,7 @@ export function buildInteractiveHandlers(opts: InteractiveBridgeOpts): {
         const cb = opts.onTodo;
         if (!cb) throw new Error("todo not configured (no onTodo callback)");
         const result = await cb(action, params);
-        opts.onTodoRow?.(action, params, result);
+        await opts.onTodoRow?.(action, params, result);
         if (id) opts.emitter?.emitSubcallUpdated({ id, status: "done", resultPreview: result.slice(0, 80) });
         return result;
       } catch (err) {

@@ -9,15 +9,15 @@
 import type { RlmSubcall } from "./rlm-details.ts";
 
 export interface ReplDetails {
-  status: "running" | "done" | "error";
+  readonly status: "running" | "done" | "error";
   /** stdout from the Python execution. */
-  output: string;
+  readonly output: string;
   /** stderr from the Python execution. */
-  stderr: string;
+  readonly stderr: string;
   /** Wall-clock execution time in milliseconds. */
-  executionTimeMs: number;
+  readonly executionTimeMs: number;
   /** Sub-calls triggered during this execution (llm_query, rlm_query, todo, etc.). */
-  subcalls: RlmSubcall[];
+  readonly subcalls: readonly RlmSubcall[];
   /** Running totals for this repl() call (cost + tokens from sub-LLM calls). */
-  totals: { costUsd: number; tokens: number };
+  readonly totals: { readonly costUsd: number; readonly tokens: number };
 }
