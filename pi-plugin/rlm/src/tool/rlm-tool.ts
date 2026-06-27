@@ -23,6 +23,7 @@ import {
   renderExpandedSubcallTree,
 } from "./subcall-render.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
+import { reviewAndApplyEdits } from "../patch/index.ts";
 
 // ── Parameter schema ──
 
@@ -96,7 +97,10 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
         const result = await done;
 
         emitter.emitAnswer(result.answer);
-        if (result.edits && result.edits.length > 0) emitter.emitEdits(result.edits);
+        const proposedEdits = result.edits ?? [];
+        const proposedDiffs = result.diffs ?? [];
+        if (proposedEdits.length > 0) emitter.emitEdits(proposedEdits);
+        await reviewAndApplyEdits(proposedEdits, proposedDiffs, controller.config, ctx);
 
         return {
           content: [{ type: "text", text: result.answer }],

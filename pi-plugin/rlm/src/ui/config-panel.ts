@@ -19,6 +19,7 @@ const CHOICES = Object.freeze({
   sandboxInitTimeoutMs: Object.freeze(["10000", "30000", "60000", "120000"]),
   askUserQuestion: Object.freeze(["on", "off"]),
   todo: Object.freeze(["on", "off"]),
+  yolo: Object.freeze(["on", "off"]),
 });
 
 function item(id: string, label: string, currentValue: string, values: readonly string[], description: string): SettingItem {
@@ -41,6 +42,7 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
     item("askUserQuestion", "[Interactive] Ask user", config.askUserQuestion ? "on" : "off", CHOICES.askUserQuestion, "Allow root REPL code to present structured ask_user_question dialogs."),
     item("todo", "[Interactive] Todo", config.todo ? "on" : "off", CHOICES.todo, "Allow REPL code to manage a visible todo task list."),
+    item("yolo", "[Editing] YOLO mode", config.yolo ? "on" : "off", CHOICES.yolo, "Skip the patch-preview popup and apply proposed edits immediately without confirmation."),
     item("__save__", "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
   ];
 
@@ -85,5 +87,6 @@ function applySetting(config: RlmConfig, id: string, value: string): void {
     case "sandboxInitTimeoutMs": config.sandboxInitTimeoutMs = Number(value); break;
     case "askUserQuestion": config.askUserQuestion = value === "on"; break;
     case "todo": config.todo = value === "on"; break;
+    case "yolo": config.yolo = value === "on"; break;
   }
 }

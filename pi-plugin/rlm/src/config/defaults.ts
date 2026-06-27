@@ -20,6 +20,7 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   sandboxInitTimeoutMs: 30_000,
   askUserQuestion: true,
   todo: true,
+  yolo: false,
   subSampling: Object.freeze({ maxTokens: 8192 }),
   runLog: Object.freeze({
     enabled: true,

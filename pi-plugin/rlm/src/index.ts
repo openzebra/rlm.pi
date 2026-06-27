@@ -6,6 +6,7 @@ import { Markdown } from "@earendil-works/pi-tui";
 import { registerRlmCommand } from "./commands/rlm.ts";
 import { registerRlmConfigCommand } from "./commands/rlm-config.ts";
 import { createRlmTool } from "./tool/rlm-tool.ts";
+import { createProposeEditsTool } from "./tool/propose-edits-tool.ts";
 import { createReplTool } from "./tool/repl-tool.ts";
 import { loadSettings, mergeConfig, resolveModelId } from "./config/settings.ts";
 import { RlmController, cheapestModel } from "./mode/rlm-mode.ts";
@@ -58,6 +59,7 @@ async function setupRlmExtension(pi: ExtensionAPI): Promise<void> {
   // ── Tool registration ──
   // Existing rlm tool (stays for backward compat with /rlm mode)
   pi.registerTool(createRlmTool(controller));
+  pi.registerTool(createProposeEditsTool(controller));
 
   // Native repl tool — re-registered each session to pick up model provider changes
   let guidePosted = false;

@@ -111,6 +111,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (askUserQuestion !== undefined) out.askUserQuestion = askUserQuestion;
   const todo = validateBoolean(r.todo);
   if (todo !== undefined) out.todo = todo;
+  const yolo = validateBoolean(r.yolo);
+  if (yolo !== undefined) out.yolo = yolo;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
     const ss = r.subSampling as Record<string, unknown>;
     const sampling: { maxTokens?: number; temperature?: number; reasoning?: ThinkingLevel } = {};

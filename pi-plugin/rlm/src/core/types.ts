@@ -69,6 +69,8 @@ export interface RlmConfig {
   askUserQuestion: boolean;
   /** Allow todo() calls from the REPL. */
   todo: boolean;
+  /** Skip the patch-preview popup and apply proposed edits immediately. */
+  yolo: boolean;
   /** Sampling for the root smart model. */
   smartReasoning?: ThinkingLevel;
   /** Sampling for sub-LLM (worker) calls. */
