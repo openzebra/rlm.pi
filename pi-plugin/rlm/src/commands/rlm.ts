@@ -15,6 +15,7 @@ import { RlmEmitter } from "../tool/rlm-events.ts";
 import { RlmEventAggregator } from "../tool/rlm-aggregator.ts";
 import { createTelemetrySink } from "../telemetry/index.ts";
 import { reviewAndApplyEdits } from "../patch/index.ts";
+import { tryExtractDiff } from "../core/answer.ts";
 
 export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController): void {
   pi.registerCommand("rlm", {
@@ -145,9 +146,10 @@ async function executeRlmRunWithResume(
   try {
     const result = await done;
     pi.sendMessage({ customType: "rlm-answer", content: result.answer, display: true });
+    const proposedDiffs = result.diffs?.length ? result.diffs : tryExtractDiff(result.answer);
     await reviewAndApplyEdits(
       result.edits ?? [],
-      result.diffs ?? [],
+      proposedDiffs,
       controller.config,
       ctx,
     );

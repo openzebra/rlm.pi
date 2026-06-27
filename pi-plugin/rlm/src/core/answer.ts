@@ -36,6 +36,13 @@ export function collectDiffs(results: readonly ReplResult[]): ProposedDiffEdit[]
   return [];
 }
 
+/** Parses a ```diff fence from answer text; returns [] if none found. */
+export function tryExtractDiff(answer: string): ProposedDiffEdit[] {
+  const match = /```diff\n([\s\S]*?)```/.exec(answer);
+  if (!match) return [];
+  return [{ diff: match[1].trim() }];
+}
+
 /** True if any block in the turn raised an exception. Plain stderr does not count. */
 export function turnHadError(results: readonly ReplResult[]): boolean {
   return results.some((r) => r.raised);

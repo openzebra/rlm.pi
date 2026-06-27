@@ -24,6 +24,7 @@ import {
 } from "./subcall-render.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 import { reviewAndApplyEdits } from "../patch/index.ts";
+import { tryExtractDiff } from "../core/answer.ts";
 
 // ── Parameter schema ──
 
@@ -98,7 +99,7 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
 
         emitter.emitAnswer(result.answer);
         const proposedEdits = result.edits ?? [];
-        const proposedDiffs = result.diffs ?? [];
+        const proposedDiffs = result.diffs?.length ? result.diffs : tryExtractDiff(result.answer);
         if (proposedEdits.length > 0) emitter.emitEdits(proposedEdits);
         await reviewAndApplyEdits(proposedEdits, proposedDiffs, controller.config, ctx);
 
