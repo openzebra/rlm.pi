@@ -63,8 +63,7 @@ export function formatReplOutputs(results: readonly ReplResult[]): string {
   const multi = results.length > 1;
   const parts: string[] = [];
   let hadElision = false;
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i]!;
+  for (const [i, r] of results.entries()) {
     const head = multi ? `[block ${i + 1}]\n` : "";
     const { text, elided } = formatStdout(r);
     hadElision ||= elided;
