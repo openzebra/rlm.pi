@@ -50,6 +50,8 @@ export interface WorkerResponse {
   readonly diffs?: readonly ProposedDiffEdit[];
   readonly raised?: boolean;
   readonly execution_time?: number;
+  // user-created variable names after this exec (filters builtins/context) — Metadata(stdout) for history orientation
+  readonly var_names?: readonly string[];
   // load_context:
   readonly index?: number;
   // snapshot/restore:
@@ -184,4 +186,6 @@ export interface ReplResult {
   readonly diffs: readonly ProposedDiffEdit[];
   readonly raised: boolean;
   readonly executionTimeMs: number;
+  /** User-created variable names after this exec (builtins/context filtered out). */
+  readonly varNames: readonly string[];
 }

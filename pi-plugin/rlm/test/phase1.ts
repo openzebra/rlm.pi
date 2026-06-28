@@ -7,7 +7,7 @@ import { check, failureCount } from "./helpers.ts";
 import { RlmController } from "../src/mode/rlm-mode.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { loadSettings, mergeConfig, saveSettings } from "../src/config/settings.ts";
-import { turnHadError } from "../src/core/answer.ts";
+import { formatReplOutputs, turnHadError } from "../src/core/answer.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { buildMetadataLine, buildRlmSystemPrompt } from "../src/prompts/system.ts";
 import { findReplBlocks, truncateOutput } from "../src/text/parsing.ts";
@@ -103,6 +103,41 @@ async function main() {
   r = await sandbox.exec("context = 'clobbered'");
   r = await sandbox.exec("print(type(context).__name__, len(context))");
   check("M5: context restored from context_0 after clobber", r.stdout.trim() === "list 3", r.stdout.trim());
+
+  // --- varNames surface + two-tier stdout elision (Algorithm 1: Metadata(stdout)) ---
+  {
+    const vb = await PythonSandbox.spawn({ depth: 1 });
+    await vb.loadContext("ctx");
+    // No llm_query/rlm_query — keep the test free of RPC dependency (pure varNames + elision).
+    let rr = await vb.exec("result = 'mock_result'; acc = [1,2,3]");
+    check("execute returns user var names",
+      rr.varNames.length === 2 && rr.varNames.includes("result") && rr.varNames.includes("acc"),
+      JSON.stringify(rr.varNames));
+    check("scaffold vars filtered from varNames",
+      !rr.varNames.includes("llm_query") && !rr.varNames.includes("context") && !rr.varNames.includes("answer")
+      && !rr.varNames.includes("SHOW_VARS") && !rr.varNames.includes("context_0"),
+      JSON.stringify(rr.varNames));
+    // Small stdout flows through verbatim — no var list appended (nothing was lost).
+    rr = await vb.exec("print(len(acc))");
+    const small = formatReplOutputs([rr]);
+    check("small stdout kept verbatim", small.trim() === "3", small.slice(0, 60));
+    // Large stdout collapses to a head preview + elision note (not the full dump).
+    rr = await vb.exec("big = 'a' * 5000; print(big)");
+    const big = formatReplOutputs([rr]);
+    check("large stdout is elided in history", !big.includes("a".repeat(1000)) && big.includes("[+4800 chars"), big.slice(0, 80));
+    check("varNames listed only on elision", big.includes("REPL vars:"), big);
+    await vb.dispose();
+  }
+
+  // Elision note must not mislead: value was already in a variable, so the note points to slicing.
+  {
+    const noVars = formatReplOutputs([{
+      stdout: "x".repeat(5000), stderr: "", finalAnswer: null, answerContent: "",
+      edits: [], diffs: [], raised: false, executionTimeMs: 0, varNames: [],
+    }]);
+    check("elision note uses slices, not 'assign first'", noVars.includes("use slices to inspect"), noVars.slice(-80));
+    check("elision + empty vars gives fallback hint", noVars.includes("No REPL vars yet"), noVars.slice(-80));
+  }
 
   // H3: a slow batched sub-LLM call must NOT trip the per-cell SIGALRM (paused while blocked in _rpc).
   const slow = await PythonSandbox.spawn({

@@ -122,8 +122,9 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
     "",
     replGlossary(recursion, opts.askUserQuestion ?? false, opts.todo ?? false),
     "",
-    "REPL outputs over ~20K characters are truncated, so for long payloads slice them and pass the",
-    "slices through `llm_query` rather than printing them whole.",
+    "REPL stdout over ~800 characters is truncated to a short excerpt — large results stay in your",
+    "REPL variables as buffers. Re-print only the slice you need (e.g. `print(result[:500])`); never",
+    "dump a whole sub-LLM result. The full content persists across turns in REPL variables (call `SHOW_VARS()`).",
     "",
     "Start by probing `context` (print a few lines, count items). Then build up an answer to the query.",
   ];

@@ -192,6 +192,7 @@ export class PythonSandbox {
       diffs: res.diffs ?? [],
       raised: res.raised ?? false,
       executionTimeMs: Math.round((res.execution_time ?? 0) * 1000),
+      varNames: res.var_names ?? [],
     };
   }
 

@@ -65,7 +65,7 @@ RESERVED = frozenset(
         "llm_query", "llm_query_batched", "rlm_query", "rlm_query_batched",
         "advance_phase",
         "ask_user_question", "todo",
-        "SHOW_EDITS", "SHOW_DIFFS", "SHOW_VARS", "answer", "context", "context_0",
+        "SHOW_EDITS", "SHOW_DIFFS", "SHOW_VARS", "answer", "context",
     }
 )
 
@@ -136,12 +136,21 @@ class Worker:
         if 0 in self._ctx_payloads:
             ns["context"] = self._ctx_payloads[0]
 
+    def _user_var_names(self) -> list[str]:
+        """User-created variable names — filters builtins, scaffold, and context slots.
+
+        Shared by SHOW_VARS() and the exec result so both expose the same namespace view.
+        This is the cheap orientation hint that goes into history instead of full stdout.
+        """
+        return [
+            k for k in self.ns
+            if not k.startswith("_")
+            and not k.startswith("context_")
+            and k not in RESERVED
+        ]
+
     def _show_vars(self) -> str:
-        avail = {
-            k: type(v).__name__
-            for k, v in self.ns.items()
-            if not k.startswith("_") and not k.startswith("context_") and k not in RESERVED and k != "__builtins__"
-        }
+        avail = {k: type(self.ns[k]).__name__ for k in self._user_var_names()}
         return f"Available variables: {avail}" if avail else "No variables created yet."
 
     def _show_edits(self) -> str:
@@ -350,6 +359,7 @@ class Worker:
             "diffs": [],
             "raised": raised,
             "execution_time": time.perf_counter() - start,
+            "var_names": self._user_var_names(),
         }
 
     def _serializer(self):
