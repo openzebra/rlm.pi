@@ -102,6 +102,7 @@ class Worker:
 
     def _setup(self) -> None:
         self.ns = {"__builtins__": _SAFE_BUILTINS.copy(), "__name__": "__main__"}
+        self._ctx_payloads: dict[int, Any] = {}
         self._restore_scaffold()
 
     def _capture_answer(self, content: Any) -> None:
@@ -129,9 +130,11 @@ class Worker:
                 if cur.get("ready") and self._final_answer is None:
                     self._final_answer = str(cur.get("content", ""))
             ns["answer"] = ans
-        # Restore the context alias (reference: context = context_0 every cell).
-        if "context_0" in ns:
-            ns["context"] = ns["context_0"]
+        # Restore context slots from immutable originals so REPL mutations don't persist.
+        for idx, payload in self._ctx_payloads.items():
+            ns[f"context_{idx}"] = payload
+        if 0 in self._ctx_payloads:
+            ns["context"] = self._ctx_payloads[0]
 
     def _show_vars(self) -> str:
         avail = {
@@ -287,6 +290,7 @@ class Worker:
             index = self._context_count
         with open(path, "r") as f:
             payload = json.load(f) if is_json else f.read()
+        self._ctx_payloads[index] = payload
         self.ns[f"context_{index}"] = payload
         if index == 0:
             self.ns["context"] = payload

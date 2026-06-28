@@ -12,7 +12,7 @@
  */
 
 import * as Diff from "diff";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Container, Text, type Component, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { ProposedDiffEdit, ProposedEdit } from "../sandbox/protocol.ts";
 
@@ -89,11 +89,11 @@ export async function showPatchPopup(
       // Custom Component whose render reads mutable scroll state — mirrors the
       // `filterLine: Component` pattern in model-picker.ts.
       const diffView: Component = {
-        render: (_w: number) => {
-          const slice = coloredLines.slice(state.scrollTop, state.scrollTop + VISIBLE_ROWS);
+        render: (w: number) => {
+          const slice = coloredLines.slice(state.scrollTop, state.scrollTop + VISIBLE_ROWS).map((l) => truncateToWidth(l, w));
           const remaining = coloredLines.length - state.scrollTop - VISIBLE_ROWS;
           return remaining > 0
-            ? [...slice, theme.fg("muted", `↓ ${remaining} more lines (j/↓ scroll)`)]
+            ? [...slice, truncateToWidth(theme.fg("muted", `↓ ${remaining} more lines (j/↓ scroll)`), w)]
             : slice;
         },
         invalidate: () => {},
