@@ -28,3 +28,37 @@ export function contextTypeLabel(context: unknown): string {
   if (Array.isArray(context)) return `list[${context.length}]`;
   return typeof context;
 }
+
+/** Compact per-file token distribution for a bundle context (the article's `context_lengths`). */
+export interface ContextSizeStats {
+  readonly files: number;
+  readonly min: number;
+  readonly median: number;
+  readonly max: number;
+}
+
+/** `true` if `v` is a context entry carrying an estimated `tokens` count. */
+const isTokenizedEntry = (v: unknown): v is { readonly tokens: number } =>
+  typeof v === "object" && v !== null && typeof (v as { readonly tokens?: unknown }).tokens === "number";
+
+/** Per-file token distribution for a context payload; `undefined` for plain strings or empty arrays.
+ *  Handles both serialized ContextFile[] (flat array from serializeForSandbox) and raw ContextBundle
+ *  objects ({ files: [...] }) so callers don't need to know which form they received. */
+export function contextSizeStats(context: unknown): ContextSizeStats | undefined {
+  // Normalise to a flat entry list: accept either a direct array or an object with a .files array.
+  const entries: readonly unknown[] = Array.isArray(context)
+    ? context
+    : Array.isArray((context as { readonly files?: unknown } | null)?.files)
+      ? (context as { readonly files: readonly unknown[] }).files
+      : [];
+  if (entries.length === 0) return undefined;
+  const sizes = new Array<number>(entries.length);
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    sizes[i] = isTokenizedEntry(entry) ? entry.tokens : 0;
+  }
+  sizes.sort((a, b) => a - b);
+  const mid = sizes.length >> 1;
+  const median = sizes.length % 2 !== 0 ? sizes[mid] : Math.round((sizes[mid - 1] + sizes[mid]) / 2);
+  return Object.freeze<ContextSizeStats>({ files: sizes.length, min: sizes[0], median, max: sizes[sizes.length - 1] });
+}

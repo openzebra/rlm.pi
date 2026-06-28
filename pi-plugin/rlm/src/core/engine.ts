@@ -20,7 +20,7 @@ import type { RlmEmitter } from "../tool/rlm-events.ts";
 import { PythonSandbox } from "../sandbox/sandbox.ts";
 import { advancePhase as validatePhaseTransition, phaseGatePrompt, type PhaseState } from "./pipeline.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
-import { contextLength, contextTypeLabel } from "../text/tokens.ts";
+import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { collectDiffs, collectEdits, finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
 import { compactHistory, shouldCompact } from "./compaction.ts";
 import { appendUserMessage } from "./history.ts";
@@ -212,6 +212,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
       const meta = {
         contextType: contextTypeLabel(input.context),
         contextChars: contextLength(input.context),
+        contextStats: contextSizeStats(input.context),
         rootPrompt: input.rootPrompt || undefined,
       };
       const system = buildRlmSystemPrompt(meta, {

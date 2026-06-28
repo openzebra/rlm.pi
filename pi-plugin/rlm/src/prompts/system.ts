@@ -4,10 +4,12 @@
  * The root model runs Python by writing fenced ```repl``` blocks (headless engine). The REPL
  * exposes `context`, the sub-LLM functions, and the `answer` dict the model flips to submit.
  */
+import type { ContextSizeStats } from "../text/tokens.ts";
 
 export interface PromptMeta {
   readonly contextType: string;
   readonly contextChars: number;
+  readonly contextStats?: ContextSizeStats;
   readonly rootPrompt?: string;
 }
 
@@ -73,9 +75,15 @@ function replGlossary(recursion: boolean, askUserQuestion: boolean, todo: boolea
       "- `rlm_query(prompt, model=None)` / `rlm_query_batched(prompts, model=None)`: recursive RLM",
       "  sub-calls. Each child runs a full REPL loop internally — its entire conversation is PRIVATE",
       "  and never enters your history. Only the final answer (a short string) is returned.",
-      "  **PREFER over `llm_query`** when the sub-task is complex or its intermediate output would",
-      "  be large: rlm_query costs you zero history tokens regardless of what the child does.",
-      "  Fall back to `llm_query` only for simple one-shot extraction/summarisation.",
+      "",
+      "  **Choosing between `llm_query` and `rlm_query`:**",
+      "  - `llm_query` for simple one-shot tasks — summarize a chunk, extract a fact, answer a direct",
+      "    question. It is a single LLM call: fast and cheap. Prefer it by default, and fan out with",
+      "    `llm_query_batched` for parallel one-shots.",
+      "  - `rlm_query` only when a sub-task genuinely needs iterative reasoning with its own code",
+      "    execution (e.g. a sub-context large enough to need its own chunking, or a multi-step",
+      "    reasoning chain). It is slower and more expensive — reserve it for cases `llm_query` cannot",
+      "    handle. Avoid excessive recursive sub-calls when a batched one-shot would suffice.",
     );
   }
   lines.push(
@@ -153,6 +161,10 @@ function nativeReplGlossary(): string {
     "- `llm_query_batched(prompts, model=None) -> list[str]` — concurrent sub-LLM calls; output order matches input order.",
     "- `rlm_query(prompt, model=None) -> str` — recursive RLM with its own REPL for complex sub-tasks needing iterative reasoning.",
     "- `rlm_query_batched(prompts, model=None) -> list[str]` — concurrent recursive RLM calls.",
+    "",
+    "**Choosing between `llm_query` and `rlm_query`:** default to `llm_query` (fast/cheap) for one-shot tasks",
+    "and fan out with `llm_query_batched`; reach for `rlm_query` only when a sub-task needs its own iterative",
+    "reasoning. Avoid excessive recursive sub-calls when a batched one-shot suffices.",
     "- `todo(action, **kwargs) -> str` — manage a task list. Actions: create, update, list, get, delete, clear. Statuses: pending → in_progress → completed.",
     "- `SHOW_VARS() -> str` — list all variables currently in the REPL.",
     "- `answer`: dict `{\"content\": \"\", \"ready\": False}`. To submit: `answer[\"content\"] = \"...\"; answer[\"ready\"] = True`.",
@@ -257,6 +269,10 @@ export const NATIVE_PROMPT_STATIC = buildNativeSystemPrompt();
 /** The one-line context metadata, also reused by the per-turn prompt in headless mode. */
 export function buildMetadataLine(meta: PromptMeta): string {
   const contextDesc = `Your context is a JSON array of ${meta.contextChars.toLocaleString()} total characters — list[dict] where each dict has keys "path" (str), "content" (str), and "tokens" (int). Use Python list slicing to chunk it into batches for sub-LLM delegation.`;
-  const body = `${contextDesc} Each sub-LLM call can handle roughly ~100k tokens at once.`;
+  const tail = "Each sub-LLM call can handle roughly ~100k tokens at once.";
+  const dist = meta.contextStats
+    ? ` Your context has ${meta.contextStats.files} files; per-file tokens run min ${meta.contextStats.min.toLocaleString()} / median ${meta.contextStats.median.toLocaleString()} / max ${meta.contextStats.max.toLocaleString()} — use this to gauge how many files fit per batch.`
+    : "";
+  const body = `${contextDesc} ${tail}${dist}`;
   return meta.rootPrompt ? `Answer the following: ${meta.rootPrompt}\n\n${body}` : body;
 }
