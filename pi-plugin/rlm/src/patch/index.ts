@@ -9,7 +9,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ProposedDiffEdit, ProposedEdit } from "../sandbox/protocol.ts";
 import type { RlmConfig } from "../core/types.ts";
 import { applyAnchorEdits, applyDiffEdits, type ApplyResult } from "./apply.ts";
-import { showPatchPopup } from "./popup.ts";
+import { showEditConfirm } from "./popup.ts";
 
 /** Surface an apply outcome through a single notify — used for both edit kinds. */
 function notifyApplyResult(r: ApplyResult, label: string, ctx: ExtensionContext): void {
@@ -31,10 +31,10 @@ export async function reviewAndApplyEdits(
   if (!hasEdits) return;
   const cwd = ctx.cwd ?? process.cwd();
 
-  // Show popup unless yolo mode — popup is modal (awaits user decision).
+  // Show native confirm unless yolo mode.
   if (!config.yolo && ctx.hasUI) {
-    const decision = await showPatchPopup(edits, diffs, ctx);
-    if (decision === "reject") {
+    const ok = await showEditConfirm(edits, diffs, ctx);
+    if (!ok) {
       ctx.ui.notify("Patch rejected — no files changed.", "info");
       return;
     }
