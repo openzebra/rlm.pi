@@ -19,7 +19,7 @@
 <div align="center">
 
 **递归语言模型 (RLMs)** 作为 Pi 扩展原生实现 ——
-无需额外服务器，无需 Docker，无需 socket。
+完全本地。
 
 </div>
 

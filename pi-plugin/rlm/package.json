@@ -2,7 +2,7 @@
   "name": "@hicaru/pi-rlm",
   "version": "0.1.1",
   "type": "module",
-  "description": "Recursive Language Model (RLM) for the Pi coding agent — native, server-less.",
+  "description": "Save 99% tokens, Recursive Language Model (RLM) for the Pi",
   "license": "MIT",
   "author": "hicaru",
   "repository": {
