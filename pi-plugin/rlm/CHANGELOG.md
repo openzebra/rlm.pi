@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2026-06-29
 
-Initial release of `@openzebra/pi-rlm`, a native Recursive Language Model (RLM) extension
+Initial release of `@hicaru/pi-rlm`, a native Recursive Language Model (RLM) extension
 for the Pi coding agent.
 
 ### Added
@@ -28,4 +28,4 @@ for the Pi coding agent.
   budget ceiling, max consecutive errors, per-REPL-block timeout, max concurrent sub-calls,
   trajectory compaction, and toggles for `ask_user_question` and `todo`.
 
-[0.1.0]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.0
+[0.1.0]: https://github.com/hicaru/rlm.pi/releases/tag/v0.1.0

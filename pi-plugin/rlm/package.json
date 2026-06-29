@@ -1,17 +1,17 @@
 {
-  "name": "@openzebra/pi-rlm",
+  "name": "@hicaru/pi-rlm",
   "version": "0.1.0",
   "type": "module",
   "description": "Recursive Language Model (RLM) for the Pi coding agent — native, server-less.",
   "license": "MIT",
-  "author": "OpenZebra",
+  "author": "hicaru",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openzebra/rlm.pi.git"
+    "url": "git+https://github.com/hicaru/rlm.pi.git"
   },
-  "homepage": "https://github.com/openzebra/rlm.pi",
+  "homepage": "https://github.com/hicaru/rlm.pi",
   "bugs": {
-    "url": "https://github.com/openzebra/rlm.pi/issues"
+    "url": "https://github.com/hicaru/rlm.pi/issues"
   },
   "exports": {
     ".": "./src/index.ts"
