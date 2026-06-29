@@ -1,6 +1,6 @@
 {
   "name": "@hicaru/pi-rlm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Recursive Language Model (RLM) for the Pi coding agent — native, server-less.",
   "license": "MIT",
@@ -13,17 +13,17 @@
   "bugs": {
     "url": "https://github.com/hicaru/rlm.pi/issues"
   },
-  "exports": {
-    ".": "./src/index.ts"
-  },
   "files": [
-    "src",
+    "src/",
     "README.md",
     "LICENSE"
   ],
   "keywords": [
     "pi-package",
-    "pi-extension"
+    "pi-extension",
+    "rlm",
+    "recursive",
+    "ai-agent"
   ],
   "scripts": {
     "check": "tsc --noEmit",
@@ -38,9 +38,9 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.79.0",
-    "@earendil-works/pi-coding-agent": ">=0.79.0",
-    "@earendil-works/pi-tui": ">=0.79.0",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "dependencies": {

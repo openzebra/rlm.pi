@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-06-30
+
+Packaging cleanup to make `@hicaru/pi-rlm` discoverable on pi.dev.
+
+### Changed
+
+- Removed dead `"exports"` field (Pi loads extensions via the raw path in
+  `"pi.extensions"`, not Node's export map).
+- Loosened `peerDependencies` (`@earendil-works/pi-ai`,
+  `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`) from `">=0.79.0"`
+  to `"*"`, matching the rpiv package convention.
+- Added keywords `rlm`, `recursive`, `ai-agent` for better pi.dev search ranking.
+- Made `"files"` explicit (`"src"` → `"src/"`).
+
 ## [0.1.0] - 2026-06-29
 
 Initial release of `@hicaru/pi-rlm`, a native Recursive Language Model (RLM) extension
