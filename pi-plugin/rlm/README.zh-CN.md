@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../assets/hero.png" alt="pi-rlm">
+<img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" alt="pi-rlm">
 
 </div>
 

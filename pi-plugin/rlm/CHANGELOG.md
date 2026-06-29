@@ -53,7 +53,7 @@ for the Pi coding agent.
   budget ceiling, max consecutive errors, per-REPL-block timeout, max concurrent sub-calls,
   trajectory compaction, and toggles for `ask_user_question` and `todo`.
 
-[0.1.1]: https://github.com/hicaru/rlm.pi/releases/tag/v0.1.1
-[0.1.2]: https://github.com/hicaru/rlm.pi/releases/tag/v0.1.2
+[0.1.1]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.1
+[0.1.2]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.2
 
-[0.1.0]: https://github.com/hicaru/rlm.pi/releases/tag/v0.1.0
+[0.1.0]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.0

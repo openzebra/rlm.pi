@@ -1,17 +1,17 @@
 {
   "name": "@hicaru/pi-rlm",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "description": "Save 99% tokens, Recursive Language Model (RLM) for the Pi",
   "license": "MIT",
   "author": "hicaru",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hicaru/rlm.pi.git"
+    "url": "git+https://github.com/openzebra/rlm.pi.git"
   },
-  "homepage": "https://github.com/hicaru/rlm.pi",
+  "homepage": "https://github.com/openzebra/rlm.pi",
   "bugs": {
-    "url": "https://github.com/hicaru/rlm.pi/issues"
+    "url": "https://github.com/openzebra/rlm.pi/issues"
   },
   "files": [
     "src/",

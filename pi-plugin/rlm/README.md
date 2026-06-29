@@ -24,7 +24,7 @@ Then run `/reload` or restart Pi. Verify with `pi list` that the package appears
 
 <div align="center">
 
-<a href="https://arxiv.org/abs/2512.24601"><img src="../../assets/hero.png" alt="pi-rlm"></a>
+<a href="https://arxiv.org/abs/2512.24601"><img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" alt="pi-rlm"></a>
 
 <sub>Modeled on the method in the RLM paper, reimplemented natively for Pi.</sub>
 
