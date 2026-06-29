@@ -8,8 +8,10 @@
 
 import { check, fail, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
+import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { formatForLLM } from "../src/context/repomix-context.ts";
 import { buildNativeSystemPrompt } from "../src/prompts/system.ts";
+import { diffToNativeEditOperations } from "../src/bridge/native-edit.ts";
 import type { ContextBundle } from "../src/context/repomix-context.ts";
 
 
@@ -59,6 +61,30 @@ function testNativeSystemPrompt() {
   check("buildNativeSystemPrompt — mentions chunking", prompt.includes("chunk_size"));
   check("buildNativeSystemPrompt — mentions answer dict", prompt.includes("answer[\"ready\"]"));
   check("buildNativeSystemPrompt — mentions native tools", prompt.includes("zebra-mcp"));
+  check("buildNativeSystemPrompt — mentions propose_diff", prompt.includes("propose_diff"));
+}
+
+// ── native edit conversion tests ──
+
+function testNativeEditConversion() {
+  const diff = [
+    "--- a/src/example.ts",
+    "+++ b/src/example.ts",
+    "@@ -1,3 +1,3 @@",
+    " const a = 1;",
+    "-const b = 2;",
+    "+const b = 3;",
+    " const c = 4;",
+    "",
+  ].join("\n");
+  const result = diffToNativeEditOperations(diff);
+  check("diffToNativeEditOperations — parses valid diff", result.ok);
+  if (!result.ok) return;
+  const first = result.value[0];
+  check("diffToNativeEditOperations — extracts path", first?.path === "src/example.ts");
+  check("diffToNativeEditOperations — extracts one edit", first?.edits.length === 1);
+  check("diffToNativeEditOperations — edit oldText includes removed line", first?.edits[0]?.oldText.includes("const b = 2;") === true);
+  check("diffToNativeEditOperations — edit newText includes added line", first?.edits[0]?.newText.includes("const b = 3;") === true);
 }
 
 // ── SandboxManager tests ──
@@ -89,11 +115,27 @@ async function testSandboxManager() {
   const r2 = await mgr.exec("print(x)");
   check("SandboxManager — REPL state persists across calls", r2.stdout.includes("42"));
 
+  const r3 = await mgr.exec("print(callable(propose_diff))\nprint(propose_diff('--- a/x\\n+++ b/x\\n@@ -1 +1 @@\\n-a\\n+b\\n'))");
+  check("SandboxManager — propose_diff function exists", r3.stdout.includes("True"));
+  check("SandboxManager — propose_diff rejects in non-root sandbox", r3.stdout.includes("root RLM depth"));
+
   // Idempotent dispose
   await mgr.dispose();
   check("SandboxManager — not alive after dispose", !mgr.isAlive);
   await mgr.dispose(); // second dispose should not throw
   check("SandboxManager — double dispose safe", true);
+
+  const root = await PythonSandbox.spawn({
+    depth: 0,
+    execTimeoutS: 30,
+    requestTimeoutMs: 10_000,
+    python: "python3",
+    initTimeoutMs: 30_000,
+    handlers: {},
+  });
+  const rootResult = await root.exec("print(propose_diff('--- a/x\\n+++ b/x\\n@@ -1 +1 @@\\n-a\\n+b\\n'))");
+  check("PythonSandbox — root propose_diff reaches default bridge", rootResult.stdout.includes("native edit bridge not configured"));
+  await root.dispose();
 }
 
 // ── Main ──
@@ -104,6 +146,9 @@ async function main() {
 
   console.log("\n─── buildNativeSystemPrompt ───");
   testNativeSystemPrompt();
+
+  console.log("\n─── native edit conversion ───");
+  testNativeEditConversion();
 
   console.log("\n─── SandboxManager ───");
   try {

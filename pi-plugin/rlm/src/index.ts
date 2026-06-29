@@ -16,8 +16,9 @@ import { SandboxManager } from "./sandbox/sandbox-manager.ts";
 import { packRepository, formatForLLM, serializeForSandbox } from "./context/repomix-context.ts";
 import { buildNativeSystemPrompt } from "./prompts/system.ts";
 import { errorMessage } from "./util/errors.ts";
+import { isNativeEditInvocationActive } from "./bridge/native-edit-scope.ts";
 
-const BLOCKED_NATIVE_TOOLS = Object.freeze(new Set(["read", "grep", "bash", "write", "edit"]));
+const BLOCKED_NATIVE_TOOLS = Object.freeze(new Set(["read", "grep", "bash", "write", "edit", "apply_diff"]));
 
 export default function rlmExtension(pi: ExtensionAPI): void {
   // Init synchronously with defaults — ensures commands/tools/handlers register before session_start
@@ -145,10 +146,11 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // ── Tool restriction: block read/grep/bash when RLM is ON ──
   pi.on("tool_call", async (event) => {
     if (!controller.enabled) return;
+    if (event.toolName === "edit" && isNativeEditInvocationActive()) return;
     if (BLOCKED_NATIVE_TOOLS.has(event.toolName)) {
       return {
         block: true,
-        reason: "RLM mode active. Use repl({code}) to read files and apply_diff({diff}) to modify them. All files are pre-loaded in the REPL. If sub-LLM credits are exhausted, report to the user.",
+        reason: "RLM mode active. Use repl({code}) to read files and propose_diff(diff) inside the REPL to modify them through Pi's native edit flow. All files are pre-loaded in the REPL. If sub-LLM credits are exhausted, report to the user.",
       };
     }
   });

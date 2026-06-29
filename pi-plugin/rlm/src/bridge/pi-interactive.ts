@@ -3,10 +3,8 @@ import type { InteractiveDeps } from "../core/types.ts";
 import type { AskAnswer, AskQuestion } from "../sandbox/protocol.ts";
 import { formatError } from "../util/errors.ts";
 import { createTodoFallback } from "./fallback-todo.ts";
-
-interface ToolInvoker {
-  readonly callTool?: (name: string, params: unknown) => Promise<unknown>;
-}
+import { createNativeProposeDiffHandler } from "./native-edit.ts";
+import { callPiTool } from "./tool-invoker.ts";
 
 function hasAnswers(value: unknown): value is { readonly answers: readonly unknown[] } {
   return typeof value === "object" && value !== null && Array.isArray((value as { readonly answers?: unknown }).answers);
@@ -58,29 +56,21 @@ export function createPiInteractiveDeps(ctx: ExtensionContext): InteractiveDeps 
   const fallbackTodo = createTodoFallback();
   return Object.freeze({
     onAskUserQuestion: async (questions: readonly AskQuestion[]): Promise<AskAnswer[]> => {
-      const callTool = (ctx as unknown as ToolInvoker).callTool;
-      if (typeof callTool === "function") {
-        try {
-          const result = await callTool.call(ctx, "ask_user_question", { questions });
-          const answers = normalizeAnswers(result);
-          if (answers) return answers;
-        } catch {
-          // Fall through to native UI fallback when the extension tool is not registered or fails.
-        }
+      const result = await callPiTool(ctx, "ask_user_question", { questions });
+      if (result.ok) {
+        const answers = normalizeAnswers(result.value);
+        if (answers) return answers;
       }
       return askViaUi(ctx, questions);
     },
     onTodo: async (action: string, params: Record<string, unknown>): Promise<string> => {
-      const callTool = (ctx as unknown as ToolInvoker).callTool;
-      if (typeof callTool === "function") {
-        try {
-          const result = await callTool.call(ctx, "todo", { action, ...params });
-          return typeof result === "string" ? result : JSON.stringify(result);
-        } catch {
-          // Fall through to in-process task store when the extension tool is not registered or fails.
-        }
+      const result = await callPiTool(ctx, "todo", { action, ...params });
+      if (result.ok) {
+        const text = typeof result.value === "string" ? result.value : JSON.stringify(result.value);
+        return text ?? "";
       }
       return fallbackTodo(action, params);
     },
+    onProposeDiff: createNativeProposeDiffHandler(ctx),
   });
 }

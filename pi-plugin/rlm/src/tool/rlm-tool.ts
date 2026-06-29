@@ -89,6 +89,7 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
         const interactive = createPiInteractiveDeps(ctx);
         const { done } = controller.start(ctx, input, emitter, {
           onAskUserQuestion: controller.config.askUserQuestion ? interactive.onAskUserQuestion : undefined,
+          onProposeDiff: interactive.onProposeDiff,
           onTodo: controller.config.todo ? interactive.onTodo : undefined,
         });
         const result = await done;

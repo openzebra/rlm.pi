@@ -67,6 +67,7 @@ export type InterruptKind =
   | "rlm_query_batched"
   | "advance_phase"
   | "ask_user_question"
+  | "propose_diff"
   | "todo";
 
 export interface AskOption {
@@ -120,6 +121,11 @@ export interface AskUserQuestionInterrupt extends InterruptBase {
   readonly questions: readonly AskQuestion[];
 }
 
+export interface ProposeDiffInterrupt extends InterruptBase {
+  readonly type: "propose_diff";
+  readonly diff?: string;
+}
+
 export interface TodoInterrupt extends InterruptBase {
   readonly type: "todo";
   readonly action: "create" | "update" | "list" | "get" | "delete" | "clear";
@@ -142,6 +148,7 @@ export type WorkerInterrupt =
   | BatchedPromptInterrupt
   | AdvancePhaseInterrupt
   | AskUserQuestionInterrupt
+  | ProposeDiffInterrupt
   | TodoInterrupt;
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
@@ -153,6 +160,7 @@ export const INTERRUPT_KINDS = Object.freeze(new Set<InterruptKind>([
   "rlm_query_batched",
   "advance_phase",
   "ask_user_question",
+  "propose_diff",
   "todo",
 ]));
 

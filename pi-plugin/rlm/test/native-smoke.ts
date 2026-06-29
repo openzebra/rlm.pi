@@ -171,6 +171,7 @@ check("native prompt — under 6K chars standalone", nativeOnly.length < 6000,
 check("native prompt — includes REPL glossary", nativeOnly.includes("REPL Environment"));
 check("native prompt — includes workflow steps", nativeOnly.includes("Workflow"));
 check("native prompt — includes tool table", nativeOnly.includes("Choosing Between Tools"));
+check("native prompt — includes propose_diff", nativeOnly.includes("propose_diff"));
 
 // ── Results ──
 

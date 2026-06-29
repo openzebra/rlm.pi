@@ -367,6 +367,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         const interactive = createPiInteractiveDeps(ctx);
         const interactiveHandlers = buildInteractiveHandlers({
           onAskUserQuestion: config.askUserQuestion ? interactive.onAskUserQuestion : undefined,
+          onProposeDiff: interactive.onProposeDiff,
           onTodo: interactive.onTodo,
           onTodoRow: undefined,
           emitter,
@@ -378,6 +379,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           ...llmHandlers,
           ...rlmHandlers,
           askUserQuestion: interactiveHandlers.askUserQuestion,
+          proposeDiff: interactiveHandlers.proposeDiff,
           todo: interactiveHandlers.todo,
         });
 

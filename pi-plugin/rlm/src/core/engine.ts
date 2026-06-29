@@ -186,6 +186,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         : {};
       const interactiveHandlers = buildInteractiveHandlers({
         onAskUserQuestion: deps.config.askUserQuestion ? deps.onAskUserQuestion : undefined,
+        onProposeDiff: deps.onProposeDiff,
         onTodo: deps.config.todo ? deps.onTodo : undefined,
         onTodoRow: async (action, params, todoResult) => {
           if (!persistOn || !runId || !deps.runState) return;

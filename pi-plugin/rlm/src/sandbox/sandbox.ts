@@ -34,6 +34,7 @@ export interface SubLlmHandlers {
   rlmQueryBatched(prompts: readonly string[], model: string | null, depth: number): Promise<string[]>;
   advancePhase(phase: string, summary: string | undefined, depth: number): Promise<string>;
   askUserQuestion(questions: readonly AskQuestion[], depth: number): Promise<AskAnswer[]>;
+  proposeDiff(diff: string, depth: number): Promise<string>;
   todo(action: string, params: Record<string, unknown>, depth: number): Promise<string>;
 }
 
@@ -79,6 +80,7 @@ const REJECT: SubLlmHandlers = {
     selected: [],
     custom: formatError("ask_user_question not configured"),
   })),
+  proposeDiff: async () => formatError("native edit bridge not configured"),
   todo: async () => formatError("todo not configured"),
 };
 
@@ -336,6 +338,9 @@ export class PythonSandbox {
       } else if (msg.type === "ask_user_question") {
         const answers = await h.askUserQuestion(msg.questions ?? [], d);
         this.reply(msg.rid, { answers });
+      } else if (msg.type === "propose_diff") {
+        const response = await h.proposeDiff(msg.diff ?? "", d);
+        this.reply(msg.rid, { response });
       } else if (msg.type === "todo") {
         const params = Object.fromEntries(
           Object.entries(msg).filter(([key]) => !TODO_PROTO_KEYS.has(key)),

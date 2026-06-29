@@ -130,6 +130,7 @@ async function executeRlmRunWithResume(
     }
     handle = controller.start(ctx, { kind: "resume", resume: recon, context }, emitter, {
       onAskUserQuestion: controller.config.askUserQuestion ? interactive.onAskUserQuestion : undefined,
+      onProposeDiff: interactive.onProposeDiff,
       onTodo: controller.config.todo ? interactive.onTodo : undefined,
     });
   } catch (e) {
