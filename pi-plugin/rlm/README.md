@@ -155,16 +155,12 @@ These functions are injected into the model's Python namespace inside the REPL:
 > defaults (depth 4, conc 4) that's 4³ = 64 in the pathological case. Budget and error
 > caps (above) bound total spend regardless of fan-out.
 
-## Telemetry & run logs
+## Run logs
 
 - **Run logs** (`runLog`): always-on by default. Each run writes a JSONL trail to `.rlm/runs/`
   (default), capped at `maxRuns` (50). Supports **snapshots** (`sandbox.pkl`) and **resume**
   of interrupted runs via `/rlm-resume`. Snapshots are protected by a per-session `nonce`
   to prevent cross-session replay.
-- **MLflow tracing** (`telemetry`): optional. Set `MLFLOW_TRACKING_URI` or configure
-  `trackingUri` / `experimentId` in `/rlm-config`. The root run is tagged as an MLflow span
-  for trace correlation on resume. The Bearer token comes from the `MLFLOW_TRACKING_TOKEN`
-  env var and is **never persisted** to `rlm.json`.
 
 ## Security
 
@@ -191,11 +187,10 @@ src/
   core/       engine.ts (the loop) · iteration · limits · answer · compaction · pipeline · types
   prompts/    system + per-turn prompts (ported from the Python reference)
   text/       parsing (repl blocks) · tokens · preview · edits
-  state/      agent-tree · events · reads/writes · resume · paths · rows
+  state/      reads/writes · resume · paths · rows
   tool/       repl-tool · rlm-events · aggregator · propose-edits · emitter-listener
   config/     defaults · settings (rlm.json persistence + validation)
   context/    repomix-based repository packing + caching
-  telemetry/  MLflow sink · dispatcher · mlflow-config
   ui/         tree-widget · status · model-picker · config-panel · intro · theme
   commands/   rlm · rlm-config
   mode/       rlm-mode (controller) · input-router

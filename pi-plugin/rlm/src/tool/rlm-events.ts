@@ -2,8 +2,8 @@
  * RlmEmitter — typed EventEmitter wrapper for RLM lifecycle events.
  *
  * Replaces RlmToolBridge mutation methods. The engine and bridges emit typed
- * events instead of calling bridge.addSubcall/updateSubcall/etc. Listeners
- * (RlmEventAggregator, TelemetrySink) subscribe to build derived state.
+ * events instead of calling bridge.addSubcall/updateSubcall/etc. The
+ * RlmEventAggregator subscribes to build derived state.
  *
  * Node.js EventEmitter is synchronous — listeners run in registration order
  * during emit. No backpressure needed: engine events are sequential, one at
@@ -11,7 +11,6 @@
  */
 
 import { EventEmitter } from "node:events";
-import type { TelemetrySink } from "../telemetry/sink.ts";
 import type { SubcallKind, SubcallStatus, RlmRunStatus } from "./rlm-details.ts";
 import type { ProposedEdit } from "../sandbox/protocol.ts";
 
@@ -76,7 +75,6 @@ export interface RootPromptEvent {
  *
  * Auto-generates monotonic subcall IDs (`s1`, `s2`, …) via `emitSubcallCreated()`.
  * Provides typed `on*` methods that return unsubscribe functions.
- * `attachSink()` wires all events to a TelemetrySink and returns a detach function.
  */
 export class RlmEmitter {
   private readonly ee = new EventEmitter();
@@ -167,43 +165,6 @@ export class RlmEmitter {
   onRootPrompt(handler: (event: RootPromptEvent) => void): () => void {
     this.ee.on("root-prompt", handler);
     return () => { this.ee.off("root-prompt", handler); };
-  }
-
-  // ── Sink integration ──
-
-  /**
-   * Wire all lifecycle events to a TelemetrySink.
-   * Returns a detach function that unsubscribes all sink listeners.
-   * The caller is responsible for calling `sink.shutdown()` after detaching.
-   */
-  attachSink(sink: TelemetrySink): () => void {
-    const unsubs: (() => void)[] = [];
-
-    unsubs.push(this.onSubcallCreated((event) => {
-      sink.start(event.id, {
-        kind: event.kind,
-        depth: event.depth,
-        parentId: event.parentId,
-        model: event.model,
-        label: event.label,
-        detail: event.detail,
-        args: event.args,
-      });
-    }));
-
-    unsubs.push(this.onSubcallUpdated((event) => {
-      if (event.costUsd !== undefined || event.tokens !== undefined) {
-        sink.usage(event.id, event.costUsd ?? 0, event.tokens ?? 0);
-      }
-      if (event.status !== undefined && event.status !== "running") {
-        sink.end(event.id, {
-          error: event.status === "error" ? (event.detail ?? "error") : undefined,
-          resultPreview: event.resultPreview,
-        });
-      }
-    }));
-
-    return () => { unsubs.forEach((fn) => fn()); };
   }
 
   // ── Lifecycle ──

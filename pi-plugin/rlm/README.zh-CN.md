@@ -143,15 +143,11 @@ rm -rf ~/.pi/agent/extensions/rlm
 > 默认设置下 (深度 4, 并发 4)，极端情况下为 4³ = 64。预算和错误
 > 上限 (见上文) 无论扇出 (fan-out) 如何都会限制总支出。
 
-## 遥测与运行日志
+## 运行日志
 
 - **运行日志** (`runLog`)：默认始终开启。每次运行将 JSONL 轨迹写入 `.rlm/runs/`
   (默认)，上限为 `maxRuns` (50)。支持通过 `/rlm-resume` 进行**快照** (`sandbox.pkl`) 和**恢复**
   被中断的任务。快照受每个会话的 `nonce` 保护，以防止跨会话重放。
-- **MLflow 追踪** (`telemetry`)：可选。设置 `MLFLOW_TRACKING_URI` 或在
-  `/rlm-config` 中配置 `trackingUri` / `experimentId`。根运行被标记为 MLflow span
-  以便在恢复时进行追踪关联。Bearer 令牌来自 `MLFLOW_TRACKING_TOKEN`
-  环境变量，且**绝不会**持久化到 `rlm.json`。
 
 ## 安全性
 
@@ -178,11 +174,10 @@ src/
   core/       engine.ts (the loop) · iteration · limits · answer · compaction · pipeline · types
   prompts/    system + per-turn prompts (ported from the Python reference)
   text/       parsing (repl blocks) · tokens · preview · edits
-  state/      agent-tree · events · reads/writes · resume · paths · rows
+  state/      reads/writes · resume · paths · rows
   tool/       repl-tool · rlm-events · aggregator · propose-edits · emitter-listener
   config/     defaults · settings (rlm.json persistence + validation)
   context/    repomix-based repository packing + caching
-  telemetry/  MLflow sink · dispatcher · mlflow-config
   ui/         tree-widget · status · model-picker · config-panel · intro · theme
   commands/   rlm · rlm-config
   mode/       rlm-mode (controller) · input-router

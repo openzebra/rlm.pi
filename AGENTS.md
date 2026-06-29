@@ -20,7 +20,6 @@ pi-plugin/rlm/src/
 ├── config/        rlm.json persistence, defaults, model resolution
 ├── prompts/       System prompts (headless + native mode)
 ├── context/       repomix-based repository packing + caching
-├── telemetry/     Optional MLflow span tracing
 ├── ui/            Config panel, model picker, status line, theme
 ├── text/          REPL block parsing, token estimation, text preview
 ├── mode/          RlmController + input routing

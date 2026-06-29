@@ -11,7 +11,6 @@ import { Container, Markdown, Spacer, Text, type Component } from "@earendil-wor
 import { Type } from "typebox";
 import { createPiInteractiveDeps } from "../bridge/pi-interactive.ts";
 import type { RlmController, StartInput } from "../mode/rlm-mode.ts";
-import { createTelemetrySink } from "../telemetry/index.ts";
 import { formatCost, formatTokens, spinnerFrame } from "../ui/theme.ts";
 import { errorMessage } from "../util/errors.ts";
 import { type RlmDetails } from "./rlm-details.ts";
@@ -63,11 +62,8 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
       if (!validation.ok) return validation.error;
       const params = validation.value;
 
-      const sink = await createTelemetrySink(controller.config.telemetry);
       const emitter = new RlmEmitter();
       const aggregator = new RlmEventAggregator(emitter, onUpdate ?? (() => {}));
-      let detachSink: (() => void) | undefined;
-      if (sink) detachSink = emitter.attachSink(sink);
       emitter.emitRootPrompt(params.prompt);
 
       // Wire abort signal to controller
@@ -116,11 +112,8 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
         };
       } finally {
         progress.stop();
-        detachSink?.();
         aggregator.dispose();
         emitter.shutdown();
-        try { await sink?.shutdown(); }
-        catch (err) { console.warn(`[rlm] telemetry shutdown failed: ${errorMessage(err)}`); }
       }
     },
 

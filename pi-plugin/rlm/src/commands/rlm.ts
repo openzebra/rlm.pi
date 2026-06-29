@@ -13,7 +13,6 @@ import type { RunHeader } from "../state/rows.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { RlmEmitter } from "../tool/rlm-events.ts";
 import { RlmEventAggregator } from "../tool/rlm-aggregator.ts";
-import { createTelemetrySink } from "../telemetry/index.ts";
 import { applyEdits } from "../patch/index.ts";
 import { tryExtractDiff } from "../core/answer.ts";
 
@@ -112,14 +111,10 @@ async function executeRlmRunWithResume(
   context: unknown,
 ): Promise<void> {
   let handle: RunHandle | undefined;
-  let sink: Awaited<ReturnType<typeof createTelemetrySink>>;
   let emitter: RlmEmitter | undefined;
-  let detachSink: (() => void) | undefined;
   let aggregator: RlmEventAggregator | undefined;
   try {
-    sink = await createTelemetrySink(controller.config.telemetry);
     emitter = new RlmEmitter();
-    if (sink) detachSink = emitter.attachSink(sink);
     aggregator = new RlmEventAggregator(emitter, (partial) => {
       const d = partial.details;
       if (!d) return;
@@ -157,9 +152,7 @@ async function executeRlmRunWithResume(
   } finally {
     clearRlmStatus(ctx.ui);
     ctx.ui.setWidget?.("rlm-status", undefined);
-    detachSink?.();
     aggregator?.dispose();
     emitter?.shutdown();
-    try { await sink?.shutdown(); } catch { /* best-effort */ }
   }
 }

@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import type { RlmConfig, RunLogConfig, TelemetryConfig } from "../core/types.ts";
+import type { RlmConfig, RunLogConfig } from "../core/types.ts";
 import { DEFAULT_CONFIG } from "./defaults.ts";
 
 export interface PersistedSettings {
@@ -28,26 +28,6 @@ function validateBoolean(v: unknown): boolean | undefined {
 
 function validateString(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v : undefined;
-}
-
-function validateTelemetry(raw: unknown): TelemetryConfig | undefined {
-  if (typeof raw !== "object" || raw === null) return undefined;
-  const r = raw as Record<string, unknown>;
-  const out: {
-    enabled?: boolean;
-    trackingUri?: string;
-    experimentId?: string;
-    maxQueueSize?: number;
-  } = {};
-  const enabled = validateBoolean(r.enabled);
-  if (enabled !== undefined) out.enabled = enabled;
-  const trackingUri = validateString(r.trackingUri);
-  if (trackingUri !== undefined) out.trackingUri = trackingUri;
-  const experimentId = validateString(r.experimentId);
-  if (experimentId !== undefined) out.experimentId = experimentId;
-  const maxQueueSize = validateNumber(r.maxQueueSize, 1);
-  if (maxQueueSize !== undefined) out.maxQueueSize = maxQueueSize;
-  return Object.freeze(out);
 }
 
 function validateRunLog(raw: unknown): Partial<RunLogConfig> | undefined {
@@ -102,8 +82,6 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (typeof r.smartReasoning === "string") out.smartReasoning = r.smartReasoning as ThinkingLevel;
   const subSystemPrompt = validateString(r.subSystemPrompt);
   if (subSystemPrompt !== undefined) out.subSystemPrompt = subSystemPrompt;
-  const telemetry = validateTelemetry(r.telemetry);
-  if (telemetry) out.telemetry = telemetry;
   const runLog = validateRunLog(r.runLog);
   if (runLog) out.runLog = runLog;
   const sandboxInitTimeoutMs = validateNumber(r.sandboxInitTimeoutMs, 100);
@@ -167,7 +145,6 @@ export function mergeConfig(partial: Partial<RlmConfig>): RlmConfig {
     ...partial,
     subSampling: { ...DEFAULT_CONFIG.subSampling, ...partial.subSampling },
     rootSampling: Object.freeze({ ...DEFAULT_CONFIG.rootSampling, ...partial.rootSampling }),
-    ...(partial.telemetry ? { telemetry: Object.freeze({ ...partial.telemetry }) } : {}),
     ...(partial.runLog ? { runLog: Object.freeze({ ...DEFAULT_CONFIG.runLog, ...partial.runLog }) } : {}),
   };
 }

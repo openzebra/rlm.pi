@@ -12,15 +12,6 @@ export interface Sampling {
 
 type MutableSampling = { -readonly [Key in keyof Sampling]?: Sampling[Key] };
 
-export interface TelemetryConfig {
-  /** Default: enabled iff a tracking URI resolves from config or MLFLOW_TRACKING_URI. */
-  readonly enabled?: boolean;
-  readonly trackingUri?: string;
-  readonly experimentId?: string;
-  /** Bearer token is env-only via MLFLOW_TRACKING_TOKEN; never persisted in rlm.json. */
-  readonly maxQueueSize?: number;
-}
-
 export interface RunLogConfig {
   /** Default: true — always-on, opt-out. */
   readonly enabled?: boolean;
@@ -81,8 +72,6 @@ export interface RlmConfig {
   subSystemPrompt?: string;
   /** Sampling for sub-LLM (worker) calls. */
   subSampling: MutableSampling;
-  /** Optional MLflow telemetry export configuration. Omitted by default. */
-  readonly telemetry?: TelemetryConfig;
   /** Optional run-state persistence configuration. Enabled by default. */
   readonly runLog?: RunLogConfig;
 }

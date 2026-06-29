@@ -57,7 +57,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
   const run: RunRlm = async (input: RlmInput): Promise<RlmResult> => {
     const nowIso = (): string => new Date().toISOString(); // local helper — 4 call sites below
     const persist = input.depth === 0 && deps.runState !== undefined;
-    // Compute runId early so it can tag the MLflow root span (Ops: trace correlation on resume).
+    // Compute runId early for run-state correlation on resume.
     const runId = persist
       ? (input.resume ? input.resume.header.runId : generateRunId())
       : undefined;

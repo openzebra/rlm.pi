@@ -22,7 +22,6 @@ for the Pi coding agent.
 - Commands: `/rlm`, `/rlm-stop`, `/rlm-config`, `/rlm-resume`, `/rlm-runs`, and `/rlm-help`.
 - Live agent/subagent tree showing status, model, cost, tokens, and duration.
 - Always-on JSONL run logs under `.rlm/runs/` with sandbox snapshots and run resume via `/rlm-resume`.
-- Optional MLflow tracing (`telemetry`) for run correlation.
 - Code-edit collection surfaced as a review popup (with a `yolo` mode to apply immediately).
 - `/rlm-config` settings: smart/worker model selection, max recursion depth, iteration cap,
   budget ceiling, max consecutive errors, per-REPL-block timeout, max concurrent sub-calls,
