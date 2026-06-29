@@ -27,7 +27,7 @@ import { checkResourceLimits } from "../core/resource-limits.ts";
 import type { RlmConfig, Sampling } from "../core/types.ts";
 import { SandboxManager } from "../sandbox/sandbox-manager.ts";
 import type { SubLlmHandlers } from "../sandbox/sandbox.ts";
-import type { ReplResult } from "../sandbox/protocol.ts";
+import type { ProposedEdit, ReplResult } from "../sandbox/protocol.ts";
 import { RlmEmitter } from "./rlm-events.ts";
 import { SubcallStore } from "./subcall-store.ts";
 import type { ReplDetails } from "./repl-details.ts";
@@ -46,6 +46,10 @@ import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 export const ReplToolParams = Object.freeze(Type.Object({
   code: Type.String({ description: "Python code to execute in the persistent REPL sandbox" }),
 }));
+
+export function surfaceReplEdits(edits: readonly ProposedEdit[], raised: boolean): readonly ProposedEdit[] | undefined {
+  return edits.length > 0 && !raised ? edits : undefined;
+}
 
 // ── Mutable bridge state (handler indirection) ──
 
@@ -411,6 +415,12 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
 
         if (queuedId) emitter.emitSubcallUpdated({ id: queuedId, status: "done" });
 
+        const baseText = result.stdout || result.answerContent || "(no output)";
+        const surfacedEdits = surfaceReplEdits(result.edits, result.raised);
+        const editsBlock = surfacedEdits
+          ? `\n\nSTAGED_EDITS:\n${JSON.stringify(surfacedEdits)}`
+          : "";
+
         const details: ReplDetails = {
           status: "done",
           output: result.stdout,
@@ -418,10 +428,11 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           executionTimeMs: elapsed,
           subcalls: store.getSubcalls(),
           totals: store.getTotals(),
+          edits: surfacedEdits,
         };
         // Final progressive update
         onUpdate?.({ content: [{ type: "text", text: result.stdout.slice(0, 500) || "(no output)" }], details });
-        return { content: [{ type: "text", text: result.stdout || result.answerContent || "(no output)" }], details };
+        return { content: [{ type: "text", text: baseText + editsBlock }], details };
       } catch (e) {
         progressStatus = "error";
         const msg = errorMessage(e);
@@ -477,6 +488,9 @@ function renderReplCollapsed(details: ReplDetails, theme: Theme): Text {
   parts.push(formatCost(details.totals.costUsd));
   if (details.totals.tokens > 0) parts.push(`${formatTokens(details.totals.tokens)} tok`);
   if (details.executionTimeMs > 0) parts.push(`${details.executionTimeMs}ms`);
+  if (details.edits && details.edits.length > 0) {
+    parts.push(theme.fg("success", `${details.edits.length} staged`));
+  }
   const stats = parts.length > 0 ? ` ${theme.fg("dim", parts.join(" · "))}` : "";
 
   const header = `${glyph} ${theme.fg("toolTitle", theme.bold("REPL"))}${stats}`;
@@ -509,6 +523,15 @@ function renderReplExpanded(details: ReplDetails, theme: Theme): Container {
     container.addChild(new Spacer(1));
     const out = details.output.length > 2000 ? `${details.output.slice(0, 2000)}...` : details.output;
     container.addChild(new Text(out, 0, 0));
+  }
+
+  if (details.edits && details.edits.length > 0) {
+    const editFiles = new Set<string>();
+    for (const edit of details.edits) editFiles.add(edit.path);
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("success",
+      `${details.edits.length} edit${details.edits.length > 1 ? "s" : ""} staged across ${editFiles.size} file${editFiles.size > 1 ? "s" : ""}`,
+    ), 0, 0));
   }
 
   // Stderr

@@ -10,6 +10,7 @@ import { check, fail, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
 import { formatForLLM } from "../src/context/repomix-context.ts";
 import { buildNativeSystemPrompt } from "../src/prompts/system.ts";
+import { surfaceReplEdits } from "../src/tool/repl-tool.ts";
 import type { ContextBundle } from "../src/context/repomix-context.ts";
 
 
@@ -61,6 +62,13 @@ function testNativeSystemPrompt() {
   check("buildNativeSystemPrompt — mentions native tools", prompt.includes("zebra-mcp"));
 }
 
+function testStagedEditSurfacing() {
+  const edits = Object.freeze([{ path: "a.ts", oldText: "old", newText: "new" }]);
+  check("surfaceReplEdits — successful exec exposes staged edits", surfaceReplEdits(edits, false) === edits);
+  check("surfaceReplEdits — raised exec discards staged edits", surfaceReplEdits(edits, true) === undefined);
+  check("surfaceReplEdits — empty edits stay hidden", surfaceReplEdits(Object.freeze([]), false) === undefined);
+}
+
 // ── SandboxManager tests ──
 
 async function testSandboxManager() {
@@ -93,6 +101,21 @@ async function testSandboxManager() {
   const r3 = await mgr.exec("print(callable(propose_diff))");
   check("SandboxManager — propose_diff removed from namespace (NameError)", r3.raised && r3.stderr.includes("NameError"));
 
+  // stage_edit records exact edit payloads and clears them after each exec.
+  const staged = await mgr.exec([
+    "print(stage_edit('test.ts', 'old', 'new'))",
+    "print(stage_edit('bar.ts', 'a', 'b'))",
+  ].join("\n"));
+  const expectedEdits = JSON.stringify([
+    { path: "test.ts", oldText: "old", newText: "new" },
+    { path: "bar.ts", oldText: "a", newText: "b" },
+  ]);
+  check("SandboxManager — stage_edit reports staged edit", staged.stdout.includes("Staged edit for test.ts"));
+  check("SandboxManager — stage_edit returns edits", JSON.stringify(staged.edits) === expectedEdits);
+
+  const cleared = await mgr.exec("print('no edits staged')");
+  check("SandboxManager — stage_edit clears after return", cleared.edits.length === 0);
+
   // Idempotent dispose
   await mgr.dispose();
   check("SandboxManager — not alive after dispose", !mgr.isAlive);
@@ -108,6 +131,9 @@ async function main() {
 
   console.log("\n─── buildNativeSystemPrompt ───");
   testNativeSystemPrompt();
+
+  console.log("\n─── Staged edit surfacing ───");
+  testStagedEditSurfacing();
 
   console.log("\n─── SandboxManager ───");
   try {

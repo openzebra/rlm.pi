@@ -65,6 +65,7 @@ RESERVED = frozenset(
         "llm_query", "llm_query_batched", "rlm_query", "rlm_query_batched",
         "advance_phase",
         "ask_user_question", "todo",
+        "stage_edit",
         "SHOW_VARS", "answer", "context",
     }
 )
@@ -103,6 +104,7 @@ class Worker:
     def _setup(self) -> None:
         self.ns = {"__builtins__": _SAFE_BUILTINS.copy(), "__name__": "__main__"}
         self._ctx_payloads: dict[int, Any] = {}
+        self._staged_edits: list[dict[str, str]] = []
         self._restore_scaffold()
 
     def _capture_answer(self, content: Any) -> None:
@@ -118,6 +120,7 @@ class Worker:
         ns["advance_phase"] = self._advance_phase
         ns["ask_user_question"] = self._ask_user_question
         ns["todo"] = self._todo
+        ns["stage_edit"] = self._stage_edit
         ns["SHOW_VARS"] = self._show_vars
         if not isinstance(ns.get("answer"), _AnswerDict):
             cur = ns.get("answer")
@@ -255,6 +258,12 @@ class Worker:
             return f"Error: {r['error']}"
         return str(r.get("response", "ok"))
 
+    def _stage_edit(self, path: str, old_text: str, new_text: str) -> str:
+        if not isinstance(path, str) or not isinstance(old_text, str) or not isinstance(new_text, str):
+            return "Error: path, old_text, new_text must be strings"
+        self._staged_edits.append({"path": path, "oldText": old_text, "newText": new_text})
+        return f"Staged edit for {path} ({len(old_text)} → {len(new_text)} chars)"
+
     def _advance_phase(self, phase: str, summary: str | None = None) -> str:
         """Transition the root RLM pipeline to a new phase.
 
@@ -340,6 +349,7 @@ class Worker:
                 stdout = out.getvalue()
                 stderr = err.getvalue() + f"\n{type(e).__name__}: {e}\n" + traceback.format_exc()
         final, self._final_answer = self._final_answer, None
+        edits, self._staged_edits = self._staged_edits, []
         answer = self.ns.get("answer")
         answer_content = answer.get("content", "") if isinstance(answer, dict) else ""
         return {
@@ -347,7 +357,7 @@ class Worker:
             "stderr": stderr,
             "final_answer": final,
             "answer_content": str(answer_content),
-            "edits": [],
+            "edits": edits,
             "raised": raised,
             "execution_time": time.perf_counter() - start,
             "var_names": self._user_var_names(),

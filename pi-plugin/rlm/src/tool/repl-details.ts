@@ -6,6 +6,7 @@
  * accumulated into the subcalls array for tree rendering.
  */
 
+import type { ProposedEdit } from "../sandbox/protocol.ts";
 import type { RlmSubcall } from "./rlm-details.ts";
 
 export interface ReplDetails {
@@ -20,4 +21,6 @@ export interface ReplDetails {
   readonly subcalls: readonly RlmSubcall[];
   /** Running totals for this repl() call (cost + tokens from sub-LLM calls). */
   readonly totals: { readonly costUsd: number; readonly tokens: number };
+  /** File edits staged inside the REPL for native relay through edit(). */
+  readonly edits?: readonly ProposedEdit[];
 }
