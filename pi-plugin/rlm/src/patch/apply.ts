@@ -123,7 +123,12 @@ async function applySingleDiff(
     return err(`read error: ${e instanceof Error ? e.message : String(e)}`);
   }
   const crlf = hasCRLF(raw);
-  const patched = Diff.applyPatch(toLF(raw), diffEdit.diff);
+  let patched: string | false;
+  try {
+    patched = Diff.applyPatch(toLF(raw), diffEdit.diff);
+  } catch (e) {
+    return err(`invalid diff — ${e instanceof Error ? e.message : String(e)}`);
+  }
   if (patched === false) {
     return err(`patch does not apply cleanly to ${relPath}`);
   }

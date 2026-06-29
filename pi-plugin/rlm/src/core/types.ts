@@ -69,8 +69,6 @@ export interface RlmConfig {
   askUserQuestion: boolean;
   /** Allow todo() calls from the REPL. */
   todo: boolean;
-  /** Skip the patch-preview popup and apply proposed edits immediately. */
-  yolo: boolean;
   /** ThinkingLevel for the root smart model (set via /rlm-config). */
   smartReasoning?: ThinkingLevel;
   /** Output token cap + temperature for the root smart model per turn.

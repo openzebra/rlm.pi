@@ -2,8 +2,8 @@
  * `apply_diff` — the main-agent-facing editing tool.
  *
  * Lightweight by design: the root model produces a complete unified diff
- * directly and this tool validates its header, shows the patch popup, then
- * writes to disk via `reviewAndApplyEdits()`. Unlike the old `propose_edits`,
+ * directly and this tool validates its header then writes to disk via `applyEdits()`.
+ * Unlike the old `propose_edits`,
  * there is NO inner RLM engine turn (no generate→validate→revise loop) — the
  * model is trusted to emit a correct diff.
  */
@@ -11,8 +11,7 @@
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { RlmController } from "../mode/rlm-mode.ts";
-import { reviewAndApplyEdits } from "../patch/index.ts";
+import { applyEdits } from "../patch/index.ts";
 import { validateToolParams } from "./tool-utils.ts";
 import { errorMessage } from "../util/errors.ts";
 import { headlineStatusGlyph } from "./subcall-render.ts";
@@ -57,17 +56,14 @@ function bodyPreview(diff: string): string {
 
 // ── Tool factory ──────────────────────────────────────────────────────────
 
-export function createApplyDiffTool(
-  controller: RlmController,
-): ToolDefinition<typeof ApplyDiffParams, ApplyDiffDetails> {
+export function createApplyDiffTool(): ToolDefinition<typeof ApplyDiffParams, ApplyDiffDetails> {
   return {
     name: "apply_diff",
     label: "Apply Diff",
     description: [
-      "Apply a complete unified diff directly to disk, showing a patch preview before writing.",
+      "Apply a complete unified diff directly to disk.",
       "The diff MUST include a --- a/<path> / +++ b/<path> header and @@ hunk markers.",
-      "Set yolo=true in /rlm-config to skip the preview.",
-    ].join(" "),
+         ].join(" "),
     parameters: ApplyDiffParams,
 
     async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
@@ -97,7 +93,7 @@ export function createApplyDiffTool(
       const path = firstDiffPath(diff);
       const diffEdit: ProposedDiffEdit = { diff };
       try {
-        await reviewAndApplyEdits([], [diffEdit], controller.config, ctx);
+        await applyEdits([], [diffEdit], ctx);
       } catch (e) {
         return {
           content: [{ type: "text", text: `apply_diff failed: ${errorMessage(e)}` }],
