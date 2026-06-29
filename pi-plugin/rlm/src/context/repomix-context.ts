@@ -98,6 +98,7 @@ export async function packRepository(
         output: {
           filePath: `${tmpdir()}/repomix-out-${Date.now()}.txt`,
           style: "plain",
+          filePathStyle: "cwd-relative",
           parsableStyle: false,
           headerText: undefined,
           instructionFilePath: undefined,

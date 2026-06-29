@@ -8,3 +8,6 @@ dist/
 # Pi artifacts
 .rpiv/
 .rlm/
+
+# npm pack output
+*.tgz
