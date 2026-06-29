@@ -1,21 +1,41 @@
 {
-  "name": "pi-rlm",
+  "name": "@openzebra/pi-rlm",
   "version": "0.1.0",
   "type": "module",
   "description": "Recursive Language Model (RLM) for the Pi coding agent — native, server-less.",
-  "main": "src/index.ts",
+  "license": "MIT",
+  "author": "OpenZebra",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openzebra/rlm.pi.git"
+  },
+  "homepage": "https://github.com/openzebra/rlm.pi",
+  "bugs": {
+    "url": "https://github.com/openzebra/rlm.pi/issues"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "files": [
     "src",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "keywords": [
     "pi-package",
     "pi-extension"
   ],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "prepublishOnly": "npm run check"
+  },
   "pi": {
     "extensions": [
       "./src/index.ts"
     ]
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.79.0",
@@ -27,5 +47,8 @@
     "@mlflow/core": "~0.2.0",
     "diff": "^9.0.0",
     "repomix": "^1.15.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
   }
 }
