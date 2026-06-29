@@ -7,6 +7,21 @@ FULLY LOCAL.
 
 </div>
 
+## Install
+
+```bash
+pi install npm:@hicaru/pi-rlm
+```
+
+To remove it later:
+
+```bash
+pi uninstall npm:@hicaru/pi-rlm
+```
+
+Then run `/reload` or restart Pi. Verify with `pi list` that the package appears in
+`settings.packages`, and check that `/rlm`, `/rlm-config`, and `/rlm-stop` appear under **[Extensions]**.
+
 <div align="center">
 
 <a href="https://arxiv.org/abs/2512.24601"><img src="../../assets/hero.png" alt="pi-rlm"></a>
@@ -48,21 +63,6 @@ sub-LLM calls, hence the name.
 
 > This is a Pi-plugin reimplementation of the RLM method (see the [RLM paper](https://arxiv.org/abs/2512.24601)).
 > It is **not** the Python library.
-
-## Install
-
-```bash
-pi install npm:@hicaru/pi-rlm
-```
-
-To remove it later:
-
-```bash
-pi uninstall npm:@hicaru/pi-rlm
-```
-
-Then run `/reload` or restart Pi. Verify with `pi list` that the package appears in
-`settings.packages`, and check that `/rlm`, `/rlm-config`, and `/rlm-stop` appear under **[Extensions]**.
 
 ## How it works
 
