@@ -58,17 +58,18 @@ async function setupRlmExtension(pi: ExtensionAPI): Promise<void> {
   // ── Tool registration ──
   // Existing rlm tool (stays for backward compat with /rlm mode)
   pi.registerTool(createRlmTool(controller));
-  pi.registerTool(createApplyDiffTool(controller));
+  pi.registerTool(createApplyDiffTool());
 
   // Native repl tool — re-registered each session to pick up model provider changes
   let guidePosted = false;
 
   pi.on("session_start", async (_event, ctx) => {
-    // Restore saved worker ref — invalidate if provider changed
+    // Restore saved worker ref — retry lazily if registry/auth is not ready yet.
+    // session_start can fire before the provider/auth registry is fully loaded, so a miss
+    // here does NOT mean the ref is stale: RlmController.resolveModels() retries later.
     if (controller.savedWorkerRef) {
       const resolved = resolveModelId(ctx.modelRegistry, controller.savedWorkerRef);
       if (resolved) controller.workerModel = resolved;
-      else controller.savedWorkerRef = undefined;
     }
 
     // Register repl tool with current models (re-registers each session for provider changes)

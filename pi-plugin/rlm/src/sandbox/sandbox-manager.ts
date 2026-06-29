@@ -25,6 +25,8 @@ export class SandboxManager {
   private pendingExecCount = 0;
   /** Context payload to load on first sandbox creation. Set externally before getOrCreate. */
   contextPayload: unknown = null;
+  /** True once contextPayload has been loaded into the sandbox (prevents reload + race fix). */
+  private contextLoaded = false;
 
   constructor(private readonly config: SandboxManagerConfig) {}
 
@@ -38,7 +40,16 @@ export class SandboxManager {
    */
   async getOrCreate(handlers: Partial<SubLlmHandlers>): Promise<PythonSandbox> {
     if (this.disposed) throw new Error("SandboxManager disposed");
-    if (this.sandbox) return this.sandbox;
+    if (this.sandbox) {
+      // RACE FIX: contextPayload may arrive after the sandbox was created (the
+      // "context" event's async packRepository resolves after the first repl() call).
+      // Load it into the live sandbox now if still pending.
+      if (this.contextPayload !== null && !this.contextLoaded) {
+        this.contextLoaded = true;
+        try { await this.sandbox.loadContext(this.contextPayload); } catch { /* best-effort */ }
+      }
+      return this.sandbox;
+    }
 
     if (this.initPromise) return this.initPromise;
 
@@ -52,6 +63,7 @@ export class SandboxManager {
     }).then(async (s) => {
       // Load context on first creation if available
       if (this.contextPayload !== null) {
+        this.contextLoaded = true;
         try { await s.loadContext(this.contextPayload); } catch { /* best-effort */ }
       }
       this.sandbox = s;
