@@ -14,12 +14,19 @@ export interface ModelSelection {
 const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 type SelectableThinkingLevel = (typeof LEVELS)[number];
 
-function items(models: Model<Api>[]): SelectItem[] {
-  return models.map((m) => ({
+const CHEAPEST_VALUE = "__rlm_cheapest__";
+
+function items(models: Model<Api>[], includeCheapest = false): SelectItem[] {
+  const modelItems = models.map((m) => ({
     value: `${m.provider}/${m.id}`,
     label: `${m.provider}/${m.id}`,
     description: `in ${formatCost(m.cost.input)}/Mtok · out ${formatCost(m.cost.output)}/Mtok${m.reasoning ? " · reasoning" : ""}`,
   }));
+  if (!includeCheapest) return modelItems;
+  return [
+    { value: CHEAPEST_VALUE, label: "⟳ cheapest (auto)", description: "Always use the cheapest available model" },
+    ...modelItems,
+  ];
 }
 
 function supportedThinkingLevels(model: Model<Api>): SelectableThinkingLevel[] {
@@ -75,7 +82,7 @@ export async function selectModel(
   models: Model<Api>[],
   current?: Model<Api>,
   currentThinking?: ThinkingLevel,
-): Promise<ModelSelection | undefined> {
+): Promise<ModelSelection | null | undefined> {
   if (models.length === 0) {
     ctx.ui.notify("RLM: no models with configured auth", "warning");
     return undefined;
@@ -96,7 +103,7 @@ export async function selectModel(
       render: (w) => [truncateToWidth(theme.fg("dim", `Filter: ${query || "type to filter…"}`), w)],
       invalidate: () => {},
     };
-    const list = new SelectList(items(models), Math.min(models.length, 12), {
+    const list = new SelectList(items(models, true), Math.min(models.length + 1, 13), {
       selectedPrefix: (t) => theme.fg("accent", t),
       selectedText: (t) => theme.fg("accent", t),
       description: (t) => theme.fg("muted", t),
@@ -133,6 +140,7 @@ export async function selectModel(
     };
   });
 
+  if (chosen === CHEAPEST_VALUE) return null;
   const model = chosen ? models.find((m) => `${m.provider}/${m.id}` === chosen) : undefined;
   if (!model) return undefined;
   return { model, thinkingLevel: await selectThinkingLevel(ctx, model, currentThinking) };
