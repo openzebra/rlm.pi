@@ -14,9 +14,11 @@ import { setRlmModeStatus } from "./ui/status.ts";
 import { SandboxManager } from "./sandbox/sandbox-manager.ts";
 import { packRepository, formatForLLM, serializeForSandbox } from "./context/repomix-context.ts";
 import { buildNativeSystemPrompt } from "./prompts/system.ts";
+import { bashCommandFromInput, isFileReadingCommand, capToolResultText, BASH_BLOCK_REASON } from "./mode/native-guards.ts";
 import { errorMessage } from "./util/errors.ts";
 
 const BLOCKED_NATIVE_TOOLS = Object.freeze(new Set(["read", "grep"]));
+const CAPPED_RESULT_TOOLS = Object.freeze(new Set(["bash", "find", "ls"]));
 
 export default function rlmExtension(pi: ExtensionAPI): void {
   // Init synchronously with defaults — ensures commands/tools/handlers register before session_start
@@ -157,10 +159,10 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     return { action: "continue" };
   });
 
-  // ── Tool restriction: block analysis tools when RLM is ON ──
+  // ── Native mode restrictions: keep bulk file content out of root-model context ──
   // `edit`/`write` stay unblocked so the agent modifies files through Pi's native
-  // tool flow (visible to all plugins, +/- diff preview). Only read/grep are
-  // blocked — the repository is pre-loaded in the REPL `context` variable.
+  // tool flow (visible to all plugins, +/- diff preview). File reading/searching
+  // belongs in the REPL, and bash output is capped as a backstop.
   pi.on("tool_call", async (event) => {
     if (!controller.enabled) return;
     if (BLOCKED_NATIVE_TOOLS.has(event.toolName)) {
@@ -169,6 +171,23 @@ export default function rlmExtension(pi: ExtensionAPI): void {
         reason: "RLM mode active. Use repl({code}) to read files and search the repository — all files are pre-loaded in the REPL `context` variable. Use `edit`/`write` for file changes. If sub-LLM credits are exhausted, report to the user.",
       };
     }
+    const bashCommand = event.toolName === "bash" ? bashCommandFromInput(event.input) : undefined;
+    if (bashCommand !== undefined && isFileReadingCommand(bashCommand)) {
+      return { block: true, reason: BASH_BLOCK_REASON };
+    }
+  });
+
+  pi.on("tool_result", async (event) => {
+    if (!controller.enabled || !CAPPED_RESULT_TOOLS.has(event.toolName)) return;
+    let changed = false;
+    const content = event.content.map((c) => {
+      if (c.type !== "text") return c;
+      const capped = capToolResultText(c.text);
+      if (capped === undefined) return c;
+      changed = true;
+      return { ...c, type: "text" as const, text: capped };
+    });
+    return changed ? { content } : undefined;
   });
 
   // ── Session shutdown: cleanup ──

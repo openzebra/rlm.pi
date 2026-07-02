@@ -250,7 +250,7 @@ class Worker:
         chunks = _chunk_text(text, budget)
         total = len(chunks)
         if total > _MAX_CHUNKS:
-            return [f"Error: input splits into {total:,} chunks (cap {_MAX_CHUNKS:,}) — filter or slice it in Python first, then delegate the survivors"]
+            return [f"Error: {total} chunks would be needed — filter/slice the text in Python first"]
         results: list[str] = []
         for i in range(0, total, _MAX_CHUNK_BATCH):
             batch = [

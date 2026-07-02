@@ -63,7 +63,7 @@ async function main() {
   const ceiling = await csb.exec('print(llm_query_chunked("x" * 720_000, "Q"))');
   check(
     "chunk ceiling guards against explosion",
-    ceiling.stdout.includes("Error:") && ceiling.stdout.includes("500"),
+    ceiling.stdout.includes("Error:") && ceiling.stdout.includes("chunks would be needed"),
     ceiling.stdout.trim().slice(0, 80),
   );
   await csb.dispose();

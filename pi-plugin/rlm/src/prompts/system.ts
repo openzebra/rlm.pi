@@ -62,11 +62,11 @@ const LARGE_FILE_RULE_LINES: readonly string[] = Object.freeze([
 
 /** Concise native-mode glossary line for the chunked helper (native prompt has a 6K budget). */
 const CHUNKED_GLOSSARY_LINE_NATIVE =
-  "- `llm_query_chunked(text, prompt, model=None) -> list[str]` — splits text into cap-sized chunks, fans out concurrently, one answer per chunk.";
+  "- `llm_query_chunked(text, prompt, model=None) -> list[str]` — auto-splits oversized text into cap-sized chunks, fans out concurrently; one answer per chunk.";
 
 /** Concise native-mode large-file rule (folds in the context-exclusion note; native 6K budget). */
 const LARGE_FILE_RULE_NATIVE =
-  "- Files >1MB or gitignored are NOT in `context` — open() them, parse in Python, and delegate semantic reading via `llm_query_chunked`. Print at most ~2K chars of raw content.";
+  "- Files >1MB or gitignored are NOT in `context`: open() + parse deterministically in Python is fine; ANY semantic reading of the raw text goes through llm_query_chunked. Never print >2K chars raw.";
 
 function howToRunCode(): string {
   return [
@@ -221,8 +221,7 @@ function nativeReplGlossary(): string {
     "## RLM Native Mode — Persistent Python REPL",
     "",
     "Call `repl({code: \"...\"})` to execute Python in a **persistent** sandbox. Variables, imports,",
-    "and state survive across calls — you build up results incrementally. Only `print()` output is",
-    "returned, so always wrap inspections in `print(...)`.",
+    "State persists; only `print()` output is returned, so wrap inspections in `print(...)`.",
     "",
     "### REPL Environment",
     "- `context`: list[dict] — every file in the repository. Each dict: `path` (str), `content` (str), `tokens` (int).",
@@ -235,10 +234,7 @@ function nativeReplGlossary(): string {
     "**Choosing between `llm_query` and `rlm_query`:** default to `llm_query`/batched; use `rlm_query` only for iterative sub-tasks.",
     "- `todo(action, **kwargs) -> str` — manage a task list. Actions: create, update, list, get, delete, clear. Statuses: pending → in_progress → completed.",
     "- `SHOW_VARS() -> str` — list all variables currently in the REPL.",
-    "- `stage_edit(path, old_text, new_text) -> str`: stage a file edit computed inside the REPL.",
-    "  Read the file from `context`, compute the exact change in Python, then call",
-    "  stage_edit once per file. The repl() result will include a STAGED_EDITS JSON block.",
-    "  The main agent must then call `edit` for each entry verbatim — zero analysis needed.",
+    "- `stage_edit(path, old_text, new_text)`: stage exact edits from `context`; apply returned STAGED_EDITS verbatim with edit().",
     "- `answer`: dict `{\"content\": \"\", \"ready\": False}`. To submit: `answer[\"content\"] = \"...\"; answer[\"ready\"] = True`.",
     "",
     "### Orchestrator Pattern",
@@ -261,14 +257,14 @@ function nativeReplGlossary(): string {
     "    # aggregate results into a buffer",
     "```",
     `- Keep sub-prompts under ${DEFAULT_PROMPT_CAP.toLocaleString()} characters (≈${promptCapTokensK(DEFAULT_PROMPT_CAP)}K tokens); batch ~20 prompts per call. Fat prompts in small batches > thousands of tiny prompts.`,
-    "- If your `context` is small enough (<20 files), you CAN read files directly via `read` / `grep` / `zebra-mcp`.",
+    "- Even if `context` is small, do not use `read`/`grep`/bash to read files; use repl() string/regex search.",
     "- For medium/large repos, delegate to sub-LLMs via the REPL.",
     "",
     "### Choosing Between Tools",
     "| Tool | When |",
     "|------|------|",
     "| `repl({code})` | Need to chunk/delegate `context` to sub-LLMs; need Python scripting; need REPL state across calls |",
-    "| `read` / `grep` | Inspect a few specific files directly; small codebase |",
+    "| `read` / `grep` / bash readers | Blocked for file access; use repl() + pre-loaded `context` instead |",
     "| `zebra-mcp` | Semantic search over the codebase |",
     "| `edit` | Modify an existing file with exact text replacement (native Pi flow, visible to all plugins) |",
     "| `write` | Create a new file (native Pi flow, visible to all plugins) |",
@@ -301,7 +297,8 @@ export function buildNativeSystemPrompt(): string {
     "║  NATIVE RLM MODE — YOU ARE AN ORCHESTRATOR, NOT A READER      ║",
     "╚══════════════════════════════════════════════════════════════════╝",
     "",
-    "ABSOLUTE RESTRICTION: Do NOT use `read` or `grep` to access files.",
+    "ABSOLUTE RESTRICTION: do NOT read files via `read`/`grep`, nor via bash (cat/sed/head/tail/awk/rg — blocked).",
+    "bash is for RUNNING things (tests, builds, git); its output is hard-capped at 4K chars. Bulk text must flow through repl() + llm_query_chunked / llm_query_batched.",
     "All file content is pre-loaded in the REPL `context` variable. Use ONLY `repl({code})`.",
     "If sub-LLM credits are exhausted → report the error to the user and stop.",
     "",
