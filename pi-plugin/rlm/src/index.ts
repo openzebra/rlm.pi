@@ -27,6 +27,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     requestTimeoutMs: config.requestTimeoutMs,
     python: config.python,
     sandboxInitTimeoutMs: config.sandboxInitTimeoutMs,
+    maxPromptChars: config.maxPromptChars,
   });
   let packedContextText: string | undefined;
   let contextPackPromise: Promise<string | undefined> | undefined;

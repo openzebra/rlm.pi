@@ -13,6 +13,7 @@ export interface SandboxManagerConfig {
   readonly requestTimeoutMs: number;
   readonly python: string;
   readonly sandboxInitTimeoutMs: number;
+  readonly maxPromptChars: number;
   readonly signal?: AbortSignal;
 }
 
@@ -58,6 +59,7 @@ export class SandboxManager {
       python: this.config.python,
       signal: this.config.signal,
       initTimeoutMs: this.config.sandboxInitTimeoutMs,
+      maxPromptChars: this.config.maxPromptChars,
       handlers,
     }).then(async (s) => {
       // Load context on first creation if available.

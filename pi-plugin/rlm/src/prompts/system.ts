@@ -35,6 +35,39 @@ function promptCapTokensK(maxPromptChars: number): number {
   return Math.round(maxPromptChars / 4_000);
 }
 
+/** Shared glossary entry for the chunked-query helper (headless + native). */
+const CHUNKED_GLOSSARY_LINES: readonly string[] = Object.freeze([
+  "- `llm_query_chunked(text: str, prompt: str, model=None) -> list[str]`: auto-splits `text` into",
+  "  chunks that fit the sub-LLM prompt cap, fans them out concurrently (order preserved), and",
+  "  returns one answer per chunk. Use it for ANY text too large for a single `llm_query` — a file",
+  "  you open()ed, an oversized sub-result, or several concatenated context files.",
+]);
+
+/** Why a file the user mentioned may be missing from `context`. */
+const CONTEXT_EXCLUSION_NOTE =
+  "  NOTE: files larger than 1MB and gitignored files are NOT in `context` — they exist only on disk.";
+
+/** The large-on-disk-file protocol (headless + native). */
+const LARGE_FILE_RULE_LINES: readonly string[] = Object.freeze([
+  "**Large on-disk files (profiles, logs, dumps, generated JSON):** files >1MB or gitignored are",
+  "absent from `context`. Protocol:",
+  '1. Load in Python: `raw = open("dhat-heap.json").read()` — loading into a variable is fine.',
+  "2. Deterministic processing in Python (`json.load`, `re`, counting, aggregation) is fine and preferred.",
+  "3. The moment you need MEANING from raw text (summarize, explain, find anomalies), do NOT read it",
+  "   yourself — call `llm_query_chunked(raw, question)`, or slice + `llm_query_batched`.",
+  "4. Never print more than a small probe (~2K chars) of raw content.",
+  'Example: `parts = llm_query_chunked(raw, "Extract top allocation sites with byte totals")`, then',
+  "aggregate `parts` in Python or with one final `llm_query`.",
+]);
+
+/** Concise native-mode glossary line for the chunked helper (native prompt has a 6K budget). */
+const CHUNKED_GLOSSARY_LINE_NATIVE =
+  "- `llm_query_chunked(text, prompt, model=None) -> list[str]` — splits text into cap-sized chunks, fans out concurrently, one answer per chunk.";
+
+/** Concise native-mode large-file rule (folds in the context-exclusion note; native 6K budget). */
+const LARGE_FILE_RULE_NATIVE =
+  "- Files >1MB or gitignored are NOT in `context` — open() them, parse in Python, and delegate semantic reading via `llm_query_chunked`. Print at most ~2K chars of raw content.";
+
 function howToRunCode(): string {
   return [
     "To run Python, write a fenced ```repl``` block. The REPL **persists** across turns. Only",
@@ -57,6 +90,7 @@ function replGlossary(kind: ContextKind, recursion: boolean, askUserQuestion: bo
       "  keys: `path` (relative file path, str), `content` (file text, str), `tokens` (estimated count, int).",
       "  For large repos, chunk `context` into batches and delegate to sub-LLMs — never dump raw file",
       "  bodies into your own output.",
+      CONTEXT_EXCLUSION_NOTE,
       "",
       "  Chunking example:",
       "  ```python",
@@ -75,6 +109,7 @@ function replGlossary(kind: ContextKind, recursion: boolean, askUserQuestion: bo
     "  summarization, or Q&A over a chunk of text.",
     "- `llm_query_batched(prompts: list[str], model=None) -> list[str]`: run several sub-LLM calls",
     "  concurrently; output order matches input order.",
+    ...CHUNKED_GLOSSARY_LINES,
   );
   if (askUserQuestion) {
     lines.push(
@@ -173,6 +208,9 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
   if (opts.orchestrator ?? true) {
     parts.push("", orchestratorAddendum(maxPromptChars));
   }
+  if (kind === "files") {
+    parts.push("", LARGE_FILE_RULE_LINES.join("\n"));
+  }
   parts.push("", buildMetadataLine(meta, maxPromptChars));
   return parts.join("\n");
 }
@@ -190,6 +228,7 @@ function nativeReplGlossary(): string {
     "- `context`: list[dict] — every file in the repository. Each dict: `path` (str), `content` (str), `tokens` (int).",
     "- `llm_query(prompt, model=None) -> str` — one-shot sub-LLM. Use for extraction, summarization, Q&A over a chunk.",
     "- `llm_query_batched(prompts, model=None) -> list[str]` — concurrent sub-LLM calls; output order matches input order.",
+    CHUNKED_GLOSSARY_LINE_NATIVE,
     "- `rlm_query(prompt, model=None) -> str` — recursive RLM with its own REPL for complex sub-tasks needing iterative reasoning.",
     "- `rlm_query_batched(prompts, model=None) -> list[str]` — concurrent recursive RLM calls.",
     "",
@@ -245,6 +284,7 @@ function nativeReplGlossary(): string {
     "4. **Finalize**: For file changes, stage them inside repl() via stage_edit(path, old, new), then relay the STAGED_EDITS from the result to `edit`. For analysis tasks, write a normal message.",
     "",
     "### Task-Specific Patterns",
+    LARGE_FILE_RULE_NATIVE,
     "- Architecture/code review: chunk relevant files and delegate summaries or review to `llm_query_batched`.",
     "- Bug investigation: use Python string/regex search over `context`; delegate matching files for analysis.",
     "- If sub-LLM credits are exhausted, report partial results and stop — do not bypass REPL restrictions.",

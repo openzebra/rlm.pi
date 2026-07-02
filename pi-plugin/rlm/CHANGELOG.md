@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.4] - 2026-07-03
 
+### Added
+
+- `llm_query_chunked(text, prompt, model=None)` REPL helper: auto-splits oversized on-disk text
+  into cap-sized chunks and fans them out via `llm_query_batched`, so models delegate semantic
+  analysis of large files (profiles, logs, dumps) instead of reading the raw bytes themselves.
+- Large-on-disk-file delegation rules and a "files >1MB / gitignored are absent from `context`"
+  note in both headless and native system prompts.
+- One-time stdout nudge when a REPL variable holds >500K chars of raw text, steering toward
+  `llm_query_chunked` / `llm_query_batched`.
+
 ### Changed
 
 - Made the phase pipeline opt-in (`pipeline: false` by default). This removes `advance_phase()`
@@ -94,5 +104,6 @@ for the Pi coding agent.
 [0.1.1]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.1
 [0.1.2]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.2
 [0.1.3]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.3
+[0.1.4]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.4
 
 [0.1.0]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.0

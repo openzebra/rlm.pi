@@ -77,6 +77,7 @@ async function testSandboxManager() {
     requestTimeoutMs: 10_000,
     python: "python3",
     sandboxInitTimeoutMs: 30_000,
+    maxPromptChars: 400_000,
   });
 
   // Lifecycle

@@ -112,6 +112,7 @@ These functions are injected into the model's Python namespace inside the REPL:
 | `context` | `list[dict]` | Repository packed as `[{"path","content","tokens"}, ...]` — the full codebase |
 | `llm_query` | `(prompt, model=None) -> str` | One-shot sub-LLM call (worker model) |
 | `llm_query_batched` | `(prompts, model=None) -> list[str]` | Concurrent sub-LLM calls (pool-bounded) |
+| `llm_query_chunked` | `(text, prompt, model=None) -> list[str]` | Split large text into cap-sized chunks and fan out via sub-LLMs |
 | `rlm_query` | `(prompt, model=None) -> str` | Recursive child RLM with its own sandbox (depth-capped) |
 | `rlm_query_batched` | `(prompts, model=None) -> list[str]` | Concurrent recursive child RLMs |
 | `todo` | `(action, **kwargs) -> str` | Task list: `create`/`update`/`list`/`get`/`delete`/`clear` |

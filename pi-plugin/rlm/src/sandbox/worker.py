@@ -64,7 +64,8 @@ for _blocked in ("eval", "exec", "compile", "input", "globals", "locals"):
 
 RESERVED = frozenset(
     {
-        "llm_query", "llm_query_batched", "rlm_query", "rlm_query_batched",
+        "llm_query", "llm_query_batched", "llm_query_chunked",
+        "rlm_query", "rlm_query_batched",
         "advance_phase",
         "ask_user_question", "todo",
         "stage_edit",
@@ -72,6 +73,28 @@ RESERVED = frozenset(
     }
 )
 _CONTEXT_SLOT = re.compile(r"context(_\d+)?\Z")
+
+# Sizing for llm_query_chunked: leave room for the instruction and the chunk header.
+_CHUNK_HEADER_OVERHEAD = 64
+_MAX_CHUNK_BATCH = 20          # fan-out per llm_query_batched call (matches prompt guidance)
+_MAX_CHUNKS = 500              # ceiling: above this, force pre-filtering in Python
+_NUDGE_CHARS = 500_000         # str/bytes vars above this trigger a one-time stdout hint
+
+
+def _chunk_text(text: str, chunk_chars: int) -> list[str]:
+    """Split text into <=chunk_chars pieces, preferring newline boundaries."""
+    chunks: list[str] = []
+    n = len(text)
+    start = 0
+    while start < n:
+        end = min(start + chunk_chars, n)
+        if end < n:
+            nl = text.rfind("\n", start, end)
+            if nl > start:
+                end = nl + 1
+        chunks.append(text[start:end])
+        start = end
+    return chunks
 
 
 class _AnswerDict(dict):
@@ -95,9 +118,10 @@ def _send(obj: dict[str, Any]) -> None:
 
 
 class Worker:
-    def __init__(self, depth: int, exec_timeout_s: float):
+    def __init__(self, depth: int, exec_timeout_s: float, max_prompt_chars: int):
         self.depth = depth
         self.exec_timeout_s = exec_timeout_s
+        self.max_prompt_chars = max_prompt_chars
         self._rid = 0
         self._final_answer: str | None = None
         self._context_count = 0
@@ -108,6 +132,7 @@ class Worker:
         self.ns = {"__builtins__": _SAFE_BUILTINS.copy(), "__name__": "__main__"}
         self._ctx_payloads: dict[int, Any] = {}
         self._staged_edits: list[dict[str, str]] = []
+        self._nudged: set[str] = set()
         self._restore_scaffold()
 
     def _capture_answer(self, content: Any) -> None:
@@ -118,6 +143,7 @@ class Worker:
         ns = self.ns
         ns["llm_query"] = self._llm_query
         ns["llm_query_batched"] = self._llm_query_batched
+        ns["llm_query_chunked"] = self._llm_query_chunked
         ns["rlm_query"] = self._rlm_query
         ns["rlm_query_batched"] = self._rlm_query_batched
         ns["advance_phase"] = self._advance_phase
@@ -204,6 +230,35 @@ class Worker:
         if not isinstance(out, list) or len(out) != len(prompts):
             return ["Error: malformed batched response"] * len(prompts)
         return [s if isinstance(s, str) else f"Error: {s}" for s in out]
+
+    def _llm_query_chunked(self, text, prompt: str, model: str | None = None) -> list[str]:
+        """Split oversized text into cap-sized chunks and fan out via llm_query_batched.
+
+        Returns one answer per chunk, order preserved. No exceptions escape: errors come
+        back as "Error: ..." strings per chunk (same contract as llm_query_batched).
+
+        NOTE: budget uses Python code-point length (len) while the parent-side cap check counts
+        UTF-16 units (JS string.length); astral/emoji-heavy text may be marginally larger on the
+        parent and get per-chunk rejected. Acceptable trade-off for typical code/log/profile text.
+        """
+        text, prompt = str(text), str(prompt)
+        if not text:
+            return []
+        budget = self.max_prompt_chars - len(prompt) - _CHUNK_HEADER_OVERHEAD
+        if budget < 1_000:
+            return [f"Error: prompt leaves under 1,000 chars per chunk (cap {self.max_prompt_chars:,}) — shorten the instruction"]
+        chunks = _chunk_text(text, budget)
+        total = len(chunks)
+        if total > _MAX_CHUNKS:
+            return [f"Error: input splits into {total:,} chunks (cap {_MAX_CHUNKS:,}) — filter or slice it in Python first, then delegate the survivors"]
+        results: list[str] = []
+        for i in range(0, total, _MAX_CHUNK_BATCH):
+            batch = [
+                f"{prompt}\n\n[chunk {i + j + 1}/{total} of the input]\n{c}"
+                for j, c in enumerate(chunks[i:i + _MAX_CHUNK_BATCH])
+            ]
+            results.extend(self._llm_query_batched(batch, model))
+        return results
 
     def _rlm_query(self, prompt: str, model: str | None = None) -> str:
         r = self._rpc("rlm_query", {"prompt": str(prompt), "model": model})
@@ -343,6 +398,24 @@ class Worker:
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, old)
 
+    def _nudge_lines(self) -> list[str]:
+        """One-time hint for newly created huge raw-text variables (single line).
+
+        Collapses to one line so it survives headless stdout elision (head 200 + tail 200).
+        """
+        names: list[str] = []
+        for k in self._user_var_names():
+            v = self.ns.get(k)
+            if isinstance(v, (str, bytes)) and len(v) > _NUDGE_CHARS and k not in self._nudged:
+                self._nudged.add(k)
+                names.append(f"{k} ({len(v):,} chars)")
+        if not names:
+            return []
+        return [
+            f"[rlm] huge raw-text variable(s): {', '.join(names)} — do NOT analyze them yourself; "
+            'delegate with llm_query_chunked(name, "your question") or slice + llm_query_batched.'
+        ]
+
     def execute(self, code: str) -> dict[str, Any]:
         start = time.perf_counter()
         raised = False
@@ -365,6 +438,11 @@ class Worker:
         # in the same block; the dict's current content is the real submission.
         if final is not None and not final.strip() and str(answer_content).strip():
             final = str(answer_content)
+        nudges = self._nudge_lines()
+        if nudges:
+            parts = [stdout] if stdout else []
+            parts.extend(nudges)
+            stdout = "\n".join(parts) + "\n"
         return {
             "stdout": stdout,
             "stderr": stderr,
@@ -433,9 +511,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--depth", type=int, default=int(os.environ.get("RLM_DEPTH", "1")))
     ap.add_argument("--timeout", type=float, default=float(os.environ.get("RLM_EXEC_TIMEOUT_S", "600")))
+    ap.add_argument("--max-prompt-chars", type=int,
+                    default=int(os.environ.get("RLM_MAX_PROMPT_CHARS", "400000")))
     args = ap.parse_args()
 
-    worker = Worker(depth=args.depth, exec_timeout_s=args.timeout)
+    worker = Worker(depth=args.depth, exec_timeout_s=args.timeout,
+                    max_prompt_chars=args.max_prompt_chars)
     _send({"id": "_init", "ok": True})
 
     for raw in _REAL_STDIN:

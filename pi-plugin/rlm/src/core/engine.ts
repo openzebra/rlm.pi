@@ -207,6 +207,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         python: deps.config.python,
         signal: deps.signal,
         initTimeoutMs: deps.config.sandboxInitTimeoutMs,
+        maxPromptChars: deps.config.maxPromptChars,
         handlers: { ...llm, ...rlm, ...phaseHandlers, ...interactiveHandlers },
       });
 

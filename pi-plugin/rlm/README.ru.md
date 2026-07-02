@@ -106,6 +106,7 @@ rm -rf ~/.pi/agent/extensions/rlm
 | `context` | `list[dict]` | Репозиторий, упакованный как `[{"path","content","tokens"}, ...]` — вся кодовая база |
 | `llm_query` | `(prompt, model=None) -> str` | Одноразовый вызов sub-LLM (worker-модель) |
 | `llm_query_batched` | `(prompts, model=None) -> list[str]` | Параллельные вызовы sub-LLM (с ограничением пула) |
+| `llm_query_chunked` | `(text, prompt, model=None) -> list[str]` | Дробит большой текст на части по лимиту и обрабатывает через sub-LLM |
 | `rlm_query` | `(prompt, model=None) -> str` | Рекурсивный дочерний RLM со своей песочницей (с ограничением глубины) |
 | `rlm_query_batched` | `(prompts, model=None) -> list[str]` | Параллельные рекурсивные дочерние RLM |
 | `todo` | `(action, **kwargs) -> str` | Список задач: `create`/`update`/`list`/`get`/`delete`/`clear` |

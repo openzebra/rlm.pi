@@ -113,6 +113,7 @@ rm -rf ~/.pi/agent/extensions/rlm
 | `context` | `list[dict]` | 打包为 `[{"path","content","tokens"}, ...]` 的仓库 —— 完整的代码库 |
 | `llm_query` | `(prompt, model=None) -> str` | 单次子 LLM 调用 (worker 模型) |
 | `llm_query_batched` | `(prompts, model=None) -> list[str]` | 并发子 LLM 调用 (池上限) |
+| `llm_query_chunked` | `(text, prompt, model=None) -> list[str]` | 将大文本拆分为不超过上限的块并通过子 LLM 处理 |
 | `rlm_query` | `(prompt, model=None) -> str` | 具有自有沙箱的递归子 RLM (设有深度限制) |
 | `rlm_query_batched` | `(prompts, model=None) -> list[str]` | 并发递归子 RLM |
 | `todo` | `(action, **kwargs) -> str` | 任务列表：`create`/`update`/`list`/`get`/`delete`/`clear` |

@@ -52,6 +52,8 @@ export interface SandboxOptions {
   readonly signal?: AbortSignal;
   /** Worker startup wait before init failure (ms). */
   readonly initTimeoutMs?: number;
+  /** Sub-LLM prompt cap (chars) — sizes llm_query_chunked chunks inside the worker. */
+  readonly maxPromptChars?: number;
 }
 
 const WORKER_PATH = join(dirname(fileURLToPath(import.meta.url)), "worker.py");
@@ -110,9 +112,17 @@ export class PythonSandbox {
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 20 * 60_000;
     this.initTimeoutMs = opts.initTimeoutMs ?? 30_000;
     const python = opts.python ?? "python3";
+    const workerArgs = [
+      "-u", WORKER_PATH,
+      "--depth", String(opts.depth ?? 1),
+      "--timeout", String(opts.execTimeoutS ?? 600),
+    ];
+    if (opts.maxPromptChars !== undefined) {
+      workerArgs.push("--max-prompt-chars", String(opts.maxPromptChars));
+    }
     this.proc = spawn(
       python,
-      ["-u", WORKER_PATH, "--depth", String(opts.depth ?? 1), "--timeout", String(opts.execTimeoutS ?? 600)],
+      workerArgs,
       { stdio: ["pipe", "pipe", "pipe"], env: sanitizedEnv() },
     ) as ChildProcessWithoutNullStreams;
 
