@@ -21,7 +21,7 @@ function testFormatForLLM() {
   const out = formatForLLM(empty);
   check("formatForLLM empty bundle — non-empty", out.length > 0);
   check("formatForLLM empty bundle — shows 0 files", out.includes("0 files"));
-  check("formatForLLM empty bundle — includes hint", out.includes("To read a file"));
+  check("formatForLLM empty bundle — includes hint", out.includes("pre-loaded in the REPL"));
 
   const small: ContextBundle = {
     files: [

@@ -13,7 +13,7 @@ import { postRlmGuide } from "./ui/intro.ts";
 import { setRlmModeStatus } from "./ui/status.ts";
 import { SandboxManager } from "./sandbox/sandbox-manager.ts";
 import { packRepository, formatForLLM, serializeForSandbox } from "./context/repomix-context.ts";
-import { buildNativeSystemPrompt } from "./prompts/system.ts";
+import { buildNativeSystemPrompt, NATIVE_TURN_REMINDER } from "./prompts/system.ts";
 import { bashCommandFromInput, isFileReadingCommand, capToolResultText, BASH_BLOCK_REASON } from "./mode/native-guards.ts";
 import { errorMessage } from "./util/errors.ts";
 
@@ -126,11 +126,16 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   let contextInjected = false;
   pi.on("context", async (event, ctx) => {
     const filtered = event.messages.filter(
-      (message) => !(message.role === "custom" && message.customType === "rlm-intro"),
+      (message) =>
+        !(message.role === "custom" && message.customType === "rlm-intro")
+        && !(message.role === "user" && typeof message.content === "string" && message.content === NATIVE_TURN_REMINDER),
     );
+    if (!controller.enabled) return { messages: filtered };
 
-    // Inject repository context as a compact listing (once per session, only when RLM is enabled)
-    if (controller.enabled && !contextInjected) {
+    type PiMessage = (typeof filtered)[number];
+
+    // Inject repository context as a compact listing (once per session)
+    if (!contextInjected) {
       const cwd = ctx.cwd ?? process.cwd();
       const contextText = await ensureRepositoryContext(cwd);
       if (contextText !== undefined) {
@@ -141,15 +146,20 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           "Chunk context via Python, delegate to llm_query. If credits exhausted → report and stop.",
           "",
         ].join("\n");
-        const contextMsg = {
+        filtered.unshift({
           role: "user" as const,
           content: instruction + contextText,
           timestamp: 0,
-        } as (typeof filtered)[number];
-
-        return { messages: [contextMsg, ...filtered] };
+        } as PiMessage);
       }
     }
+
+    // Per-turn last-position reminder (not persisted — context hook rebuilds every request)
+    filtered.push({
+      role: "user" as const,
+      content: NATIVE_TURN_REMINDER,
+      timestamp: 0,
+    } as PiMessage);
 
     return { messages: filtered };
   });

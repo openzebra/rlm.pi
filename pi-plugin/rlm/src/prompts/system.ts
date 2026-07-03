@@ -228,10 +228,9 @@ function nativeReplGlossary(): string {
     "- `llm_query(prompt, model=None) -> str` — one-shot sub-LLM. Use for extraction, summarization, Q&A over a chunk.",
     "- `llm_query_batched(prompts, model=None) -> list[str]` — concurrent sub-LLM calls; output order matches input order.",
     CHUNKED_GLOSSARY_LINE_NATIVE,
-    "- `rlm_query(prompt, model=None) -> str` — recursive RLM with its own REPL for complex sub-tasks needing iterative reasoning.",
+    "- `rlm_query(prompt, model=None) -> str` — recursive RLM with its own REPL for complex sub-tasks needing iterative reasoning. Prefer llm_query — rlm_query is slower and costlier.",
     "- `rlm_query_batched(prompts, model=None) -> list[str]` — concurrent recursive RLM calls.",
     "",
-    "**Choosing between `llm_query` and `rlm_query`:** default to `llm_query`/batched; use `rlm_query` only for iterative sub-tasks.",
     "- `todo(action, **kwargs) -> str` — manage a task list. Actions: create, update, list, get, delete, clear. Statuses: pending → in_progress → completed.",
     "- `SHOW_VARS() -> str` — list all variables currently in the REPL.",
     "- `stage_edit(path, old_text, new_text)`: stage exact edits from `context`; apply returned STAGED_EDITS verbatim with edit().",
@@ -257,14 +256,11 @@ function nativeReplGlossary(): string {
     "    # aggregate results into a buffer",
     "```",
     `- Keep sub-prompts under ${DEFAULT_PROMPT_CAP.toLocaleString()} characters (≈${promptCapTokensK(DEFAULT_PROMPT_CAP)}K tokens); batch ~20 prompts per call. Fat prompts in small batches > thousands of tiny prompts.`,
-    "- Even if `context` is small, do not use `read`/`grep`/bash to read files; use repl() string/regex search.",
-    "- For medium/large repos, delegate to sub-LLMs via the REPL.",
     "",
     "### Choosing Between Tools",
     "| Tool | When |",
     "|------|------|",
     "| `repl({code})` | Need to chunk/delegate `context` to sub-LLMs; need Python scripting; need REPL state across calls |",
-    "| `read` / `grep` / bash readers | Blocked for file access; use repl() + pre-loaded `context` instead |",
     "| `zebra-mcp` | Semantic search over the codebase |",
     "| `edit` | Modify an existing file with exact text replacement (native Pi flow, visible to all plugins) |",
     "| `write` | Create a new file (native Pi flow, visible to all plugins) |",
@@ -297,8 +293,15 @@ export function buildNativeSystemPrompt(): string {
     "║  NATIVE RLM MODE — YOU ARE AN ORCHESTRATOR, NOT A READER      ║",
     "╚══════════════════════════════════════════════════════════════════╝",
     "",
-    "ABSOLUTE RESTRICTION: do NOT read files via `read`/`grep`, nor via bash (cat/sed/head/tail/awk/rg — blocked).",
-    "bash is for RUNNING things (tests, builds, git); its output is hard-capped at 4K chars. Bulk text must flow through repl() + llm_query_chunked / llm_query_batched.",
+    "ENFORCED BY THE RUNTIME (not advisory):",
+    "- `read`/`grep` are blocked; bash readers (cat/sed/head/tail/awk/rg) are blocked; bash output is hard-capped at 4K chars.",
+    "- repl() stdout returned to you is hard-capped at 4K chars — printing file bodies is USELESS; the text will not reach you.",
+    "",
+    "DELEGATION RULE: if a step needs MEANING from more than ~4K chars of text, that reading MUST",
+    "be an llm_query / llm_query_batched / llm_query_chunked call (rlm_query for iterative",
+    "sub-tasks). Deterministic Python (search, count, slice, json, re) over `context` is free and",
+    "preferred for lookups. Semantic reading is always delegated.",
+    "",
     "All file content is pre-loaded in the REPL `context` variable. Use ONLY `repl({code})`.",
     "If sub-LLM credits are exhausted → report the error to the user and stop.",
     "",
@@ -313,8 +316,21 @@ export function buildNativeSystemPrompt(): string {
   ].join("\n");
 }
 
+/** Soft cap on the static native prompt. Leaves headroom for per-turn context injection
+ *  without bloating the root model's system prompt. Exceeded → phase-guards.ts fails. */
+export const NATIVE_PROMPT_BUDGET = 6_000;
+
 /** Exported for tests — prompt length without context metadata (which is injected separately). */
 export const NATIVE_PROMPT_STATIC = buildNativeSystemPrompt();
+
+/** Per-turn last-position reminder for native mode — appended to every context build. */
+export const NATIVE_TURN_REMINDER = [
+  "[RLM orchestrator contract — enforced by the runtime, not optional:",
+  "repl() stdout to you is hard-capped at 4K chars; read/grep and bash readers are blocked.",
+  "Any SEMANTIC reading of file/text content MUST go through llm_query / llm_query_batched /",
+  "llm_query_chunked (rlm_query for iterative sub-tasks). Deterministic Python (search, count,",
+  "slice, json) is free. Keep your own output to decisions and aggregation.]",
+].join("\n");
 
 /** The one-line context metadata, also reused by the per-turn prompt in headless mode. */
 export function buildMetadataLine(meta: PromptMeta, maxPromptChars = DEFAULT_PROMPT_CAP): string {

@@ -220,7 +220,7 @@ const MAX_LLM_LISTING_FILES = 200;
 /**
  * Produces a compact human-readable text block for the parent LLM's context window.
  * Shows file paths and token estimates — NOT full file contents (those are too large
- * for the context window). The LLM uses its file-reading tools to inspect specific files.
+ * for the context window). The LLM inspects files via repl() over the pre-loaded context variable.
  */
 export function formatForLLM(bundle: ContextBundle): string {
   const files = bundle.files.slice(0, MAX_LLM_LISTING_FILES);
@@ -238,7 +238,8 @@ export function formatForLLM(bundle: ContextBundle): string {
     listing,
     truncated,
     "",
-    "To read a file, use the file-reading tools with the exact path.",
+    "All file contents are pre-loaded in the REPL `context` variable — file-reading tools are disabled.",
+    "Use repl({code}) and delegate semantic reading to llm_query / llm_query_batched / llm_query_chunked.",
   ].join("\n");
 }
 

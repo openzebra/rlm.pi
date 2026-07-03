@@ -31,6 +31,7 @@ import type { ProposedEdit, ReplResult } from "../sandbox/protocol.ts";
 import { RlmEmitter } from "./rlm-events.ts";
 import { SubcallStore } from "./subcall-store.ts";
 import type { ReplDetails } from "./repl-details.ts";
+import type { RlmSubcall } from "./rlm-details.ts";
 import { createEngine } from "../core/engine.ts";
 import { formatCost, formatTokens, spinnerFrame } from "../ui/theme.ts";
 import { errorMessage, formatError, isErrorText } from "../util/errors.ts";
@@ -40,6 +41,7 @@ import {
   renderExpandedSubcallTree,
 } from "./subcall-render.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
+import { capReplResultText, replDelegationNudge } from "../mode/native-guards.ts";
 
 // ── Parameter schema ──
 
@@ -49,6 +51,37 @@ export const ReplToolParams = Object.freeze(Type.Object({
 
 export function surfaceReplEdits(edits: readonly ProposedEdit[], raised: boolean): readonly ProposedEdit[] | undefined {
   return edits.length > 0 && !raised ? edits : undefined;
+}
+
+/** Model-visible text assembled from a repl() result, plus the surfaced edits for `details`. */
+export interface ReplResultText {
+  readonly text: string;
+  readonly surfacedEdits: readonly ProposedEdit[] | undefined;
+}
+
+/**
+ * Assemble the model-visible text for a repl() result: cap stdout, append a zero-subcall
+ * delegation nudge (suppressed when edits were staged), and append the STAGED_EDITS block
+ * AFTER capping so edit JSON is never truncated. Extracted as a pure function so the
+ * capping/ordering invariants are testable independently of the sandbox.
+ */
+export function buildReplResultText(
+  stdout: string,
+  answerContent: string | undefined,
+  edits: readonly ProposedEdit[],
+  raised: boolean,
+  subcalls: readonly RlmSubcall[],
+): ReplResultText {
+  const rawText = stdout || answerContent || "(no output)";
+  const surfacedEdits = surfaceReplEdits(edits, raised);
+  const editsBlock = surfacedEdits
+    ? `\n\nSTAGED_EDITS:\n${JSON.stringify(surfacedEdits)}`
+    : "";
+  // Model-visible text is capped; the caller keeps full stdout in `details.output` for the TUI.
+  const cappedText = capReplResultText(rawText) ?? rawText;
+  const delegated = subcalls.some((s) => s.kind === "llm" || s.kind === "batch" || s.kind === "rlm");
+  const nudge = surfacedEdits ? undefined : replDelegationNudge(rawText.length, delegated);
+  return { text: cappedText + (nudge ?? "") + editsBlock, surfacedEdits };
 }
 
 // ── Mutable bridge state (handler indirection) ──
@@ -321,7 +354,13 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
   return {
     name: "repl",
     label: "REPL",
-    description: "Execute Python code in a persistent REPL sandbox with the full repository context pre-loaded. Variables, imports, and state persist across calls. Supports llm_query, rlm_query, todo, and ask_user_question inside the sandbox.",
+    description:
+      "PRIMARY tool for ALL repository reading and analysis (read/grep are disabled in RLM mode). " +
+      "Persistent Python sandbox with every file pre-loaded in `context`. You are an orchestrator: " +
+      "chunk `context` and delegate semantic work to llm_query / llm_query_batched / " +
+      "llm_query_chunked / rlm_query — stdout returned to you is hard-capped at 4K chars, so " +
+      "printing file bodies is useless. Variables, imports, and state persist across calls. " +
+      "Also supports todo and ask_user_question inside the sandbox.",
     parameters: ReplToolParams,
 
     async execute(_toolCallId, rawParams, _execSignal, onUpdate, ctx) {
@@ -425,11 +464,13 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
 
         if (queuedId) emitter.emitSubcallUpdated({ id: queuedId, status: "done" });
 
-        const baseText = result.stdout || result.answerContent || "(no output)";
-        const surfacedEdits = surfaceReplEdits(result.edits, result.raised);
-        const editsBlock = surfacedEdits
-          ? `\n\nSTAGED_EDITS:\n${JSON.stringify(surfacedEdits)}`
-          : "";
+        const { text: resultText, surfacedEdits } = buildReplResultText(
+          result.stdout,
+          result.answerContent,
+          result.edits,
+          result.raised,
+          store.getSubcalls(),
+        );
 
         const details: ReplDetails = {
           status: "done",
@@ -442,7 +483,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         };
         // Final progressive update
         onUpdate?.({ content: [{ type: "text", text: result.stdout.slice(0, 500) || "(no output)" }], details });
-        return { content: [{ type: "text", text: baseText + editsBlock }], details };
+        return { content: [{ type: "text", text: resultText }], details };
       } catch (e) {
         progressStatus = "error";
         const msg = errorMessage(e);

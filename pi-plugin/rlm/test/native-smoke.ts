@@ -47,7 +47,7 @@ listing.split("\n").slice(0, 3).forEach(l => console.log(`  ${l.slice(0, 100)}`)
 check("formatForLLM — non-empty on real project", listing.length > 100);
 check("formatForLLM — contains 'Repository context'", listing.includes("Repository context"));
 check("formatForLLM — contains file paths", listing.includes(".ts") || listing.includes(".json"));
-check("formatForLLM — contains 'To read a file' hint", listing.includes("To read a file"));
+check("formatForLLM — contains repl delegation hint", listing.includes("pre-loaded in the REPL"));
 
 // If project > 200 files, check truncation
 if (bundle.totalFiles > 200) {

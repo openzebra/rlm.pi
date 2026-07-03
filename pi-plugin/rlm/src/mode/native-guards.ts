@@ -1,7 +1,9 @@
 /**
  * native-guards — keeps bulk file content out of the root model's context in native RLM mode.
  * Layer 1: block file-reading bash commands (steering — the redirect message re-educates).
- * Layer 2: cap tool_result text (guarantee — bulk text physically cannot reach the root model).
+ * Layer 2: cap tool_result text AND repl() stdout (guarantee — bulk text physically cannot
+ *          reach the root model).
+ * Layer 3: nudge the model when a repl() call printed bulk text without delegating to a sub-LLM.
  * This is token protection, not a security boundary: a determined model can still emit small reads.
  */
 import { truncateOutput } from "../text/parsing.ts";
@@ -51,8 +53,40 @@ const CAP_NOTE =
   `\n[RLM: tool output capped at ${TOOL_RESULT_CAP.toLocaleString()} chars to protect the root ` +
   "model's context — route bulk text through repl() + llm_query_chunked / llm_query_batched.]";
 
-/** Cap a tool result's text; returns undefined when under the cap (leave the result untouched). */
-export function capToolResultText(text: string): string | undefined {
+const REPL_CAP_NOTE =
+  `\n[RLM: repl() stdout capped at ${TOOL_RESULT_CAP.toLocaleString()} chars — printing bulk text ` +
+  "is useless. Keep results in REPL variables and delegate semantic reading to llm_query / " +
+  "llm_query_batched / llm_query_chunked.]";
+
+/** Shared truncation core. Returns undefined when under the cap (leave the text untouched). */
+function capText(text: string, note: string): string | undefined {
   if (text.length <= TOOL_RESULT_CAP) return undefined;
-  return truncateOutput(text, TOOL_RESULT_CAP) + CAP_NOTE;
+  return truncateOutput(text, TOOL_RESULT_CAP) + note;
+}
+
+/** Cap a generic tool result's text (bash / find / ls). */
+export function capToolResultText(text: string): string | undefined {
+  return capText(text, CAP_NOTE);
+}
+
+/** Cap the model-visible portion of a repl() result (stdout / answerContent). */
+export function capReplResultText(text: string): string | undefined {
+  return capText(text, REPL_CAP_NOTE);
+}
+
+/** Stdout size above which a repl() call with zero sub-LLM calls earns a delegation nudge. */
+export const NUDGE_STDOUT_CHARS = 2_000;
+
+/**
+ * One-line corrective nudge when a repl() call printed bulk text without delegating.
+ * Returns undefined when behavior was fine (small output, or a delegation happened).
+ * Takes primitives (no RlmSubcall dependency) so the tool layer owns the detection.
+ */
+export function replDelegationNudge(stdoutChars: number, delegated: boolean): string | undefined {
+  if (delegated || stdoutChars <= NUDGE_STDOUT_CHARS) return undefined;
+  return (
+    `\n[RLM: this repl() printed ${stdoutChars.toLocaleString()} chars with 0 sub-LLM calls — ` +
+    "delegate semantic reading via llm_query / llm_query_batched / llm_query_chunked instead of " +
+    "reading output yourself.]"
+  );
 }
