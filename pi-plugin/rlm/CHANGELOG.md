@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-07-04
+
+### Added
+
+- Hard cap on `repl()` stdout returned to the root model (~4K chars), so printing file bodies
+  into the REPL is no longer a free path around the file-reading guards. A shared `capText` core
+  backs both the existing bash-result cap and the new repl cap (no duplicated truncation logic).
+- Zero-subcall delegation nudge: when a `repl()` call prints >2K chars with no `llm_query` /
+  `rlm_query` / batch subcall, a one-line note tells the model to delegate semantic reading
+  instead. Suppressed when the call staged edits (legitimate diff output).
+- Per-turn orchestrator-contract reminder (`NATIVE_TURN_REMINDER`) appended as the last context
+  message on every request, with prior reminders stripped to prevent accumulation.
+- Named `NATIVE_PROMPT_BUDGET` constant (6,000 chars) so prompt-budget overruns fail with a
+  self-explanatory message.
+- Regression guard for the `repl()` result assembly via the exported `buildReplResultText` pure
+  function: verifies stdout capping, zero-subcall nudging, and that `STAGED_EDITS` JSON survives
+  truncation (appended after the cap) with both nudge-suppression paths.
+
+### Changed
+
+- Fixed a contradictory tail line in the repo-listing injection that told the root model to use
+  file-reading tools; it now points at `repl()` + sub-LLM delegation.
+- Restructured the native system prompt around enforced runtime rules (blocked tools, repl/stdout
+  caps) and an explicit `DELEGATION RULE`, replacing the advisory `ABSOLUTE RESTRICTION` block.
+- Sharpened the `repl` tool description to lead with delegation (stdout is hard-capped, so printing
+  file bodies is useless).
+- Trimmed redundant glossary lines now covered by the enforced-rule banner to hold the prompt
+  under budget (5,965 of 6,000 chars).
+- `replDelegationNudge` now takes a `delegated: boolean` instead of a fake subcall count; the tool
+  layer detects delegation via `.some()` short-circuit.
+
 ## [0.1.4] - 2026-07-03
 
 ### Added
@@ -105,5 +136,6 @@ for the Pi coding agent.
 [0.1.2]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.2
 [0.1.3]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.3
 [0.1.4]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.4
+[0.1.5]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.5
 
 [0.1.0]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.0
