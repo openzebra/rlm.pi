@@ -13,6 +13,8 @@ import { initTheme, Theme } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RlmController } from "../src/mode/rlm-mode.ts";
 import type { RlmDetails } from "../src/tool/rlm-details.ts";
+import { EditRegistry } from "../src/registry/edit-registry.ts";
+import { createApplyEditsTool, type ApplyEditsDetails } from "../src/tool/apply-edits-tool.ts";
 import { createRlmTool } from "../src/tool/rlm-tool.ts";
 
 // initTheme seeds the global Theme singleton so getMarkdownTheme() works.
@@ -101,6 +103,17 @@ type RenderCallContext = Parameters<RenderCallFn>[2];
 type RenderResultContext = Parameters<RenderResultFn>[3];
 const renderCallContext = {} as RenderCallContext;
 const renderResultContext = {} as RenderResultContext;
+
+const applyEditsTool = createApplyEditsTool(new EditRegistry());
+type ApplyRenderCallFn = NonNullable<typeof applyEditsTool.renderCall>;
+type ApplyRenderResultFn = NonNullable<typeof applyEditsTool.renderResult>;
+const renderApplyCall: ApplyRenderCallFn = applyEditsTool.renderCall ?? (() => { throw new Error("apply_edits renderCall missing"); });
+const renderApplyResult: ApplyRenderResultFn = applyEditsTool.renderResult ?? (() => { throw new Error("apply_edits renderResult missing"); });
+type ApplyRenderCallContext = Parameters<ApplyRenderCallFn>[2];
+type ApplyRenderResultContext = Parameters<ApplyRenderResultFn>[3];
+const renderApplyCallContext = {} as ApplyRenderCallContext;
+const renderApplyResultContext = {} as ApplyRenderResultContext;
+
 const RENDER_WIDTH = 120;
 
 // ── Helpers ──
@@ -159,9 +172,78 @@ const errorDetails: RlmDetails = {
   totals: { costUsd: 0, tokens: 0 },
 };
 
+const applyEditsDetails: ApplyEditsDetails = {
+  status: "done",
+  appliedCount: 2,
+  failedCount: 0,
+  errors: [],
+  fileStats: [
+    { path: "src/components/Dashboard.tsx", status: "applied", added: 10, removed: 5 },
+    { path: "src/App.tsx", status: "applied", added: 2, removed: 1 },
+  ],
+};
+
+const partialApplyEditsDetails: ApplyEditsDetails = {
+  status: "partial",
+  appliedCount: 1,
+  failedCount: 1,
+  errors: [{ id: "e2", path: "src/App.tsx", error: "Error: anchor occurs 0 times in src/App.tsx" }],
+  fileStats: [
+    { path: "src/components/Dashboard.tsx", status: "applied", added: 10, removed: 5 },
+    { path: "src/App.tsx", status: "failed", added: 0, removed: 0 },
+  ],
+};
+
 // ── Tests ──
 
-console.log("=== renderCall ===");
+console.log("=== apply_edits renderCall ===");
+
+{
+  const result = renderApplyCall({ ids: ["e1", "e2"] }, theme, renderApplyCallContext);
+  const text = renderPlain(result);
+  console.log(`  output: ${text}`);
+
+  check("apply_edits renderCall shows edit count", text.includes("apply_edits: 2 edits"));
+}
+
+console.log("\n=== apply_edits renderResult collapsed ===");
+
+{
+  const result = renderApplyResult(
+    { content: [{ type: "text", text: "" }], details: applyEditsDetails } as AgentToolResult<ApplyEditsDetails>,
+    { expanded: false, isPartial: false },
+    theme,
+    renderApplyResultContext,
+  );
+  const text = renderPlain(result);
+  console.log(`  output: ${text}`);
+
+  check("apply_edits collapsed shows file and applied counts", text.includes("2 files, 2 applied"));
+  check("apply_edits collapsed shows aggregate additions", text.includes("+12"));
+  check("apply_edits collapsed shows aggregate removals", text.includes("-6"));
+  check("apply_edits collapsed shows line label", text.includes("lines"));
+}
+
+console.log("\n=== apply_edits renderResult expanded ===");
+
+{
+  const result = renderApplyResult(
+    { content: [{ type: "text", text: "" }], details: partialApplyEditsDetails } as AgentToolResult<ApplyEditsDetails>,
+    { expanded: true, isPartial: false },
+    theme,
+    renderApplyResultContext,
+  );
+  const text = renderPlain(result);
+  console.log(`  output:\n${text}`);
+
+  check("apply_edits expanded shows file and edit counts", text.includes("2 files, 1 applied, 1 failed"));
+  check("apply_edits expanded shows applied file path", text.includes("src/components/Dashboard.tsx"));
+  check("apply_edits expanded shows failed file path", text.includes("src/App.tsx"));
+  check("apply_edits expanded shows per-file line stats", text.includes("+10") && text.includes("-5"));
+  check("apply_edits expanded shows error text", text.includes("anchor occurs 0 times"));
+}
+
+console.log("\n=== renderCall ===");
 
 {
   const result = renderPlain(renderCall(params, theme, renderCallContext));

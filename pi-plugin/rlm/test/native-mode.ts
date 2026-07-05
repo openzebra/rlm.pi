@@ -14,7 +14,7 @@ import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
 import { formatForLLM } from "../src/context/repomix-context.ts";
 import { buildNativeSystemPrompt } from "../src/prompts/system.ts";
 import { buildReplResultText, surfaceReplEdits } from "../src/tool/repl-tool.ts";
-import { createApplyEditsTool } from "../src/tool/apply-edits-tool.ts";
+import { createApplyEditsTool, diffStats } from "../src/tool/apply-edits-tool.ts";
 import { EditRegistry } from "../src/registry/edit-registry.ts";
 import type { ContextBundle } from "../src/context/repomix-context.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -116,16 +116,24 @@ async function testApplyEditsTool() {
     const success = await tool.execute("apply-1", { ids: ["e1"] }, undefined, undefined, ctx);
     const updated = await readFile(join(cwd, "a.ts"), "utf8");
     check("apply_edits — applies known id", success.details?.status === "done" && updated.includes("new"));
+    check("apply_edits — reports applied file stats", success.details?.appliedCount === 1 && success.details.fileStats[0]?.status === "applied");
+    check("apply_edits — reports line stats", success.details?.fileStats[0]?.added === 0 && success.details.fileStats[0]?.removed === 0);
     check("apply_edits — deletes applied id", registry.get("e1") === undefined);
 
     const unknown = await tool.execute("apply-2", { ids: ["missing"] }, undefined, undefined, ctx);
     check("apply_edits — unknown id fails softly", unknown.details?.status === "error" && unknown.details.errors[0]?.id === "missing");
+    check("apply_edits — unknown id reports failed file stats", unknown.details?.failedCount === 1 && unknown.details.fileStats[0]?.status === "failed");
 
     await writeFile(join(cwd, "b.ts"), "old old\n", "utf8");
     registry.registerAll([{ id: "e2", path: "b.ts", oldText: "old", newText: "new" }]);
     const mismatch = await tool.execute("apply-3", { ids: ["e2"] }, undefined, undefined, ctx);
     check("apply_edits — duplicate anchor rejected", mismatch.details?.status === "error" && mismatch.details.errors[0]?.error.includes("anchor occurs 2"));
     check("apply_edits — rejected id remains registered", registry.get("e2") !== undefined);
+
+    const added = diffStats("one\n", "one\ntwo\n");
+    const removed = diffStats("one\ntwo\n", "one\n");
+    check("apply_edits — diffStats counts added lines", added.added === 1 && added.removed === 0);
+    check("apply_edits — diffStats counts removed lines", removed.added === 0 && removed.removed === 1);
 
     registry.clear();
     check("EditRegistry — clear removes unapplied ids", registry.get("e2") === undefined);
