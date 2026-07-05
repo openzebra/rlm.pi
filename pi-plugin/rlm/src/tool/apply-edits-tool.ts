@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { createEditToolDefinition, type AgentToolResult, type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -171,6 +171,15 @@ export function createApplyEditsTool(editRegistry: EditRegistry): ToolDefinition
 
         try {
           const fullPath = resolve(ctx.cwd, edit.path);
+          if (edit.oldText.length === 0) {
+            await mkdir(dirname(fullPath), { recursive: true });
+            await writeFile(fullPath, edit.newText, "utf8");
+            mergeFileStat(fileStatsByPath, edit.path, "applied", diffStats("", edit.newText));
+            editRegistry.delete(id);
+            appliedCount++;
+            continue;
+          }
+
           const content = await readFile(fullPath, "utf8");
           const occurrences = countOccurrences(content, edit.oldText);
           if (occurrences !== 1) {

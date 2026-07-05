@@ -130,6 +130,13 @@ async function testApplyEditsTool() {
     check("apply_edits — duplicate anchor rejected", mismatch.details?.status === "error" && mismatch.details.errors[0]?.error.includes("anchor occurs 2"));
     check("apply_edits — rejected id remains registered", registry.get("e2") !== undefined);
 
+    registry.registerAll([{ id: "e3", path: "created.ts", oldText: "", newText: "export const created = true;\n" }]);
+    const created = await tool.execute("apply-4", { ids: ["e3"] }, undefined, undefined, ctx);
+    const createdContent = await readFile(join(cwd, "created.ts"), "utf8");
+    check("apply_edits — creates files from empty anchor", created.details?.status === "done" && createdContent.includes("created = true"));
+    check("apply_edits — create file reports added lines", created.details?.fileStats[0]?.added === 2 && created.details.fileStats[0]?.removed === 0);
+    check("apply_edits — deletes create-file id", registry.get("e3") === undefined);
+
     const added = diffStats("one\n", "one\ntwo\n");
     const removed = diffStats("one\ntwo\n", "one\n");
     check("apply_edits — diffStats counts added lines", added.added === 1 && added.removed === 0);
