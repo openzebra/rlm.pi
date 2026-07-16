@@ -118,9 +118,20 @@ These functions are injected into the model's Python namespace inside the REPL:
 | `todo` | `(action, **kwargs) -> str` | Task list: `create`/`update`/`list`/`get`/`delete`/`clear` |
 | `ask_user_question` | `(questions) -> list[dict]` | Ask the user structured questions (depth 0 only) |
 | `stage_edit` | `(path, old_text, new_text) -> str` | Stage a file edit; relayed to the host's native edit flow |
-| `advance_phase` | `(phase, summary=None) -> str` | Move the root pipeline to a new phase |
+| `save_artifact` | `(kind, content) -> str` | Persist a stage artifact (`research` / `plan` / `validation`) under `.rlm/artifacts/` (root depth only) |
+| `advance_phase` | `(phase, summary=None) -> str` | Advance one pipeline step; **engine-gated** on the latest artifact (status, plan structure, citations). Rejected transitions return the gate error. |
 | `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
 | `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
+
+### Artifact-gated pipeline (opt-in via `pipeline: true`)
+
+When enabled at root depth:
+
+1. **Goal capture** — the brief is written verbatim to `.rlm/artifacts/goal/goal-<ts>.md` with a pre-run dirty-tree baseline.
+2. **Stages** — `research → blueprint → implement → validate`. Each produces a durable markdown artifact with frontmatter contracts; chat history is **reset** at every phase boundary (artifacts are the only channel; REPL vars persist).
+3. **Gates (TypeScript, never LLM judgment)** — `status: ready`; plan `phases:` ≡ fence-aware `## Phase N:` headings; every `file:line` citation resolves; validate carries `blockers_count` + `verdict`.
+4. **Implement fanout** — on `advance_phase("implement")` the engine runs one **serial** child RLM per plan phase and applies that child's edits before the next phase starts.
+5. **Corrective loop** — `blockers_count > 0` re-enters blueprint, bounded by `maxBackwardJumps` (default 2).
 
 ## Settings (`/rlm-config`)
 
@@ -137,6 +148,8 @@ These functions are injected into the model's Python namespace inside the REPL:
 | Token ceiling | none | total input+output token cap for the whole recursive tree |
 | Max consecutive errors | `5` | stop after N consecutive failing turns (none = off) |
 | Orchestrator addendum | on | divide-and-conquer guidance in the root system prompt |
+| Phase pipeline | off | artifact-gated research→blueprint→implement fanout→validate |
+| Max validate→blueprint loops | `2` | bounded corrective re-entries when validation reports blockers |
 | Trajectory compaction | on (0.65) | summarize old turns when history nears the context window |
 | Root model output cap (tok) | `16384` | max output tokens per root-model turn |
 | Sandbox init timeout | `30000` ms | how long to wait for the Python worker to start |

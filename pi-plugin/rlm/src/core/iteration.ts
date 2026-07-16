@@ -6,7 +6,7 @@
 
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { type ChatMsg, modelComplete } from "../bridge/model.ts";
+import { type ChatMsg, type CompleteOptions, type CompleteResult, modelComplete } from "../bridge/model.ts";
 import type { ReplResult } from "../sandbox/protocol.ts";
 import type { PythonSandbox } from "../sandbox/sandbox.ts";
 import { findReplBlocks } from "../text/parsing.ts";
@@ -21,15 +21,20 @@ export interface Turn {
   readonly skippedBlocks: number;
 }
 
+export type CompleteFn = (messages: readonly ChatMsg[], opts: CompleteOptions) => Promise<CompleteResult>;
+
 export interface TurnDeps {
   readonly model: Model<Api>;
   readonly registry: ModelRegistry;
   readonly sampling?: Sampling;
   readonly signal?: AbortSignal;
+  /** Test-only override for model completion (scripted responses). */
+  readonly complete?: CompleteFn;
 }
 
 export async function runTurn(history: readonly ChatMsg[], sandbox: PythonSandbox, deps: TurnDeps): Promise<Turn> {
-  const { text, usage } = await modelComplete(history, {
+  const complete = deps.complete ?? modelComplete;
+  const { text, usage } = await complete(history, {
     model: deps.model,
     registry: deps.registry,
     maxTokens: deps.sampling?.maxTokens,

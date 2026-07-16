@@ -1,7 +1,6 @@
 /**
  * RLM tool — registers the RLM engine as a Pi tool with inline rendering.
  *
- * Modeled after rpiv-mono's subagent tool.
  * The tool's execute() wraps createEngine() with an RlmEmitter + RlmEventAggregator that feeds
  * onUpdate(partialResult) for progressive TUI re-rendering.
  */

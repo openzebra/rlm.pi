@@ -88,6 +88,12 @@ export interface PhaseRow {
   readonly ts: string;
   readonly phase: string;
   readonly summary?: string;
+  /** Optional fields (no schema-version break — isPhase guard unchanged). */
+  readonly artifactPath?: string;
+  /** Phase that produced `artifactPath` (not inferred from order — loop-back safe). */
+  readonly artifactPhase?: string;
+  readonly blockersCount?: number;
+  readonly backwardJumps?: number;
 }
 
 export type Row = RunHeader | TurnRow | CompactionRow | TodoRow | TerminalRow | PhaseRow;

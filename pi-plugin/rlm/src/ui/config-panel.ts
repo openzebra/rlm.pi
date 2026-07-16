@@ -16,6 +16,7 @@ const CHOICES = Object.freeze({
   maxErrors: Object.freeze(["3", "5", "10", "none"]),
   orchestrator: Object.freeze(["on", "off"]),
   pipeline: Object.freeze(["on", "off"]),
+  maxBackwardJumps: Object.freeze(["0", "1", "2", "3"]),
   compaction: Object.freeze(["on", "off"]),
   rootSamplingMaxTokens: Object.freeze(["4096", "8192", "16384", "32768"]),
   sandboxInitTimeoutMs: Object.freeze(["10000", "30000", "60000", "120000"]),
@@ -39,7 +40,8 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("maxTokens", "Token ceiling", config.maxTokens != null ? String(config.maxTokens) : "none", CHOICES.maxTokens, "Total input+output token cap for the whole recursive tree."),
     item("maxErrors", "Max consecutive errors", config.maxErrors != null ? String(config.maxErrors) : "none", CHOICES.maxErrors, "Stop after this many consecutive failing turns; none disables the guard."),
     item("orchestrator", "Orchestrator addendum", config.orchestrator ? "on" : "off", CHOICES.orchestrator, "Append extra divide-and-conquer guidance to the root model system prompt."),
-    item("pipeline", "Phase pipeline", config.pipeline ? "on" : "off", CHOICES.pipeline, "Enable advance_phase plus phase-stall reminders at root depth."),
+    item("pipeline", "Phase pipeline", config.pipeline ? "on" : "off", CHOICES.pipeline, "Enable artifact-gated phases: research→blueprint→implement fanout→validate."),
+    item("maxBackwardJumps", "Max validate→blueprint loops", String(config.maxBackwardJumps), CHOICES.maxBackwardJumps, "Bounded corrective re-entries when validation reports blockers_count > 0."),
     item("compaction", "Trajectory compaction", config.compaction ? "on" : "off", CHOICES.compaction, "Summarize old turns when history approaches the model context window."),
     item("rootSamplingMaxTokens", "Root model output cap (tok)", String(config.rootSampling?.maxTokens ?? 16384), CHOICES.rootSamplingMaxTokens, "Max output tokens per root-model turn. Lower values keep each turn lean."),
     item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
@@ -86,6 +88,7 @@ function applySetting(config: RlmConfig, id: string, value: string): void {
     case "maxErrors": config.maxErrors = value === "none" ? undefined : Number(value); break;
     case "orchestrator": config.orchestrator = value === "on"; break;
     case "pipeline": config.pipeline = value === "on"; break;
+    case "maxBackwardJumps": config.maxBackwardJumps = Number(value); break;
     case "compaction": config.compaction = value === "on"; break;
     case "rootSamplingMaxTokens": config.rootSampling = Object.freeze({ ...config.rootSampling, maxTokens: Number(value) }); break;
     case "sandboxInitTimeoutMs": config.sandboxInitTimeoutMs = Number(value); break;

@@ -7,9 +7,9 @@ This is NOT a security sandbox: __import__ and open are available, so code can i
 Protocol (parent -> worker):  {"id","type":"exec"|"load_context"|"shutdown", ...}
 Protocol (worker -> parent):  {"id","ok",...result}            # response to a request
                               {"type":"llm_query"|"llm_query_batched"|"rlm_query"|...
-                               "advance_phase"|"ask_user_question"|"todo","rid",...}
+                               "advance_phase"|"save_artifact"|"ask_user_question"|"todo","rid",...}
                                                                 # mid-exec helper request
-When sandbox code calls llm_query/rlm_query/advance_phase/ask_user_question/todo, the worker writes a request line
+When sandbox code calls llm_query/rlm_query/advance_phase/save_artifact/ask_user_question/todo, the worker writes a request line
 and BLOCKS reading stdin until the matching {"type":"llm_reply","rid",...} arrives. The parent
 services the request in-process (it holds API keys).
 """
@@ -66,7 +66,7 @@ RESERVED = frozenset(
     {
         "llm_query", "llm_query_batched", "llm_query_chunked",
         "rlm_query", "rlm_query_batched",
-        "advance_phase",
+        "advance_phase", "save_artifact",
         "ask_user_question", "todo",
         "stage_edit",
         "SHOW_VARS", "answer", "context",
@@ -148,6 +148,7 @@ class Worker:
         ns["rlm_query"] = self._rlm_query
         ns["rlm_query_batched"] = self._rlm_query_batched
         ns["advance_phase"] = self._advance_phase
+        ns["save_artifact"] = self._save_artifact
         ns["ask_user_question"] = self._ask_user_question
         ns["todo"] = self._todo
         ns["stage_edit"] = self._stage_edit
@@ -335,12 +336,29 @@ class Worker:
         """Transition the root RLM pipeline to a new phase.
 
         Only callable at depth 0. The parent handler validates the transition
-        against the phase state machine (research → blueprint → implement → validate).
+        against the phase state machine (research → blueprint → implement → validate)
+        and runs deterministic artifact gates before accepting the transition.
         Returns a short confirmation, or an `Error: …` string the model can act on.
         """
         if self.depth > 0:
             return "Error: advance_phase is only available at the root RLM depth"
         r = self._rpc("advance_phase", {"phase": str(phase), "summary": summary})
+        if r.get("error"):
+            return f"Error: {r['error']}"
+        response = r.get("response", "ok")
+        if isinstance(response, str) and response.startswith("Error:"):
+            return response
+        return response if isinstance(response, str) else "ok"
+
+    def _save_artifact(self, kind: str, content: str) -> str:
+        """Persist a stage artifact (research/plan/validation) under .rlm/artifacts/.
+
+        Only callable at depth 0. The engine gates advance_phase against the latest
+        saved artifact for the current stage.
+        """
+        if self.depth > 0:
+            return "Error: save_artifact is only available at the root RLM depth"
+        r = self._rpc("save_artifact", {"artifactKind": str(kind), "content": str(content)})
         if r.get("error"):
             return f"Error: {r['error']}"
         response = r.get("response", "ok")

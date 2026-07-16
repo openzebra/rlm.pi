@@ -21,6 +21,7 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   maxErrors: 5,
   orchestrator: true,
   pipeline: false,
+  maxBackwardJumps: 2,
   compaction: true,
   compactionThresholdPct: 0.65,
   python: "python3",

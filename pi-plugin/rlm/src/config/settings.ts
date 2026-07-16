@@ -75,6 +75,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (orchestrator !== undefined) out.orchestrator = orchestrator;
   const pipeline = validateBoolean(r.pipeline);
   if (pipeline !== undefined) out.pipeline = pipeline;
+  const maxBackwardJumps = validateNumber(r.maxBackwardJumps, 0);
+  if (maxBackwardJumps !== undefined) out.maxBackwardJumps = maxBackwardJumps;
   const compaction = validateBoolean(r.compaction);
   if (compaction !== undefined) out.compaction = compaction;
   const compactionThresholdPct = validateNumber(r.compactionThresholdPct, 0);

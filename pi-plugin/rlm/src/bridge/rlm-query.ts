@@ -4,18 +4,31 @@
  * A child RLM gets its own sandbox and iterates over the prompt as its context. At/over the
  * depth cap it degrades to a plain `llm_query` (ported from rlm/core/rlm.py `_subcall`). The
  * concurrency pool bounds parallel children for `rlm_query_batched`.
+ *
+ * `childRun` is the single spawn path: rlmQuery returns `.answer`; implement fanout also
+ * needs `.edits` — both share this implementation (DRY).
  */
 
-import type { RunRlm } from "../core/types.ts";
+import type { RlmResult, RunRlm } from "../core/types.ts";
 import type { LlmBridge } from "./llm-query.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
 import { checkResourceLimits } from "../core/resource-limits.ts";
 import { formatError } from "../util/errors.ts";
 import { mapPool } from "../util/concurrency.ts";
 
+export interface ChildRunInput {
+  readonly rootPrompt: string;
+  readonly context: unknown;
+  readonly depth: number;
+  readonly label?: string;
+  readonly model?: string | null;
+}
+
 export interface RlmHandlers {
   rlmQuery(prompt: string, model: string | null, depth: number): Promise<string>;
   rlmQueryBatched(prompts: string[], model: string | null, depth: number): Promise<string[]>;
+  /** Full child-run result (answer + edits + usage) for engine-driven fanout. */
+  childRun(input: ChildRunInput): Promise<RlmResult>;
 }
 
 export interface RlmBridgeOptions {
@@ -33,29 +46,51 @@ export interface RlmBridgeOptions {
   readonly onChildUsage?: (costUsd: number, inputTokens: number, outputTokens: number) => void;
 }
 
+function emptyResult(answer: string): RlmResult {
+  return {
+    answer,
+    edits: [],
+    iterations: 0,
+    costUsd: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    durationMs: 0,
+  };
+}
+
 export function createRlmHandlers(opts: RlmBridgeOptions): RlmHandlers {
-  async function child(prompt: string, model: string | null, depth: number): Promise<string> {
-    const childDepth = depth + 1;
+  async function childRun(input: ChildRunInput): Promise<RlmResult> {
+    const childDepth = input.depth;
     // At the cap, a child RLM would just be an LM — short-circuit to a one-shot llm_query.
-    if (childDepth >= opts.maxDepth) return opts.llm.llmQuery(prompt, model, depth);
+    // (Callers pass the absolute child depth; rlmQuery wraps with depth+1.)
+    if (childDepth >= opts.maxDepth) {
+      const answer = await opts.llm.llmQuery(
+        input.rootPrompt || String(input.context),
+        input.model ?? null,
+        childDepth - 1,
+      );
+      return emptyResult(answer);
+    }
     let subId: string | undefined;
     try {
       const rem = opts.remainingBudget?.() ?? {};
       // Pre-spawn guard: refuse if the parent's budget or timeout is already exhausted
       // (reference: _subcall checks remaining_budget/timeout before spawning).
       const limitError = checkResourceLimits(rem);
-      if (limitError) return limitError;
+      if (limitError) return emptyResult(limitError);
+      const label = input.label ?? "rlm_query";
+      const detailSource = input.rootPrompt || String(input.context);
       subId = opts.emitter.emitSubcallCreated({
-        kind: "rlm", parentId: opts.parentNodeId, label: "rlm_query",
-        model: model ?? undefined, detail: prompt.slice(0, 60),
+        kind: "rlm", parentId: opts.parentNodeId, label,
+        model: input.model ?? undefined, detail: detailSource.slice(0, 60),
         depth: childDepth,
       });
       const res = await opts.run({
-        rootPrompt: "",
-        context: prompt,
+        rootPrompt: input.rootPrompt,
+        context: input.context,
         depth: childDepth,
         parentNodeId: subId,
-        modelOverride: model ?? undefined,
+        modelOverride: input.model ?? undefined,
         remainingBudgetUsd: rem.budgetUsd,
         remainingTimeoutMs: rem.timeoutMs,
       });
@@ -63,16 +98,27 @@ export function createRlmHandlers(opts: RlmBridgeOptions): RlmHandlers {
       opts.emitter.emitSubcallUpdated({ id: subId,
         status: "done", resultPreview: res.answer.slice(0, 200),
       });
-      return res.answer;
+      return res;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (subId) opts.emitter.emitSubcallUpdated({ id: subId, status: "error", detail: msg });
-      return formatError(`child RLM failed - ${msg}`);
+      return emptyResult(formatError(`child RLM failed - ${msg}`));
     }
+  }
+
+  async function child(prompt: string, model: string | null, depth: number): Promise<string> {
+    const res = await childRun({
+      rootPrompt: "",
+      context: prompt,
+      depth: depth + 1,
+      model,
+    });
+    return res.answer;
   }
 
   return {
     rlmQuery: (prompt, model, depth) => child(prompt, model, depth),
     rlmQueryBatched: (prompts, model, depth) => mapPool(prompts, opts.maxConcurrent, (p) => child(p, model, depth)),
+    childRun,
   };
 }

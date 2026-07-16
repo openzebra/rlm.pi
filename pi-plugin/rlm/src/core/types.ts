@@ -50,6 +50,8 @@ export interface RlmConfig {
   orchestrator: boolean;
   /** Enable the phase pipeline (advance_phase + stall nags) at depth 0. */
   pipeline: boolean;
+  /** Max validate→blueprint corrective re-entries when validation reports blockers (default 2). */
+  maxBackwardJumps: number;
   /** Summarize the trajectory when it grows past the threshold (keeps the root window small). */
   compaction: boolean;
   /** Compact when estimated history tokens reach this fraction of the model's context window. */

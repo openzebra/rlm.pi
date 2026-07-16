@@ -33,6 +33,7 @@ export interface SubLlmHandlers {
   rlmQuery(prompt: string, model: string | null, depth: number): Promise<string>;
   rlmQueryBatched(prompts: readonly string[], model: string | null, depth: number): Promise<string[]>;
   advancePhase(phase: string, summary: string | undefined, depth: number): Promise<string>;
+  saveArtifact(kind: string, content: string, depth: number): Promise<string>;
   askUserQuestion(questions: readonly AskQuestion[], depth: number): Promise<AskAnswer[]>;
   todo(action: string, params: Record<string, unknown>, depth: number): Promise<string>;
 }
@@ -76,6 +77,7 @@ const REJECT: SubLlmHandlers = {
   rlmQuery: async () => formatError("sub-LLM bridge not configured"),
   rlmQueryBatched: async (p) => p.map(() => formatError("sub-LLM bridge not configured")),
   advancePhase: async () => formatError("phase advancement not available"),
+  saveArtifact: async () => formatError("save_artifact not available"),
   askUserQuestion: async (questions) => questions.map((q) => ({
     question: q.question,
     selected: [],
@@ -285,6 +287,15 @@ export class PythonSandbox {
     }
   }
 
+  /**
+   * Refresh the parent-side request watchdog for every pending request.
+   * Used during long mid-exec work (e.g. serial implement fanout) that does not
+   * produce additional worker interrupts on this sandbox.
+   */
+  refreshWatchdog(): void {
+    this.touchPending();
+  }
+
   private send(msg: ParentMessage): void {
     this.proc.stdin.write(`${JSON.stringify(msg)}\n`);
   }
@@ -345,6 +356,9 @@ export class PythonSandbox {
         this.reply(msg.rid, { responses });
       } else if (msg.type === "advance_phase") {
         const response = await h.advancePhase(msg.phase ?? "", msg.summary, d);
+        this.reply(msg.rid, { response });
+      } else if (msg.type === "save_artifact") {
+        const response = await h.saveArtifact(msg.artifactKind ?? "", msg.content ?? "", d);
         this.reply(msg.rid, { response });
       } else if (msg.type === "ask_user_question") {
         const answers = await h.askUserQuestion(msg.questions ?? [], d);

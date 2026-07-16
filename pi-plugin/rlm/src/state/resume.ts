@@ -32,6 +32,9 @@ export interface PhaseRecon {
   readonly current: string;
   readonly advancedAt: number;
   readonly summary?: string;
+  /** Repo-relative artifact paths keyed by the phase that produced them. */
+  readonly artifacts?: Readonly<Partial<Record<string, string>>>;
+  readonly backwardJumps?: number;
 }
 
 export type ReconstructResult =
@@ -107,6 +110,8 @@ export async function reconstructRlmState(
   const todoRows: { action: string; params: Record<string, unknown>; result: string }[] = [];
   let terminated = false;
   let phase: PhaseRecon | undefined;
+  // Accumulate artifact paths keyed by the producing phase (artifactPhase on the row).
+  const artifactsAcc: Record<string, string> = {};
 
   for (const row of rows) {
     if (isHeader(row)) continue;
@@ -139,7 +144,20 @@ export async function reconstructRlmState(
       continue;
     }
     if (isPhase(row)) {
-      phase = { current: row.phase, advancedAt: row.turn - 1, summary: row.summary };
+      if (row.artifactPath !== undefined && row.artifactPhase !== undefined) {
+        artifactsAcc[row.artifactPhase] = row.artifactPath;
+      }
+      // On loop-back to blueprint, drop stale plan so resume cannot re-gate with it.
+      if (row.phase === "blueprint" && row.backwardJumps !== undefined && row.backwardJumps > 0) {
+        delete artifactsAcc.blueprint;
+      }
+      phase = {
+        current: row.phase,
+        advancedAt: row.turn - 1,
+        summary: row.summary,
+        artifacts: Object.keys(artifactsAcc).length > 0 ? { ...artifactsAcc } : undefined,
+        backwardJumps: row.backwardJumps,
+      };
       continue;
     }
     if (isTodo(row)) {

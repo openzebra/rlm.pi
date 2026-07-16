@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- Artifact-gated pipeline (opt-in `pipeline: true`): research → blueprint → implement → validate
+  with deterministic engine gates (artifact `status: ready`, plan `phases:`/`phase_count`
+  derive-check against `## Phase N:` headings, `file:line` citation verification,
+  validation `blockers_count`/`verdict` contract).
+- `save_artifact(kind, content)` sandbox function; artifacts persist under `.rlm/artifacts/`.
+- Verbatim goal capture + pre-run dirty-tree baseline at run start.
+- Serial implement fanout: one child RLM per plan phase; edits applied between phases;
+  idempotent retry (`already-applied` detection) and create-clobber refusal.
+- Bounded validate→blueprint corrective loop (`maxBackwardJumps`, default 2, in `/rlm-config`).
+- Root history reset at phase boundaries (artifacts are the only inter-phase channel).
+
 ## [0.1.7] - 2026-07-07
 
 ### Added
@@ -127,7 +143,7 @@ Packaging cleanup to make `@hicaru/pi-rlm` discoverable on pi.dev.
   `"pi.extensions"`, not Node's export map).
 - Loosened `peerDependencies` (`@earendil-works/pi-ai`,
   `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`) from `">=0.79.0"`
-  to `"*"`, matching the rpiv package convention.
+  to `"*"`, matching the peer-dependency convention used by other Pi packages.
 - Added keywords `rlm`, `recursive`, `ai-agent` for better pi.dev search ranking.
 - Made `"files"` explicit (`"src"` → `"src/"`).
 

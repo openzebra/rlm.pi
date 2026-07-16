@@ -62,6 +62,7 @@ export type InterruptKind =
   | "rlm_query"
   | "rlm_query_batched"
   | "advance_phase"
+  | "save_artifact"
   | "ask_user_question"
   | "todo";
 
@@ -111,6 +112,12 @@ interface AdvancePhaseInterrupt extends InterruptBase {
   readonly summary?: string;
 }
 
+interface SaveArtifactInterrupt extends InterruptBase {
+  readonly type: "save_artifact";
+  readonly artifactKind?: string;
+  readonly content?: string;
+}
+
 export interface AskUserQuestionInterrupt extends InterruptBase {
   readonly type: "ask_user_question";
   readonly questions: readonly AskQuestion[];
@@ -137,6 +144,7 @@ export type WorkerInterrupt =
   | PromptInterrupt
   | BatchedPromptInterrupt
   | AdvancePhaseInterrupt
+  | SaveArtifactInterrupt
   | AskUserQuestionInterrupt
   | TodoInterrupt;
 
@@ -148,6 +156,7 @@ export const INTERRUPT_KINDS = Object.freeze(new Set<InterruptKind>([
   "rlm_query",
   "rlm_query_batched",
   "advance_phase",
+  "save_artifact",
   "ask_user_question",
   "todo",
 ]));

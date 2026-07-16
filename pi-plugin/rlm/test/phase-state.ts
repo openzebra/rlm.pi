@@ -25,9 +25,9 @@ function outcomeDetail(o: AdvancePhaseOutcome): string {
 // ── Phase 1: Transition validation (token-free) ──
 
 function testTransitions(): void {
-  // Forward progression
+  // Forward progression — one step only
   const r0 = advancePhase(undefined, "research");
-  check("undefined → research fails (already implicit)", !r0.ok, outcomeDetail(r0));
+  check("undefined → research fails (already implicit; next is blueprint)", !r0.ok, outcomeDetail(r0));
 
   const r1 = advancePhase("research", "blueprint");
   check("research → blueprint ok", r1.ok && r1.phase === "blueprint", outcomeDetail(r1));
@@ -38,41 +38,52 @@ function testTransitions(): void {
   const r3 = advancePhase("implement", "validate");
   check("implement → validate ok", r3.ok && r3.phase === "validate", outcomeDetail(r3));
 
+  // Terminal phase cannot advance
+  const term = advancePhase("validate", "research");
+  check("validate terminal rejected", !term.ok, outcomeDetail(term));
+
   // Backward / same phase rejected
   const back = advancePhase("blueprint", "research");
-  check("blueprint → research rejected", !back.ok && outcomeDetail(back).includes("backward"), outcomeDetail(back));
+  check("blueprint → research rejected", !back.ok, outcomeDetail(back));
 
   const same = advancePhase("implement", "implement");
-  check("implement → implement rejected", !same.ok && outcomeDetail(same).includes("backward"), outcomeDetail(same));
+  check("implement → implement rejected", !same.ok, outcomeDetail(same));
 
   // Unknown phase
   const bad = advancePhase("research", "garbage");
   check("unknown phase rejected", !bad.ok && outcomeDetail(bad).includes("unknown phase"), outcomeDetail(bad));
 
-  // Skip phases (jump more than one)
+  // Skip phases rejected (must advance one step at a time)
   const skip = advancePhase("research", "validate");
-  check("research → validate (skip) ok — allowed (forward)", skip.ok && skip.phase === "validate", outcomeDetail(skip));
+  check("research → validate (skip) rejected", !skip.ok && outcomeDetail(skip).includes("next phase"), outcomeDetail(skip));
 }
 
 // ── Phase 2: Gate prompts & helpers (token-free) ──
 
 function testGateHelpers(): void {
+  const emptyArtifacts = Object.freeze({});
   check("currentPhase(undefined) = research", currentPhase(undefined) === "research");
-  check("currentPhase({...}) reads phase", currentPhase({ current: "blueprint", advancedAt: 2 }) === "blueprint");
+  check(
+    "currentPhase({...}) reads phase",
+    currentPhase({ current: "blueprint", advancedAt: 2, artifacts: emptyArtifacts, backwardJumps: 0 }) === "blueprint",
+  );
 
-  check("turnsInPhase computes correctly", turnsInPhase({ current: "research", advancedAt: 0 }, 2) === 2);
+  check(
+    "turnsInPhase computes correctly",
+    turnsInPhase({ current: "research", advancedAt: 0, artifacts: emptyArtifacts, backwardJumps: 0 }, 2) === 2,
+  );
   check("turnsInPhase(undefined, 5) === 5", turnsInPhase(undefined, 5) === 5);
 
-  const stall = phaseGatePrompt({ current: "research", advancedAt: 0 }, 4);
+  const stall = phaseGatePrompt({ current: "research", advancedAt: 0, artifacts: emptyArtifacts, backwardJumps: 0 }, 4);
   check("gate fires at turn 4 in research", stall !== undefined && stall.includes("'research'"), stall ?? "no prompt");
 
-  const noStall = phaseGatePrompt({ current: "research", advancedAt: 0 }, 2);
+  const noStall = phaseGatePrompt({ current: "research", advancedAt: 0, artifacts: emptyArtifacts, backwardJumps: 0 }, 2);
   check("gate silent at turn 2", noStall === undefined, noStall ?? "undefined");
 
-  const fresh = phaseGatePrompt({ current: "blueprint", advancedAt: 5 }, 6);
+  const fresh = phaseGatePrompt({ current: "blueprint", advancedAt: 5, artifacts: emptyArtifacts, backwardJumps: 0 }, 6);
   check("gate silent early in phase", fresh === undefined, fresh ?? "undefined");
 
-  const terminal = phaseGatePrompt({ current: "validate", advancedAt: 8 }, 12);
+  const terminal = phaseGatePrompt({ current: "validate", advancedAt: 8, artifacts: emptyArtifacts, backwardJumps: 0 }, 12);
   check("gate fires in validate (no next phase)", terminal !== undefined && !terminal.includes("advance_phase"), terminal ?? "no prompt");
 }
 

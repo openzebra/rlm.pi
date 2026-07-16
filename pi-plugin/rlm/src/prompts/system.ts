@@ -148,9 +148,14 @@ function replGlossary(kind: ContextKind, recursion: boolean, askUserQuestion: bo
   }
   if (pipeline) {
     lines.push(
-      "- `advance_phase(phase: str, summary=None) -> str`: transition the root RLM pipeline to the next phase.",
-      "  Valid phases in order: 'research' → 'blueprint' → 'implement' → 'validate'. You must advance forward",
-      "  one phase at a time. Only callable at the root depth; returns an error in sub-RLM contexts.",
+      "- `save_artifact(kind: str, content: str) -> str`: persist a stage artifact under `.rlm/artifacts/`.",
+      "  Kinds: `'research'` | `'plan'` | `'validation'`. Must match the current phase. Frontmatter must",
+      "  eventually include `status: ready` before `advance_phase` will accept the transition.",
+      "- `advance_phase(phase: str, summary=None) -> str`: transition to the next pipeline phase.",
+      "  Order: 'research' → 'blueprint' → 'implement' → 'validate' (one step at a time).",
+      "  **advance_phase is validated by the engine** — it measures the latest saved artifact",
+      "  (status, plan structure, citations, blockers_count). A rejected transition returns the",
+      "  gate error for you to fix; the phase does NOT advance. Only callable at root depth.",
     );
   }
   lines.push(

@@ -1,10 +1,10 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 import { createEditToolDefinition, type AgentToolResult, type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import type { EditRegistry } from "../registry/edit-registry.ts";
-import { countOccurrences } from "../text/edits.ts";
+import { planEdit } from "../text/edits.ts";
 import { errorMessage, formatError } from "../util/errors.ts";
 
 export const ApplyEditsToolParams = Object.freeze(Type.Object({
@@ -205,8 +205,10 @@ export function createApplyEditsTool(editRegistry: EditRegistry): ToolDefinition
       const fileStatsByPath = new Map<string, ApplyEditsFileStat>();
       let appliedCount = 0;
       let failedCount = 0;
-
+      // Native mode: plan/validate with shared planEdit, then write through the host
+      // edit tool so file-watcher / undo hooks still fire (direct write for create only).
       const editTool = createEditToolDefinition(ctx.cwd);
+
       for (let i = 0; i < params.ids.length; i++) {
         const id = params.ids[i];
         const edit = editRegistry.get(id);
@@ -217,41 +219,46 @@ export function createApplyEditsTool(editRegistry: EditRegistry): ToolDefinition
           continue;
         }
 
+        const planned = await planEdit(ctx.cwd, edit.path, edit.oldText, edit.newText);
+        if (!planned.ok) {
+          errors[failedCount] = { id, path: edit.path, error: planned.error };
+          mergeFileStat(fileStatsByPath, edit.path, "failed", { added: 0, removed: 0 }, { oldText: edit.oldText, newText: edit.newText });
+          failedCount++;
+          continue;
+        }
+
         try {
-          const fullPath = resolve(ctx.cwd, edit.path);
-          if (edit.oldText.length === 0) {
-            await mkdir(dirname(fullPath), { recursive: true });
-            await writeFile(fullPath, edit.newText, "utf8");
-            mergeFileStat(fileStatsByPath, edit.path, "applied", diffStats("", edit.newText), { oldText: edit.oldText, newText: edit.newText });
+          if (planned.kind === "already-applied") {
+            mergeFileStat(fileStatsByPath, edit.path, "applied", { added: 0, removed: 0 }, { oldText: edit.oldText, newText: edit.newText });
             editRegistry.delete(id);
             appliedCount++;
             continue;
           }
-
-          const content = await readFile(fullPath, "utf8");
-          const occurrences = countOccurrences(content, edit.oldText);
-          if (occurrences !== 1) {
-            errors[failedCount] = { id, path: edit.path, error: formatError(`anchor occurs ${occurrences} times in ${edit.path}`) };
-            mergeFileStat(fileStatsByPath, edit.path, "failed", { added: 0, removed: 0 }, { oldText: edit.oldText, newText: edit.newText });
-            failedCount++;
-            continue;
+          if (planned.kind === "create") {
+            const fullPath = resolve(ctx.cwd, edit.path);
+            await mkdir(dirname(fullPath), { recursive: true });
+            await writeFile(fullPath, planned.after, "utf8");
+          } else {
+            await editTool.execute(
+              toolCallId,
+              { path: edit.path, edits: [{ oldText: edit.oldText, newText: edit.newText }] },
+              signal,
+              undefined,
+              ctx,
+            );
           }
-
-          const after = content.replace(edit.oldText, edit.newText);
-          await editTool.execute(
-            toolCallId,
-            { path: edit.path, edits: [{ oldText: edit.oldText, newText: edit.newText }] },
-            signal,
-            undefined,
-            ctx,
+          mergeFileStat(
+            fileStatsByPath,
+            edit.path,
+            "applied",
+            diffStats(planned.before, planned.after),
+            { oldText: edit.oldText, newText: edit.newText },
           );
-          mergeFileStat(fileStatsByPath, edit.path, "applied", diffStats(content, after), { oldText: edit.oldText, newText: edit.newText });
           editRegistry.delete(id);
           appliedCount++;
         } catch (error: unknown) {
-          const path = edit.path;
-          errors[failedCount] = { id, path, error: formatError(errorMessage(error)) };
-          mergeFileStat(fileStatsByPath, path, "failed", { added: 0, removed: 0 }, { oldText: edit.oldText, newText: edit.newText });
+          errors[failedCount] = { id, path: edit.path, error: formatError(errorMessage(error)) };
+          mergeFileStat(fileStatsByPath, edit.path, "failed", { added: 0, removed: 0 }, { oldText: edit.oldText, newText: edit.newText });
           failedCount++;
         }
       }
