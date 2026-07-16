@@ -25,9 +25,15 @@ function outcomeDetail(o: AdvancePhaseOutcome): string {
 // ── Phase 1: Transition validation (token-free) ──
 
 function testTransitions(): void {
-  // Forward progression — one step only
+  // Forward progression — one step only (pipeline starts at clarify)
   const r0 = advancePhase(undefined, "research");
-  check("undefined → research fails (already implicit; next is blueprint)", !r0.ok, outcomeDetail(r0));
+  check("undefined (clarify) → research ok", r0.ok && r0.phase === "research", outcomeDetail(r0));
+
+  const r0b = advancePhase(undefined, "clarify");
+  check("undefined → clarify fails (already at clarify)", !r0b.ok, outcomeDetail(r0b));
+
+  const rC = advancePhase("clarify", "research");
+  check("clarify → research ok", rC.ok && rC.phase === "research", outcomeDetail(rC));
 
   const r1 = advancePhase("research", "blueprint");
   check("research → blueprint ok", r1.ok && r1.phase === "blueprint", outcomeDetail(r1));
@@ -62,7 +68,7 @@ function testTransitions(): void {
 
 function testGateHelpers(): void {
   const emptyArtifacts = Object.freeze({});
-  check("currentPhase(undefined) = research", currentPhase(undefined) === "research");
+  check("currentPhase(undefined) defaults to clarify", currentPhase(undefined) === "clarify");
   check(
     "currentPhase({...}) reads phase",
     currentPhase({ current: "blueprint", advancedAt: 2, artifacts: emptyArtifacts, backwardJumps: 0 }) === "blueprint",

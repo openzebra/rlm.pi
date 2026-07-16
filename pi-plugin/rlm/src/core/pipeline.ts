@@ -1,13 +1,16 @@
 /**
  * RLM pipeline stage graph — data-driven transitions with deterministic gates.
  *
- * Stages: research → blueprint → implement → validate.
+ * Stages: clarify → research → blueprint → implement → validate
+ * (clarify skipped when askUserQuestion is off).
  * The root RLM writes artifacts via save_artifact(); advance_phase() is gated by
  * TypeScript floors (never LLM judgment). Validate routes on measured
  * blockers_count with a bounded corrective loop back to blueprint.
  */
 import {
   checkStatusReady,
+  clarificationRecord,
+  type ClarificationGateData,
   type GateResult,
   planPhaseRecords,
   type PlanGateData,
@@ -16,9 +19,10 @@ import {
   verifyCitations,
 } from "./gates.ts";
 
-export type Phase = "research" | "blueprint" | "implement" | "validate";
+export type Phase = "clarify" | "research" | "blueprint" | "implement" | "validate";
 
 export const PHASES = Object.freeze([
+  "clarify",
   "research",
   "blueprint",
   "implement",
@@ -26,10 +30,11 @@ export const PHASES = Object.freeze([
 ] as const satisfies readonly Phase[]);
 
 /** Kind string the model passes to save_artifact(kind, content). */
-export type ArtifactKind = "research" | "plan" | "validation";
+export type ArtifactKind = "clarification" | "research" | "plan" | "validation";
 
 /** Structured data a stage gate extracts from its artifact (what edges route on). */
 export type StageGateData =
+  | { readonly kind: "clarification"; readonly clarification: ClarificationGateData }
   | { readonly kind: "research" }
   | { readonly kind: "plan"; readonly plan: PlanGateData }
   | { readonly kind: "validation"; readonly validation: ValidationGateData }
@@ -44,6 +49,14 @@ export interface StageDef {
   /** Deterministic floor run on the artifact BEFORE leaving this stage. */
   readonly gate: (content: string, path: string, cwd: string) => GateResult<StageGateData>;
 }
+
+const clarifyGate: StageDef["gate"] = (content, path) => {
+  const status = checkStatusReady(content, path);
+  if (!status.ok) return status;
+  const rec = clarificationRecord(content, path);
+  if (!rec.ok) return rec;
+  return { ok: true, value: { kind: "clarification", clarification: rec.value } };
+};
 
 /** Compose floors: status: ready → citations → stage-specific contract. */
 const researchGate: StageDef["gate"] = (content, path, cwd) => {
@@ -74,6 +87,7 @@ const validateGate: StageDef["gate"] = (content, path) => {
 
 /** Single source of truth for gates, artifact dirs/kinds, and routing. */
 export const STAGES: Readonly<Record<Phase, StageDef>> = Object.freeze({
+  clarify: { phase: "clarify", artifactDir: "clarifications", artifactKind: "clarification", gate: clarifyGate },
   research: { phase: "research", artifactDir: "research", artifactKind: "research", gate: researchGate },
   blueprint: { phase: "blueprint", artifactDir: "plans", artifactKind: "plan", gate: blueprintGate },
   // implement is a side-effect stage; exit is engine-driven (serial fanout).
@@ -95,7 +109,7 @@ const STAGE_BY_KIND: Readonly<Partial<Record<ArtifactKind, StageDef>>> = Object.
 );
 
 export function stageForArtifactKind(kind: string): StageDef | undefined {
-  if (kind === "research" || kind === "plan" || kind === "validation") {
+  if (kind === "clarification" || kind === "research" || kind === "plan" || kind === "validation") {
     return STAGE_BY_KIND[kind];
   }
   return undefined;
@@ -111,8 +125,11 @@ export interface PhaseState {
   readonly backwardJumps: number;
 }
 
-export function initialPhaseState(advancedAt = 0): PhaseState {
-  return { current: "research", advancedAt, artifacts: Object.freeze({}), backwardJumps: 0 };
+/**
+ * @param start — first phase of the run (`clarify` when interviews are on, else `research`).
+ */
+export function initialPhaseState(advancedAt = 0, start: Phase = "clarify"): PhaseState {
+  return { current: start, advancedAt, artifacts: Object.freeze({}), backwardJumps: 0 };
 }
 
 export type RouteDecision =
@@ -170,10 +187,10 @@ export function advancePhase(
     return {
       ok: false,
       error: `unknown phase '${target}'; valid phases: ${PHASES.join(", ")}`,
-      phase: current ?? "research",
+      phase: current ?? PHASES[0],
     };
   }
-  const from = current ?? "research";
+  const from = current ?? PHASES[0];
   const expected = nextForward(from);
   if (expected === undefined) {
     return {
@@ -192,9 +209,9 @@ export function advancePhase(
   return { ok: true, phase: target as Phase };
 }
 
-/** Return the current phase (defaults to "research" if undefined). */
+/** Return the current phase (defaults to first phase if undefined). */
 export function currentPhase(state: PhaseState | undefined): Phase {
-  return state?.current ?? "research";
+  return state?.current ?? PHASES[0];
 }
 
 /** Return the number of turns spent in the current phase. */

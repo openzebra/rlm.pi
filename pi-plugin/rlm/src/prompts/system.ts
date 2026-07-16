@@ -116,8 +116,9 @@ function replGlossary(kind: ContextKind, recursion: boolean, askUserQuestion: bo
       "- `ask_user_question(questions: list[dict]) -> list[dict]`: pause and present the user",
       "  with 1-4 structured questions. Each question: {question, header, options: [{label, description}],",
       "  multiSelect?}. Returns list of {question, selected: [label], custom?}.",
-      "  Use when you have 2-4 concrete options from your analysis and need a decision before proceeding.",
-      "  DO NOT ask open-ended chat questions — use concrete options grounded in code/data.",
+      "  Default: use concrete options grounded in code/data (2–4 choices, Recommended first when ranking).",
+      "  Exception — clarify-phase intent rounds: lead with an open-ended intent question whose options",
+      "  are answer *shapes* (not a Recommended pick); free-text / Other carries the real framing.",
       "  Only valid at root depth; returns an error inside rlm_query sub-calls.",
     );
   }
@@ -149,13 +150,15 @@ function replGlossary(kind: ContextKind, recursion: boolean, askUserQuestion: bo
   if (pipeline) {
     lines.push(
       "- `save_artifact(kind: str, content: str) -> str`: persist a stage artifact under `.rlm/artifacts/`.",
-      "  Kinds: `'research'` | `'plan'` | `'validation'`. Must match the current phase. Frontmatter must",
-      "  eventually include `status: ready` before `advance_phase` will accept the transition.",
+      "  Kinds: `'clarification'` | `'research'` | `'plan'` | `'validation'`. Must match the current phase.",
+      "  Frontmatter must eventually include `status: ready` before `advance_phase` will accept the transition.",
       "- `advance_phase(phase: str, summary=None) -> str`: transition to the next pipeline phase.",
-      "  Order: 'research' → 'blueprint' → 'implement' → 'validate' (one step at a time).",
+      "  Order: 'clarify' → 'research' → 'blueprint' → 'implement' → 'validate' (one step at a time;",
+      "  clarify is skipped when ask_user_question is disabled).",
       "  **advance_phase is validated by the engine** — it measures the latest saved artifact",
-      "  (status, plan structure, citations, blockers_count). A rejected transition returns the",
-      "  gate error for you to fix; the phase does NOT advance. Only callable at root depth.",
+      "  (status, structure, citations, blockers_count; clarify also requires ≥1 ask_user_question round).",
+      "  A rejected transition returns the gate error for you to fix; the phase does NOT advance.",
+      "  Only callable at root depth.",
     );
   }
   lines.push(

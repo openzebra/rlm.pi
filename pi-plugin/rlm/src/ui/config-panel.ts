@@ -40,7 +40,7 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("maxTokens", "Token ceiling", config.maxTokens != null ? String(config.maxTokens) : "none", CHOICES.maxTokens, "Total input+output token cap for the whole recursive tree."),
     item("maxErrors", "Max consecutive errors", config.maxErrors != null ? String(config.maxErrors) : "none", CHOICES.maxErrors, "Stop after this many consecutive failing turns; none disables the guard."),
     item("orchestrator", "Orchestrator addendum", config.orchestrator ? "on" : "off", CHOICES.orchestrator, "Append extra divide-and-conquer guidance to the root model system prompt."),
-    item("pipeline", "Phase pipeline", config.pipeline ? "on" : "off", CHOICES.pipeline, "Enable artifact-gated phases: research→blueprint→implement fanout→validate."),
+    item("pipeline", "Phase pipeline", config.pipeline ? "on" : "off", CHOICES.pipeline, "Enable artifact-gated phases: clarify→research→blueprint→implement fanout→validate (clarify needs Ask user on)."),
     item("maxBackwardJumps", "Max validate→blueprint loops", String(config.maxBackwardJumps), CHOICES.maxBackwardJumps, "Bounded corrective re-entries when validation reports blockers_count > 0."),
     item("compaction", "Trajectory compaction", config.compaction ? "on" : "off", CHOICES.compaction, "Summarize old turns when history approaches the model context window."),
     item("rootSamplingMaxTokens", "Root model output cap (tok)", String(config.rootSampling?.maxTokens ?? 16384), CHOICES.rootSamplingMaxTokens, "Max output tokens per root-model turn. Lower values keep each turn lean."),

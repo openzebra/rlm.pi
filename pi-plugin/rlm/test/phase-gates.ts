@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { check, failureCount } from "./helpers.ts";
 import {
+  clarificationRecord,
+  countBulletsUnderHeading,
   countHeadingsOutsideFences,
   MAX_PHASES,
   planPhaseRecords,
@@ -173,6 +175,77 @@ function testValidation(): void {
   check("bad verdict rejected", !badVerdict.ok && badVerdict.error.includes("verdict"));
 }
 
+// ── countBulletsUnderHeading + clarificationRecord ──
+
+function testClarification(): void {
+  const body = [
+    "## Problem & Intent",
+    "User wants a login form for end users.",
+    "",
+    "## Decisions",
+    "- Use session cookies",
+    "- No OAuth in v1",
+    "```",
+    "- fenced bullet ignored",
+    "```",
+    "## Open Questions",
+    "- MFA later?",
+    "## Non-Goals",
+    "- Admin portal",
+  ].join("\n");
+  check("bullets under Decisions = 2 (fenced ignored)", countBulletsUnderHeading(body, "Decisions") === 2);
+  check("bullets under Open Questions = 1", countBulletsUnderHeading(body, "Open Questions") === 1);
+  check("missing heading ⇒ 0", countBulletsUnderHeading(body, "Missing") === 0);
+
+  const nested = [
+    "## Decisions",
+    "- top level decision",
+    "  - nested sub-bullet ignored",
+    "\t- tab-indented ignored",
+    "- second top level",
+  ].join("\n");
+  check(
+    "nested/indented bullets not counted (column-0 only)",
+    countBulletsUnderHeading(nested, "Decisions") === 2,
+    String(countBulletsUnderHeading(nested, "Decisions")),
+  );
+
+  const good = `---
+status: ready
+decisions_count: 2
+open_questions_count: 1
+---
+${body}
+`;
+  const ok = clarificationRecord(good, "c.md");
+  check("clarificationRecord match ok", ok.ok && ok.value.decisionsCount === 2 && ok.value.openQuestionsCount === 1);
+
+  const stale = `---
+status: ready
+decisions_count: 9
+open_questions_count: 1
+---
+${body}
+`;
+  const staleR = clarificationRecord(stale, "c.md");
+  check("stale decisions_count rejected", !staleR.ok && staleR.error.includes("decisions_count"), staleR.ok ? "ok" : staleR.error);
+
+  const noIntent = `---
+status: ready
+decisions_count: 0
+open_questions_count: 0
+---
+## Decisions
+## Open Questions
+`;
+  const noIntentR = clarificationRecord(noIntent, "c.md");
+  check(
+    "missing Problem & Intent rejected",
+    !noIntentR.ok && noIntentR.error.includes("Problem & Intent"),
+    noIntentR.ok ? "ok" : noIntentR.error,
+  );
+}
+
 // ── routeAfterValidate ──
 
 function testRoute(): void {
@@ -281,6 +354,7 @@ testHeadings();
 testPlanGate();
 testCitations();
 testValidation();
+testClarification();
 testRoute();
 await testArtifactsAndEditsAsync();
 

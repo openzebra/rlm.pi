@@ -107,12 +107,241 @@ function baseConfig(overrides: Partial<typeof DEFAULT_CONFIG> = {}) {
   return {
     ...DEFAULT_CONFIG,
     pipeline: true,
+    // Existing scripted walks start at research; clarify is covered by dedicated tests.
+    askUserQuestion: false,
     maxDepth: 3,
     compaction: false,
     orchestrator: false,
     maxBackwardJumps: 2,
     ...overrides,
   };
+}
+
+const CLARIFY_DOC = `---
+status: ready
+decisions_count: 1
+open_questions_count: 0
+---
+## Problem & Intent
+User wants a greeting helper for end users.
+
+## Decisions
+- Add greet(name) to app.ts
+
+## Open Questions
+
+## Non-Goals
+- Full i18n
+`;
+
+/** Clarify: advance without ask_user_question is rejected; one ask + save advances. */
+async function testClarifyRequiresAskRound(): Promise<void> {
+  const tmp = mkdtempSync(join(tmpdir(), "rlm-pipe-clarify-"));
+  writeFileSync(join(tmp, "app.ts"), "line1\n");
+  let askCalls = 0;
+  let rootTurn = 0;
+  let enteredResearch = false;
+
+  const complete: CompleteFn = async (messages) => {
+    const blob = historyBlob(messages);
+    if (blob.includes("You are entering the 'research' phase") || blob.includes("## Research phase")) {
+      enteredResearch = true;
+      return {
+        text: repl(`answer["content"]="reached research"; answer["ready"]=True`),
+        usage: ZERO_USAGE,
+      };
+    }
+    rootTurn++;
+    if (rootTurn === 1) {
+      // Valid artifact but zero asks → must fail
+      return {
+        text: repl(
+          `print(save_artifact("clarification", ${JSON.stringify(CLARIFY_DOC)}))\n` +
+          `r = advance_phase("research")\n` +
+          `print(r)\n` +
+          `answer["content"] = r\n` +
+          `answer["ready"] = True`,
+        ),
+        usage: ZERO_USAGE,
+      };
+    }
+    return {
+      text: repl(`answer["content"]="fallback"; answer["ready"]=True`),
+      usage: ZERO_USAGE,
+    };
+  };
+
+  try {
+    await withCwd(tmp, async () => {
+      const engine = createEngine({
+        model: MOCK_MODEL,
+        workerModel: MOCK_MODEL,
+        registry: MOCK_REGISTRY,
+        config: baseConfig({ maxIterations: 4, askUserQuestion: true }),
+        emitter: new RlmEmitter(),
+        runState: { cwd: tmp, dir: ".rlm/runs", snapshot: false },
+        onAskUserQuestion: async (qs) => {
+          askCalls++;
+          return qs.map((q) => ({
+            question: q.question,
+            selected: [q.options[0]?.label ?? "ok"],
+          }));
+        },
+        complete,
+      });
+      const res = await engine({ rootPrompt: "greet me", context: "c", depth: 0 });
+      check(
+        "clarify without ask rejected",
+        /ask_user_question|interview/i.test(res.answer),
+        res.answer.slice(0, 200),
+      );
+      check("did not enter research without ask", !enteredResearch);
+      check("no ask rounds counted (model never called)", askCalls === 0, String(askCalls));
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/** Clarify success path: one ask + valid artifact → research. */
+async function testClarifyAdvancesAfterAsk(): Promise<void> {
+  const tmp = mkdtempSync(join(tmpdir(), "rlm-pipe-clarify-ok-"));
+  writeFileSync(join(tmp, "app.ts"), "line1\n");
+  let askCalls = 0;
+  let enteredResearch = false;
+
+  const complete: CompleteFn = async (messages) => {
+    const blob = historyBlob(messages);
+    if (blob.includes("You are entering the 'research' phase") || blob.includes("## Research phase")) {
+      enteredResearch = true;
+      return {
+        text: repl(`answer["content"]="reached research"; answer["ready"]=True`),
+        usage: ZERO_USAGE,
+      };
+    }
+    // clarify phase
+    return {
+      text: repl(
+        `print(ask_user_question([{"question":"Who is this for?","header":"Intent","options":[{"label":"end user"},{"label":"operator"}]}]))\n` +
+        `print(save_artifact("clarification", ${JSON.stringify(CLARIFY_DOC)}))\n` +
+        `print(advance_phase("research", "interview done"))`,
+      ),
+      usage: ZERO_USAGE,
+    };
+  };
+
+  try {
+    await withCwd(tmp, async () => {
+      const engine = createEngine({
+        model: MOCK_MODEL,
+        workerModel: MOCK_MODEL,
+        registry: MOCK_REGISTRY,
+        config: baseConfig({ maxIterations: 6, askUserQuestion: true }),
+        emitter: new RlmEmitter(),
+        runState: { cwd: tmp, dir: ".rlm/runs", snapshot: false },
+        onAskUserQuestion: async (qs) => {
+          askCalls++;
+          return qs.map((q) => ({
+            question: q.question,
+            selected: [q.options[0]?.label ?? "ok"],
+          }));
+        },
+        complete,
+      });
+      const res = await engine({ rootPrompt: "greet me", context: "c", depth: 0 });
+      check("at least one ask serviced", askCalls >= 1, String(askCalls));
+      check("entered research after clarify", enteredResearch);
+      check("final answer from research", /reached research/i.test(res.answer), res.answer.slice(0, 120));
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Config askUserQuestion on but host never wired onAskUserQuestion ⇒ start at research
+ * (avoids deadlock: every ask would throw and askRounds stays 0 forever).
+ */
+async function testAskOnButNoCallbackStartsAtResearch(): Promise<void> {
+  const tmp = mkdtempSync(join(tmpdir(), "rlm-pipe-nocb-"));
+  writeFileSync(join(tmp, "app.ts"), "line1\n");
+  let sawClarifyEntry = false;
+  let sawResearchEntry = false;
+
+  const complete: CompleteFn = async (messages) => {
+    const blob = historyBlob(messages);
+    if (blob.includes("You are entering the 'clarify' phase") || blob.includes("## Clarify phase")) {
+      sawClarifyEntry = true;
+    }
+    if (blob.includes("You are entering the 'research' phase") || blob.includes("## Research phase")) {
+      sawResearchEntry = true;
+    }
+    return {
+      text: repl(`answer["content"]="started"; answer["ready"]=True`),
+      usage: ZERO_USAGE,
+    };
+  };
+
+  try {
+    await withCwd(tmp, async () => {
+      const engine = createEngine({
+        model: MOCK_MODEL,
+        workerModel: MOCK_MODEL,
+        registry: MOCK_REGISTRY,
+        config: baseConfig({ maxIterations: 3, askUserQuestion: true }),
+        // intentionally no onAskUserQuestion
+        emitter: new RlmEmitter(),
+        runState: { cwd: tmp, dir: ".rlm/runs", snapshot: false },
+        complete,
+      });
+      await engine({ rootPrompt: "x", context: "c", depth: 0 });
+      check("config on + no callback: no clarify entry", !sawClarifyEntry);
+      check("config on + no callback: starts at research", sawResearchEntry);
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/** askUserQuestion off ⇒ start at research (never mentions clarify phase entry). */
+async function testAskOffStartsAtResearch(): Promise<void> {
+  const tmp = mkdtempSync(join(tmpdir(), "rlm-pipe-noask-"));
+  writeFileSync(join(tmp, "app.ts"), "line1\n");
+  let sawClarifyEntry = false;
+  let sawResearchEntry = false;
+
+  const complete: CompleteFn = async (messages) => {
+    const blob = historyBlob(messages);
+    if (blob.includes("You are entering the 'clarify' phase") || blob.includes("## Clarify phase")) {
+      sawClarifyEntry = true;
+    }
+    if (blob.includes("You are entering the 'research' phase") || blob.includes("## Research phase")) {
+      sawResearchEntry = true;
+    }
+    return {
+      text: repl(`answer["content"]="started"; answer["ready"]=True`),
+      usage: ZERO_USAGE,
+    };
+  };
+
+  try {
+    await withCwd(tmp, async () => {
+      const engine = createEngine({
+        model: MOCK_MODEL,
+        workerModel: MOCK_MODEL,
+        registry: MOCK_REGISTRY,
+        config: baseConfig({ maxIterations: 3, askUserQuestion: false }),
+        emitter: new RlmEmitter(),
+        runState: { cwd: tmp, dir: ".rlm/runs", snapshot: false },
+        complete,
+      });
+      await engine({ rootPrompt: "x", context: "c", depth: 0 });
+      check("ask off: no clarify phase entry", !sawClarifyEntry);
+      check("ask off: starts at research", sawResearchEntry);
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 /** Fanout refuses when maxDepth leaves no room for a child RLM. */
@@ -599,6 +828,10 @@ async function main(): Promise<void> {
   await testHistoryResetOnBoundary();
   await testDepthCapRefusesFanout();
   await testLoopBackRequiresNewPlan();
+  await testClarifyRequiresAskRound();
+  await testClarifyAdvancesAfterAsk();
+  await testAskOffStartsAtResearch();
+  await testAskOnButNoCallbackStartsAtResearch();
   console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
   process.exit(failureCount() === 0 ? 0 : 1);
 }

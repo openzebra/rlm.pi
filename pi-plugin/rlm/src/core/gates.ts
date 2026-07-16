@@ -29,16 +29,23 @@ export interface ValidationGateData {
   readonly verdict: "pass" | "fail";
 }
 
+export interface ClarificationGateData {
+  readonly decisionsCount: number;
+  readonly openQuestionsCount: number;
+}
+
 const PLAN_PHASE_RE = /^## Phase (\d+):/;
 const STATUS_READY = "ready";
+const BULLET_RE = /^-\s+\S/;
 
 /**
- * Count lines matching `re` OUTSIDE fenced code blocks — a `## Phase N:` inside
- * a ``` fence is example text, not a structural heading.
+ * Walk content lines, invoking `visit` only for lines outside fenced code blocks.
+ * Shared by heading and bullet counters (DRY — single fence scan).
  */
-export function countHeadingsOutsideFences(content: string, re: RegExp): number {
-  const lineRe = new RegExp(re.source);
-  let count = 0;
+export function forEachLineOutsideFences(
+  content: string,
+  visit: (line: string) => void,
+): void {
   let inFence = false;
   let fenceLen = 0;
   for (const line of content.split("\n")) {
@@ -54,9 +61,71 @@ export function countHeadingsOutsideFences(content: string, re: RegExp): number 
       }
       continue;
     }
-    if (!inFence && lineRe.test(line)) count++;
+    if (!inFence) visit(line);
   }
+}
+
+/**
+ * Count lines matching `re` OUTSIDE fenced code blocks — a `## Phase N:` inside
+ * a ``` fence is example text, not a structural heading.
+ */
+export function countHeadingsOutsideFences(content: string, re: RegExp): number {
+  const lineRe = new RegExp(re.source);
+  let count = 0;
+  forEachLineOutsideFences(content, (line) => {
+    if (lineRe.test(line)) count++;
+  });
   return count;
+}
+
+/**
+ * Fence-aware count of top-level (column-0) `- ` bullets under a `## <heading>` section.
+ * Nested/indented sub-bullets are ignored. The next `## ` heading ends the section.
+ * Missing heading ⇒ 0.
+ */
+export function countBulletsUnderHeading(content: string, heading: string): number {
+  const headingRe = new RegExp(`^##\\s+${escapeRegExp(heading)}\\s*$`);
+  let inSection = false;
+  let count = 0;
+  forEachLineOutsideFences(content, (line) => {
+    if (/^##\s+/.test(line)) {
+      inSection = headingRe.test(line);
+      return;
+    }
+    // Column-0 only: do not trimStart — indented sub-bullets must not inflate the count.
+    if (inSection && BULLET_RE.test(line)) count++;
+  });
+  return count;
+}
+
+/**
+ * True when `## <heading>` exists and has non-whitespace body before the next `## `.
+ * Only the first matching heading is considered (later duplicates are ignored).
+ */
+export function sectionHasNonEmptyBody(content: string, heading: string): boolean {
+  const headingRe = new RegExp(`^##\\s+${escapeRegExp(heading)}\\s*$`);
+  let inSection = false;
+  let seen = false; // first match wins — do not re-enter on a later duplicate heading
+  let body = "";
+  forEachLineOutsideFences(content, (line) => {
+    if (/^##\s+/.test(line)) {
+      if (inSection) {
+        inSection = false;
+        return;
+      }
+      if (!seen && headingRe.test(line)) {
+        inSection = true;
+        seen = true;
+      }
+      return;
+    }
+    if (inSection) body += `${line}\n`;
+  });
+  return body.trim().length > 0;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Frontmatter as a plain record (parseFrontmatter returns unknown-shaped data). */
@@ -171,4 +240,33 @@ export function validationRecord(content: string, path: string): GateResult<Vali
     return { ok: false, error: `validation ${path}: verdict 'pass' contradicts blockers_count ${blockers}` };
   }
   return { ok: true, value: { blockersCount: blockers, verdict } };
+}
+
+/**
+ * Clarification-contract floor: interview outcome document.
+ * `decisions_count` / `open_questions_count` must match fence-aware bullet counts;
+ * `## Problem & Intent` must be present and non-empty (user's words).
+ */
+export function clarificationRecord(content: string, path: string): GateResult<ClarificationGateData> {
+  const fm = frontmatterOf(content);
+  const decisions = fm.decisions_count;
+  const openQs = fm.open_questions_count;
+  if (typeof decisions !== "number" || !Number.isInteger(decisions) || decisions < 0) {
+    return { ok: false, error: `clarification ${path}: frontmatter decisions_count must be an integer ≥ 0 (got ${String(decisions)})` };
+  }
+  if (typeof openQs !== "number" || !Number.isInteger(openQs) || openQs < 0) {
+    return { ok: false, error: `clarification ${path}: frontmatter open_questions_count must be an integer ≥ 0 (got ${String(openQs)})` };
+  }
+  if (!sectionHasNonEmptyBody(content, "Problem & Intent")) {
+    return { ok: false, error: `clarification ${path}: '## Problem & Intent' section is missing or empty — record the user's words verbatim` };
+  }
+  const decisionBullets = countBulletsUnderHeading(content, "Decisions");
+  if (decisions !== decisionBullets) {
+    return { ok: false, error: `clarification ${path}: decisions_count (${decisions}) ≠ '- ' bullets under '## Decisions' (${decisionBullets}) — rebuild the count from the body` };
+  }
+  const openBullets = countBulletsUnderHeading(content, "Open Questions");
+  if (openQs !== openBullets) {
+    return { ok: false, error: `clarification ${path}: open_questions_count (${openQs}) ≠ '- ' bullets under '## Open Questions' (${openBullets}) — rebuild the count from the body` };
+  }
+  return { ok: true, value: { decisionsCount: decisions, openQuestionsCount: openQs } };
 }

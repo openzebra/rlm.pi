@@ -9,11 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Artifact-gated pipeline (opt-in `pipeline: true`): research → blueprint → implement → validate
+- Artifact-gated pipeline (opt-in `pipeline: true`): clarify → research → blueprint → implement → validate
   with deterministic engine gates (artifact `status: ready`, plan `phases:`/`phase_count`
   derive-check against `## Phase N:` headings, `file:line` citation verification,
   validation `blockers_count`/`verdict` contract).
-- `save_artifact(kind, content)` sandbox function; artifacts persist under `.rlm/artifacts/`.
+- **Clarify intake phase**: interviews the user via `ask_user_question` until the task is understood;
+  writes a clarifications artifact (`decisions_count` / `open_questions_count` + Problem & Intent /
+  Decisions / Open Questions / Non-Goals). Engine gate requires ≥1 serviced ask round (un-gameable).
+  When `askUserQuestion` is off, clarify is skipped and the run starts at research.
+- `save_artifact(kind, content)` sandbox function; artifacts persist under `.rlm/artifacts/`
+  (`clarifications/`, `research/`, `plans/`, `validations/`, `goal/`).
 - Verbatim goal capture + pre-run dirty-tree baseline at run start.
 - Serial implement fanout: one child RLM per plan phase; edits applied between phases;
   idempotent retry (`already-applied` detection) and create-clobber refusal.

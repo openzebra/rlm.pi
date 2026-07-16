@@ -209,6 +209,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let editsAcc: ProposedEdit[] = [];
     let phaseState: PhaseState | undefined;
     let lastSavedArtifact: Partial<Record<Phase, string>> = {};
+    /** Serviced ask_user_question rounds in the current phase (session-only; reset on transition). */
+    let askRoundsThisPhase = 0;
     let pendingHistoryReset: ChatMsg[] | undefined;
     let goal: GoalCapture | undefined;
     let nodeStatus: "done" | "error" = "done";
@@ -332,9 +334,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
             saveArtifact: async (kind: string, content: string): Promise<string> => {
               const stage = stageForArtifactKind(kind);
               if (stage === undefined) {
-                return formatError(`unknown artifact kind '${kind}' (valid: research, plan, validation)`);
+                return formatError(`unknown artifact kind '${kind}' (valid: clarification, research, plan, validation)`);
               }
-              const current = phaseState?.current ?? "research";
+              const current = phaseState?.current ?? "clarify";
               if (stage.phase !== current) {
                 return formatError(
                   `artifact kind '${kind}' belongs to phase '${stage.phase}', but the pipeline is in '${current}'`,
@@ -346,9 +348,17 @@ export function createEngine(deps: EngineDeps): RunRlm {
               return `ok — saved ${saved.path}. Call advance_phase when the artifact is complete (status: ready).`;
             },
             advancePhase: async (phase: string, summary: string | undefined): Promise<string> => {
-              const current = phaseState?.current ?? "research";
+              const current = phaseState?.current ?? "clarify";
               const outcome = validatePhaseTransition(current, phase);
               if (!outcome.ok) return formatError(outcome.error);
+
+              // Clarify interview gate: engine counts serviced ask_user_question rounds
+              // (un-gameable — the model cannot advance without having actually asked).
+              if (current === "clarify" && askRoundsThisPhase === 0) {
+                return formatError(
+                  "clarify requires at least one ask_user_question round — interview the user before advancing",
+                );
+              }
 
               // GATE: measure the CURRENT stage's latest save only (never fall back to
               // phaseState.artifacts — those are completed-channel paths and may be stale
@@ -394,6 +404,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
               await persistPhaseRow(phaseState, artifactPath, artifactPath !== undefined ? current : undefined, gateData);
               // Leaving a stage: clear its lastSaved so a future re-entry must re-save.
               clearLastSaved(current);
+              // Session-only ask counter (like lastSavedArtifact): reset on every accepted transition.
+              askRoundsThisPhase = 0;
               pendingHistoryReset = resetHistoryForPhase(system, phaseState, {
                 goal,
                 implementSummary,
@@ -407,8 +419,16 @@ export function createEngine(deps: EngineDeps): RunRlm {
             },
           }
         : {};
+      const baseAsk = deps.config.askUserQuestion ? deps.onAskUserQuestion : undefined;
       const interactiveHandlers = buildInteractiveHandlers({
-        onAskUserQuestion: deps.config.askUserQuestion ? deps.onAskUserQuestion : undefined,
+        onAskUserQuestion: baseAsk
+          ? async (questions) => {
+              const answers = await baseAsk(questions);
+              // Count only successfully serviced root-depth rounds (handler already rejects depth>0).
+              askRoundsThisPhase++;
+              return answers;
+            }
+          : undefined,
         onTodo: deps.config.todo ? deps.onTodo : undefined,
         onTodoRow: async (action, params, todoResult) => {
           if (!persistOn || !runId || !deps.runState) return;
@@ -447,7 +467,10 @@ export function createEngine(deps: EngineDeps): RunRlm {
           const artifacts: Partial<Record<Phase, string>> = {};
           if (resumePhase.artifacts) {
             for (const [k, v] of Object.entries(resumePhase.artifacts)) {
-              if (v !== undefined && (k === "research" || k === "blueprint" || k === "implement" || k === "validate")) {
+              if (
+                v !== undefined
+                && (k === "clarify" || k === "research" || k === "blueprint" || k === "implement" || k === "validate")
+              ) {
                 artifacts[k] = v;
               }
             }
@@ -462,9 +485,12 @@ export function createEngine(deps: EngineDeps): RunRlm {
           // lastSaved is session-only: never rehydrate from trail (would re-gate stale
           // plan/validation after loop-back / mid-stage resume without a fresh save).
           lastSavedArtifact = {};
+          // askRoundsThisPhase is session-only (like lastSavedArtifact): a resume mid-clarify
+          // restarts the interview count so the model must ask again in this process.
+          askRoundsThisPhase = 0;
         }
       } else if (pipelineOn) {
-        // Goal capture (script, no LLM) + seed phase state + fresh history for research.
+        // Goal capture (script, no LLM) + seed phase state + fresh history.
         const captured = captureGoal(runCwd, input.rootPrompt);
         let goalNotice: string | undefined;
         if (captured.ok) {
@@ -473,7 +499,14 @@ export function createEngine(deps: EngineDeps): RunRlm {
           // Fail-soft: fold into the first reset message (never console — corrupts TUI).
           goalNotice = `Note: goal artifact could not be written (${captured.error}); the brief remains only in the system prompt.`;
         }
-        phaseState = initialPhaseState(0);
+        // Clarify only when interviews are enabled AND the host wired a callback.
+        // Config alone is not enough: without onAskUserQuestion every ask throws and
+        // the run would burn maxIterations stuck at clarify (askRounds stays 0).
+        const startPhase =
+          deps.config.askUserQuestion && deps.onAskUserQuestion !== undefined
+            ? "clarify"
+            : "research";
+        phaseState = initialPhaseState(0, startPhase);
         history = resetHistoryForPhase(system, phaseState, { goal, notice: goalNotice });
       }
 
@@ -603,10 +636,11 @@ export function createEngine(deps: EngineDeps): RunRlm {
               deps.config.maxBackwardJumps,
             );
             if (route.kind === "loop-back") {
-              // Keep research; record validate for the reset message; DROP blueprint so
+              // Keep clarify/research; record validate for the reset message; DROP blueprint so
               // the model must write a new plan. Clear lastSaved so gates cannot re-use
               // round-1 plan/validation without a fresh save_artifact.
               const nextArtifacts: Partial<Record<Phase, string>> = {
+                clarify: phaseState.artifacts.clarify,
                 research: phaseState.artifacts.research,
                 validate: vPath,
               };
@@ -619,6 +653,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
               };
               await persistPhaseRow(phaseState, vPath, "validate", gate.value);
               clearLastSaved("blueprint", "validate");
+              askRoundsThisPhase = 0;
               history = resetHistoryForPhase(system, phaseState, { goal, validation });
               pendingReplOutputs = undefined;
               pendingHistoryReset = undefined;
