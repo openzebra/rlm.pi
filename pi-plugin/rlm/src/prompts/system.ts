@@ -20,6 +20,7 @@ export interface SystemPromptOptions {
   readonly todo?: boolean;
   readonly pipeline?: boolean;
   readonly maxPromptChars?: number;
+  readonly libraryLoader?: boolean;
 }
 
 export type ContextKind = "files" | "text";
@@ -76,7 +77,14 @@ function howToRunCode(): string {
   ].join(" ");
 }
 
-function replGlossary(kind: ContextKind, recursion: boolean, askUserQuestion: boolean, todo: boolean, pipeline: boolean): string {
+function replGlossary(
+  kind: ContextKind,
+  recursion: boolean,
+  askUserQuestion: boolean,
+  todo: boolean,
+  pipeline: boolean,
+  libraryLoader: boolean,
+): string {
   const lines = ["Available in the REPL:"];
   if (kind === "text") {
     lines.push(
@@ -129,6 +137,17 @@ function replGlossary(kind: ContextKind, recursion: boolean, askUserQuestion: bo
       "  list(filterStatus?), get(id), delete(id), clear().",
       "  Status flow: pending → in_progress → completed.",
       "  Use to plan multi-step work before starting, then mark tasks as you complete them.",
+    );
+  }
+  if (libraryLoader) {
+    lines.push(
+      "- `load_library(source: str) -> dict`: load an EXTERNAL library, source tree, or document into a",
+      "  NEW `context_N` REPL variable. `source` may be a local directory (repomix-packed to the same",
+      "  list[dict] shape as `context`), a single file path (loaded as a plain str), or an https/git@ URL",
+      "  (shallow-cloned, then packed). Returns {\"index\": N, \"var\": \"context_N\", \"files\", \"chars\"}",
+      "  on success or an \"Error: ...\" string. Use it when the task requires learning an external lib's",
+      "  API, structure, or docs that are not in `context`; then chunk `context_N` to sub-LLMs exactly like",
+      "  `context`. Do not re-load a source that is already in a slot.",
     );
   }
   if (recursion) {
@@ -205,7 +224,10 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
     "",
     howToRunCode(),
     "",
-    replGlossary(kind, recursion, opts.askUserQuestion ?? false, opts.todo ?? false, opts.pipeline ?? false),
+    replGlossary(
+      kind, recursion, opts.askUserQuestion ?? false, opts.todo ?? false,
+      opts.pipeline ?? false, opts.libraryLoader ?? false,
+    ),
     "",
     "REPL stdout over ~800 characters is truncated to a short excerpt — large results stay in your",
     "REPL variables as buffers. Re-print only the slice you need (e.g. `print(result[:500])`); never",
@@ -240,6 +262,7 @@ function nativeReplGlossary(): string {
     "- `rlm_query_batched(prompts, model=None) -> list[str]` — concurrent recursive RLM calls.",
     "",
     "- `todo(action, **kwargs) -> str` — manage a task list. Actions: create, update, list, get, delete, clear. Statuses: pending → in_progress → completed.",
+    "- `load_library(source)` → `context_N` (external).",
     "- `SHOW_VARS() -> str` — list all variables currently in the REPL.",
     "- `stage_edit(path, old_text, new_text) -> str`: stages an edit and returns an edit ID; apply IDs with `apply_edits`.",
     "- `answer`: dict `{\"content\": \"\", \"ready\": False}`. Setting `answer[\"ready\"] = True` delivers it to the user; do not restate it.",

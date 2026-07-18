@@ -32,11 +32,13 @@ export async function appendTodoRow(cwd: string, dir: string, runId: string, row
   return await appendRow(cwd, dir, runId, { kind: "todo", ...row });
 }
 
-/** Persist the original context ONCE at run start so resume can reload it. */
-export async function writeContextSidecar(cwd: string, dir: string, runId: string, context: unknown, json: boolean): Promise<boolean> {
+/** Persist a context payload for resume. Slot 0 = repo context; index ≥ 1 = load_library slots. */
+export async function writeContextSidecar(
+  cwd: string, dir: string, runId: string, context: unknown, json: boolean, index = 0,
+): Promise<boolean> {
   return await failSoft(async () => {
     await mkdir(runDir(cwd, dir, runId), { recursive: true });
-    await writeFile(contextPath(cwd, dir, runId, json), json ? JSON.stringify(context) : String(context), "utf-8");
+    await writeFile(contextPath(cwd, dir, runId, json, index), json ? JSON.stringify(context) : String(context), "utf-8");
     return true;
   }, false);
 }

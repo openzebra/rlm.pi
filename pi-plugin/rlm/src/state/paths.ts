@@ -32,8 +32,10 @@ export const runDir = (cwd: string, dir: string, runId: string): string => join(
 
 export const trailPath = (cwd: string, dir: string, runId: string): string => join(runDir(cwd, dir, runId), "trail.jsonl");
 
-export const contextPath = (cwd: string, dir: string, runId: string, json: boolean): string =>
-  join(runDir(cwd, dir, runId), json ? "context.json" : "context.txt");
+export const contextPath = (cwd: string, dir: string, runId: string, json: boolean, index = 0): string =>
+  join(runDir(cwd, dir, runId), index === 0
+    ? (json ? "context.json" : "context.txt")
+    : `context.${index}.${json ? "json" : "txt"}`);
 
 /** R-C1: per-turn snapshot files — `sandbox-<turn>.pkl` so resume can fall back to a prior turn if the latest rename failed. */
 export function snapshotPath(cwd: string, dir: string, runId: string, turn?: number): string {

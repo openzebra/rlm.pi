@@ -68,7 +68,7 @@ RESERVED = frozenset(
         "rlm_query", "rlm_query_batched",
         "advance_phase", "save_artifact",
         "ask_user_question", "todo",
-        "stage_edit",
+        "stage_edit", "load_library",
         "SHOW_VARS", "answer", "context",
     }
 )
@@ -152,6 +152,7 @@ class Worker:
         ns["ask_user_question"] = self._ask_user_question
         ns["todo"] = self._todo
         ns["stage_edit"] = self._stage_edit
+        ns["load_library"] = self._load_library
         ns["SHOW_VARS"] = self._show_vars
         if not isinstance(ns.get("answer"), _AnswerDict):
             cur = ns.get("answer")
@@ -331,6 +332,24 @@ class Worker:
         edit_id = f"e{self._edit_counter}"
         self._staged_edits.append({"id": edit_id, "path": path, "oldText": old_text, "newText": new_text})
         return edit_id
+
+    def _load_library(self, source: str) -> dict[str, Any] | str:
+        """Ask the host to pack an external dir/file/git-URL and load it as a new context slot."""
+        r = self._rpc("load_library", {"source": str(source)})
+        if r.get("error"):
+            return f"Error: {r['error']}"
+        path = r.get("path")
+        if not isinstance(path, str):
+            return "Error: malformed load_library reply (no path)"
+        try:
+            idx = self.load_context(path, r.get("index"), bool(r.get("json")))
+        finally:
+            try:
+                os.remove(path)  # worker owns temp-file cleanup (host does NOT unlink)
+            except OSError:
+                pass
+        return {"index": idx, "var": f"context_{idx}",
+                "files": r.get("files"), "chars": r.get("chars")}
 
     def _advance_phase(self, phase: str, summary: str | None = None) -> str:
         """Transition the root RLM pipeline to a new phase.

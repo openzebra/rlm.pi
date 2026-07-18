@@ -21,6 +21,12 @@ export interface LlmReply {
   readonly response?: string;
   readonly responses?: readonly string[];
   readonly answers?: readonly AskAnswer[];
+  /** load_library reply: temp file with the packed payload + assigned slot. */
+  readonly path?: string;
+  readonly json?: boolean;
+  readonly index?: number;
+  readonly files?: number;
+  readonly chars?: number;
   readonly error?: string;
 }
 
@@ -64,7 +70,8 @@ export type InterruptKind =
   | "advance_phase"
   | "save_artifact"
   | "ask_user_question"
-  | "todo";
+  | "todo"
+  | "load_library";
 
 export interface AskOption {
   readonly label: string;
@@ -139,6 +146,11 @@ export interface TodoInterrupt extends InterruptBase {
   readonly includeDeleted?: boolean;
 }
 
+export interface LoadLibraryInterrupt extends InterruptBase {
+  readonly type: "load_library";
+  readonly source?: string;
+}
+
 /** A mid-exec sub-LLM/tool request from the worker. */
 export type WorkerInterrupt =
   | PromptInterrupt
@@ -146,7 +158,8 @@ export type WorkerInterrupt =
   | AdvancePhaseInterrupt
   | SaveArtifactInterrupt
   | AskUserQuestionInterrupt
-  | TodoInterrupt;
+  | TodoInterrupt
+  | LoadLibraryInterrupt;
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
 
@@ -159,6 +172,7 @@ export const INTERRUPT_KINDS = Object.freeze(new Set<InterruptKind>([
   "save_artifact",
   "ask_user_question",
   "todo",
+  "load_library",
 ]));
 
 function isRecord(value: unknown): value is Record<string, unknown> {

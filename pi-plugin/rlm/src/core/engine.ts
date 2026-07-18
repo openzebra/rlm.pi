@@ -14,6 +14,7 @@
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { buildInteractiveHandlers } from "../bridge/interactive.ts";
+import { buildLibraryHandler } from "../bridge/library.ts";
 import { createLlmBridge } from "../bridge/llm-query.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { createRlmHandlers } from "../bridge/rlm-query.ts";
@@ -46,7 +47,15 @@ import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
 import type { InteractiveDeps, RlmConfig, RlmInput, RlmResult, RunRlm, Sampling } from "./types.ts";
 import { randomUUID } from "node:crypto";
-import { appendRow, appendTodoRow, generateRunId, pruneRuns, snapshotPath, writeContextSidecar } from "../state/index.ts";
+import {
+  appendRow,
+  appendTodoRow,
+  generateRunId,
+  pruneRuns,
+  readLibrarySidecars,
+  snapshotPath,
+  writeContextSidecar,
+} from "../state/index.ts";
 import { STATE_SCHEMA_VERSION } from "../state/rows.ts";
 import type { PhaseRow, RunHeader } from "../state/rows.ts";
 import { serializeForSandbox, type ContextBundle } from "../context/repomix-context.ts";
@@ -327,6 +336,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         todo: deps.config.todo,
         pipeline: deps.config.pipeline && input.depth === 0,
         maxPromptChars: deps.config.maxPromptChars,
+        libraryLoader: deps.config.libraryLoader,
       });
 
       const phaseHandlers = pipelineOn
@@ -442,6 +452,26 @@ export function createEngine(deps: EngineDeps): RunRlm {
         parentId: selfReportId,
       });
 
+      const restoredSlots = input.resume && deps.runState && runId
+        ? await readLibrarySidecars(deps.runState.cwd, deps.runState.dir, runId)
+        : [];
+      const libraryHandlers = deps.config.libraryLoader
+        ? buildLibraryHandler({
+            cwd: runCwd,
+            emitter,
+            parentId: selfReportId,
+            signal: deps.signal,
+            startIndex: 1 + restoredSlots.reduce((m, s) => Math.max(m, s.index), 0),
+            onLoaded: async (index, payload) => {
+              if (!persistOn || !runId || !deps.runState) return;
+              await writeContextSidecar(
+                deps.runState.cwd, deps.runState.dir, runId,
+                payload, typeof payload !== "string", index,
+              );
+            },
+          }).handlers
+        : {};
+
       sandbox = await PythonSandbox.spawn({
         depth: input.depth,
         execTimeoutS: deps.config.execTimeoutS,
@@ -450,7 +480,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         signal: deps.signal,
         initTimeoutMs: deps.config.sandboxInitTimeoutMs,
         maxPromptChars: deps.config.maxPromptChars,
-        handlers: { ...llm, ...rlm, ...phaseHandlers, ...interactiveHandlers },
+        handlers: { ...llm, ...rlm, ...phaseHandlers, ...interactiveHandlers, ...libraryHandlers },
       });
 
       let history: ChatMsg[] = input.resume ? input.resume.history : [{ role: "system", content: system }];
@@ -515,6 +545,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
         ? serializeForSandbox(input.context as ContextBundle)
         : input.context;
       await sandbox.loadContext(contextValue);
+      for (const slot of restoredSlots) {
+        await sandbox.loadContext(slot.payload, slot.index);   // re-injects context_N for resumed runs
+      }
       if (input.resume?.snapshotTurn !== undefined && deps.runState && runId && sessionNonce) // R-C1: restore only for same-session (sessionNonce present)
         await sandbox.restore(snapshotPath(deps.runState.cwd, deps.runState.dir, runId, input.resume.snapshotTurn), sessionNonce);
       for (let i = startTurn; i < deps.config.maxIterations; i++) {

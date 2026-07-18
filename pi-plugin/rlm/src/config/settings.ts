@@ -94,6 +94,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (askUserQuestion !== undefined) out.askUserQuestion = askUserQuestion;
   const todo = validateBoolean(r.todo);
   if (todo !== undefined) out.todo = todo;
+  const libraryLoader = validateBoolean(r.libraryLoader);
+  if (libraryLoader !== undefined) out.libraryLoader = libraryLoader;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
     const ss = r.subSampling as Record<string, unknown>;
     const sampling: { maxTokens?: number; temperature?: number; reasoning?: ThinkingLevel } = {};

@@ -18,6 +18,7 @@ import type { Model, Usage, Api } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { modelRef, resolveModelId } from "../config/settings.ts";
 import { buildInteractiveHandlers } from "../bridge/interactive.ts";
+import { buildLibraryHandler } from "../bridge/library.ts";
 import { createPiInteractiveDeps } from "../bridge/pi-interactive.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { previewText } from "../text/preview.ts";
@@ -341,13 +342,19 @@ export interface ReplToolDeps {
   readonly signal?: AbortSignal;
   readonly onUsage?: (usage: Usage, role: "sub") => void;
   readonly ensureContext?: () => Promise<void>;
+  /** Register a reset hook for sandbox death/dispose (e.g. load_library slot counter). */
+  readonly registerDiscardHook?: (reset: () => void) => void;
 }
 
 export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplToolParams, ReplDetails> {
   const { sandboxManager, workerModel, registry, editRegistry, config, signal, onUsage } = deps;
   const bridgeState = new NativeBridgeState();
 
-  // Build handlers once — llm/rlm use mutable refs, interactive is session-stable
+  // Late-bound cwd — getOrCreate installs handlers only at spawn; never rebuild the closure.
+  let sessionCwd = process.cwd();
+
+  // Build handlers once — llm/rlm/library use late-bound deps so the same closures stay correct
+  // across repl() calls; counter resets when the sandbox is discarded and re-spawned.
   const llmHandlers = bridgeState.buildLlmHandlers({
     workerModel,
     getWorkerModel: deps.getWorkerModel,
@@ -373,6 +380,17 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     llmHandlers,
   });
 
+  const libraryBundle = config.libraryLoader
+    ? buildLibraryHandler({
+        getCwd: () => sessionCwd,
+        getEmitter: () => bridgeState.currentEmitter,
+        parentId: undefined,
+        signal,
+        startIndex: 1,
+      })
+    : undefined;
+  if (libraryBundle) deps.registerDiscardHook?.(libraryBundle.reset);
+
   return {
     name: "repl",
     label: "REPL",
@@ -382,7 +400,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       "chunk `context` and delegate semantic work to llm_query / llm_query_batched / " +
       "llm_query_chunked / rlm_query — stdout returned to you is hard-capped at 4K chars, so " +
       "printing file bodies is useless. Variables, imports, and state persist across calls. " +
-      "Also supports todo and ask_user_question inside the sandbox.",
+      "Also supports todo, ask_user_question, and load_library inside the sandbox.",
     parameters: ReplToolParams,
 
     async execute(_toolCallId, rawParams, _execSignal, onUpdate, ctx) {
@@ -448,12 +466,15 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           parentId: undefined,
         });
 
+        sessionCwd = ctx.cwd ?? process.cwd();
+
         await deps.ensureContext?.();
         await sandboxManager.getOrCreate({
           ...llmHandlers,
           ...rlmHandlers,
           askUserQuestion: interactiveHandlers.askUserQuestion,
           todo: interactiveHandlers.todo,
+          ...(libraryBundle?.handlers ?? {}),
         });
 
         // Detect queue contention AFTER sandbox init (initPromise settled, isExecuting now accurate)

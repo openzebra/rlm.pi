@@ -27,13 +27,17 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   const config = mergeConfig({});
   const controller = new RlmController(config);
   const editRegistry = new EditRegistry();
+  let onSandboxDiscardExtra: (() => void) | undefined;
   const sandboxManager = new SandboxManager({
     execTimeoutS: config.execTimeoutS,
     requestTimeoutMs: config.requestTimeoutMs,
     python: config.python,
     sandboxInitTimeoutMs: config.sandboxInitTimeoutMs,
     maxPromptChars: config.maxPromptChars,
-    onSandboxDiscarded: () => { editRegistry.clear(); },
+    onSandboxDiscarded: () => {
+      editRegistry.clear();
+      onSandboxDiscardExtra?.();
+    },
   });
   let packedContextText: string | undefined;
   let contextPackPromise: Promise<string | undefined> | undefined;
@@ -107,6 +111,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           registry: ctx.modelRegistry,
           editRegistry,
           config: controller.config,
+          registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
           ensureContext: async () => {
             const contextText = await ensureRepositoryContext(ctx.cwd ?? process.cwd());
             if (contextText === undefined) throw new Error("repository context could not be loaded into RLM sandbox");

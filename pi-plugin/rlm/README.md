@@ -117,11 +117,29 @@ These functions are injected into the model's Python namespace inside the REPL:
 | `rlm_query_batched` | `(prompts, model=None) -> list[str]` | Concurrent recursive child RLMs |
 | `todo` | `(action, **kwargs) -> str` | Task list: `create`/`update`/`list`/`get`/`delete`/`clear` |
 | `ask_user_question` | `(questions) -> list[dict]` | Ask the user structured questions (depth 0 only) |
+| `load_library` | `(source) -> dict \| str` | Load an external dir, file, or git URL into a new `context_N` slot |
 | `stage_edit` | `(path, old_text, new_text) -> str` | Stage a file edit; relayed to the host's native edit flow |
 | `save_artifact` | `(kind, content) -> str` | Persist a stage artifact (`clarification` / `research` / `plan` / `validation`) under `.rlm/artifacts/` (root depth only) |
 | `advance_phase` | `(phase, summary=None) -> str` | Advance one step in order `clarify → research → blueprint → implement → validate` (clarify skipped when `askUserQuestion` is off). **Engine-gated** on the latest artifact + interview rounds. Rejected transitions return the gate error. |
 | `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
 | `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
+
+### Loading external libraries
+
+When the task needs an **external library, another source tree, or standalone docs** that are
+not in the packed repo `context`, the model calls `load_library(source)` mid-run:
+
+```python
+info = load_library("../some-lib")           # local directory → repomix-packed list[dict]
+info = load_library("docs/api.md")           # single file → plain str
+info = load_library("https://github.com/x/y.git")  # shallow clone, then pack
+# info == {"index": 1, "var": "context_1", "files": …, "chars": …}
+# then chunk context_1 exactly like context
+```
+
+Slots start at `context_1` (`context` / `context_0` remains the repo). Toggle via
+`/rlm-config` → **Library loader** (`libraryLoader`, default on). On headless runs with
+persistence, each loaded slot is written as a resume sidecar (`context.<N>.json`).
 
 ### Artifact-gated pipeline (opt-in via `pipeline: true`)
 
@@ -157,6 +175,7 @@ When enabled at root depth:
 | Sandbox init timeout | `30000` ms | how long to wait for the Python worker to start |
 | `askUserQuestion` | on | expose `ask_user_question()` to the model |
 | `todo` | on | expose `todo()` to the model |
+| Library loader | on | expose `load_library()` for external dirs/files/git repos |
 
 > **Concurrency note:** each `rlm_query` child spawns its own `python3` worker (~50–150 ms
 > cold start). Worst-case concurrent interpreters ≈ `maxConcurrentSubcalls`^(depth−1); at

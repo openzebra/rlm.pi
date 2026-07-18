@@ -64,6 +64,8 @@ export interface RlmConfig {
   askUserQuestion: boolean;
   /** Allow todo() calls from the REPL. */
   todo: boolean;
+  /** Enable the load_library() REPL scaffold (external dirs/files/git repos as extra context slots). */
+  libraryLoader: boolean;
   /** ThinkingLevel for the root smart model (set via /rlm-config). */
   smartReasoning?: ThinkingLevel;
   /** Output token cap + temperature for the root smart model per turn.

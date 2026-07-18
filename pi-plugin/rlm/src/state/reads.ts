@@ -6,8 +6,9 @@
  * by the slug (ISO-like timestamps are self-sorting).
  */
 
-import { open, readFile } from "node:fs/promises";
-import { runsDir, trailPath, contextPath } from "./paths.ts";
+import { open, readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { runsDir, runDir, trailPath, contextPath } from "./paths.ts";
 import { isHeader, isRow, type RunHeader, type Row } from "./rows.ts";
 import { errorMessage, failSoft, listDirectoriesSorted, pathExists, warn } from "./internal.ts";
 
@@ -81,6 +82,34 @@ export async function readContextSidecar(cwd: string, dir: string, runId: string
     warn(e);
     return undefined;
   }
+}
+
+const LIBRARY_SIDECAR = /^context\.(\d+)\.(json|txt)$/;
+
+export interface LibrarySlot {
+  readonly index: number;
+  readonly payload: unknown;
+}
+
+/** Fail-soft lister for load_library resume sidecars (`context.<index>.json|txt`). */
+export async function readLibrarySidecars(cwd: string, dir: string, runId: string): Promise<LibrarySlot[]> {
+  const entries = await failSoft(() => readdir(runDir(cwd, dir, runId)), [] as string[]);
+  const slots: LibrarySlot[] = [];
+  for (const name of entries) {
+    const m = LIBRARY_SIDECAR.exec(name);
+    if (!m) continue;
+    const index = Number(m[1]);
+    const json = m[2] === "json";
+    const content = await failSoft(
+      () => readFile(join(runDir(cwd, dir, runId), name), "utf-8"),
+      undefined as string | undefined,
+    );
+    if (content === undefined) continue;
+    try {
+      slots.push({ index, payload: json ? JSON.parse(content) as unknown : content });
+    } catch (e) { warn(e); }
+  }
+  return slots.sort((a, b) => a.index - b.index);
 }
 
 /** Enumerate run-ids by directory listing; newest first (slug sorts chronologically). */

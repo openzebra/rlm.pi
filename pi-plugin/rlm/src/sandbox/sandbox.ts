@@ -26,6 +26,14 @@ import {
 } from "./protocol.ts";
 import { formatError } from "../util/errors.ts";
 
+/** Result of a host-side library pack requested by `load_library`. */
+export interface LibraryLoadResult {
+  readonly payload: unknown;     // string (single file) or ContextFile[] (packed dir/repo)
+  readonly index: number;        // slot assigned by the host
+  readonly files?: number;
+  readonly chars: number;
+}
+
 /** Handlers the bridge installs to service sub-LLM interrupts. Return the reply payload. */
 export interface SubLlmHandlers {
   llmQuery(prompt: string, model: string | null, depth: number): Promise<string>;
@@ -36,6 +44,7 @@ export interface SubLlmHandlers {
   saveArtifact(kind: string, content: string, depth: number): Promise<string>;
   askUserQuestion(questions: readonly AskQuestion[], depth: number): Promise<AskAnswer[]>;
   todo(action: string, params: Record<string, unknown>, depth: number): Promise<string>;
+  loadLibrary(source: string, depth: number): Promise<LibraryLoadResult>;
 }
 
 export interface SandboxOptions {
@@ -84,6 +93,7 @@ const REJECT: SubLlmHandlers = {
     custom: formatError("ask_user_question not configured"),
   })),
   todo: async () => formatError("todo not configured"),
+  loadLibrary: async () => { throw new Error("load_library not configured"); },
 };
 
 /** Distributive omit so each union member keeps its own fields (plain Omit collapses to shared keys). */
@@ -369,13 +379,30 @@ export class PythonSandbox {
         );
         const response = await h.todo(msg.action ?? "list", params, d);
         this.reply(msg.rid, { response });
+      } else if (msg.type === "load_library") {
+        const lib = await h.loadLibrary(msg.source ?? "", d);
+        const isJson = typeof lib.payload !== "string";
+        const path = await this.writeContextFile(lib.payload, isJson);
+        // Worker reads then unlinks (worker._load_library). Host must not unlink here —
+        // if the worker is SIGKILLed before os.remove, the temp file leaks in tmpdir (acceptable).
+        this.reply(msg.rid, { path, json: isJson, index: lib.index, files: lib.files, chars: lib.chars });
       }
     } catch (err) {
       this.reply(msg.rid, { error: err instanceof Error ? err.message : String(err) });
     }
   }
 
-  private reply(rid: string, body: { response?: string; responses?: string[]; answers?: AskAnswer[]; error?: string }): void {
+  private reply(rid: string, body: {
+    response?: string;
+    responses?: string[];
+    answers?: AskAnswer[];
+    path?: string;
+    json?: boolean;
+    index?: number;
+    files?: number;
+    chars?: number;
+    error?: string;
+  }): void {
     if (!this.disposed) this.send({ type: "llm_reply", rid, ...body });
   }
 

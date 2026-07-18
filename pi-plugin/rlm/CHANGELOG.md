@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`load_library(source)`** — agent-driven extra context slots for external libraries, docs, or
+  git repos. Sources: local directory (repomix-packed), single file (utf-8 string), or
+  `https://` / `git@` URL (shallow clone + pack). Result lands in `context_1`, `context_2`, …
+  Toggle via `/rlm-config` → Library loader (`libraryLoader`, default on). Headless resume
+  restores slots from `context.<N>.json` sidecars.
 - Artifact-gated pipeline (opt-in `pipeline: true`): clarify → research → blueprint → implement → validate
   with deterministic engine gates (artifact `status: ready`, plan `phases:`/`phase_count`
   derive-check against `## Phase N:` headings, `file:line` citation verification,

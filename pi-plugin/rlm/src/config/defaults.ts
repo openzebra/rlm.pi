@@ -28,6 +28,7 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   sandboxInitTimeoutMs: 30_000,
   askUserQuestion: true,
   todo: true,
+  libraryLoader: true,
   rootSampling: Object.freeze({ maxTokens: 16_384 }),
   subSystemPrompt: DEFAULT_SUB_SYSTEM_PROMPT,
   subSampling: Object.freeze({ maxTokens: 8192 }),
