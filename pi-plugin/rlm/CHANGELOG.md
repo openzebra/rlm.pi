@@ -7,17 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-07-19
+
 ### Added
 
+#### External library context
+
 - **`load_library(source)`** — agent-driven extra context slots for external libraries, docs, or
-  git repos. Sources: local directory (repomix-packed), single file (utf-8 string), or
-  `https://` / `git@` URL (shallow clone + pack). Result lands in `context_1`, `context_2`, …
-  Toggle via `/rlm-config` → Library loader (`libraryLoader`, default on). Headless resume
-  restores slots from `context.<N>.json` sidecars.
-- Artifact-gated pipeline (opt-in `pipeline: true`): clarify → research → blueprint → implement → validate
-  with deterministic engine gates (artifact `status: ready`, plan `phases:`/`phase_count`
-  derive-check against `## Phase N:` headings, `file:line` citation verification,
-  validation `blockers_count`/`verdict` contract).
+  other source trees mid-run. Sources:
+  - local directory → repomix-packed `list[dict]` (same shape as repo `context`)
+  - single file path → plain `str`
+  - `https://` or `git@` URL → shallow clone (`--depth 1`), then pack
+- Result lands in `context_1`, `context_2`, … (`context` / `context_0` remains the repo).
+  Returns `{"index", "var", "files", "chars"}` or an `"Error: …"` string.
+- Shared host handler for headless engine and native `repl()` (no duplicated bridge logic);
+  slot indices assigned on the host so resume sidecars are deterministic.
+- Headless resume restores library slots from `context.<N>.json` / `context.<N>.txt` sidecars.
+- Config toggle **Library loader** (`libraryLoader`, default on) in `/rlm-config`.
+
+#### Artifact-gated pipeline
+
+- Opt-in phase pipeline (`pipeline: true`): **clarify → research → blueprint → implement → validate**
+  with deterministic engine gates (never LLM judgment):
+  - artifact `status: ready`
+  - plan `phases:` / `phase_count` derive-check against fence-aware `## Phase N:` headings
+  - `file:line` citation verification against the repo
+  - validation `blockers_count` / `verdict` contract
 - **Clarify intake phase**: interviews the user via `ask_user_question` until the task is understood;
   writes a clarifications artifact (`decisions_count` / `open_questions_count` + Problem & Intent /
   Decisions / Open Questions / Non-Goals). Engine gate requires ≥1 serviced ask round (un-gameable).
@@ -179,10 +194,13 @@ for the Pi coding agent.
   budget ceiling, max consecutive errors, per-REPL-block timeout, max concurrent sub-calls,
   trajectory compaction, and toggles for `ask_user_question` and `todo`.
 
-[0.1.1]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.1
-[0.1.2]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.2
-[0.1.3]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.3
-[0.1.4]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.4
+[Unreleased]: https://github.com/openzebra/rlm.pi/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.8
+[0.1.7]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.7
+[0.1.6]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.6
 [0.1.5]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.5
-
+[0.1.4]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.4
+[0.1.3]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.3
+[0.1.2]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.2
+[0.1.1]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.1
 [0.1.0]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.0
