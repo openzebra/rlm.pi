@@ -7,18 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-07-31
+
 ### Changed
 
 #### `load_library` appends into `context` (breaking)
 
 - **`load_library(source)`** no longer creates `context_1` / `context_2` slots. Packed files are
   **appended into the single `context` list** under namespaced paths `lib/<source_id>/…`.
+- Source ids are **fingerprinted** (`lib/utils-<8hex>/`) so two libraries that share a basename
+  never collide or silently serve the wrong tree.
 - Return value is metadata only:
   `{"source", "source_id", "path_prefix", "files", "chars", "context_len", "already_loaded"}`
   (or an `"Error: …"` string). Do not iterate the return value as files.
+  `chars` is the sum of raw content lengths (not JSON-serialized size).
 - Single-file sources become one `context` entry (not a bare string payload).
-- Re-loading the same library is **idempotent** (prefix check).
-- Resume still uses `context.<N>.json` sidecars, but merges them back into `context` on restore.
+  Files larger than 8 MiB are rejected with a pointer to `llm_query_chunked`.
+- Re-loading the same source is **idempotent host-side** (no re-clone, no extra resume sidecar).
+- Resume still uses `context.<N>.json` sidecars, but merges them back into `context` on restore
+  without duplicating already-present prefixes.
 - System / native prompts updated so the agent always searches `context`.
 
 #### Remove `stage_edit` / `apply_edits` — native edit only (breaking)
@@ -41,10 +48,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Preflight artifact critique** on `save_artifact`: same gate as `advance_phase`, with
   `BLOCKER:` / `warning:` lines and advisory checks (Success Criteria, Open Questions, Findings).
-- **Append-only artifacts on validate loop-back**: superseded blueprint refs kept for context;
-  a fresh `save_artifact` is still required to re-pass the gate.
-- **Warnings channel** on `ReplDetails` / `RlmDetails` (e.g. partial sub-call failures).
-- Aggregate **`bun run test`** smoke harness (`test/smoke.ts`).
+  Gate results are memoized so `advance_phase` does not re-run the same floors.
+- **Append-only artifacts on validate loop-back**: superseded blueprint refs kept for context
+  (status round-trips through resume); a fresh `save_artifact` is still required to re-pass the gate.
+- **Warnings channel** on `ReplDetails` / `RlmDetails` (pipeline critique advisories and partial
+  sub-call failures with real batch counts).
+- Aggregate **`bun run test`** smoke harness (`test/smoke.ts`) over all phase suites and a live sandbox.
+
+### Fixed
+
+- Sub-call failure warnings report real prompt counts for batched calls (e.g. `3/8`, not `1/1`).
+- Plan critique checks **per-phase** Success Criteria (not aggregate heading totals).
 
 ## [0.1.8] - 2026-07-19
 
@@ -227,7 +241,8 @@ for the Pi coding agent.
   budget ceiling, max consecutive errors, per-REPL-block timeout, max concurrent sub-calls,
   trajectory compaction, and toggles for `ask_user_question` and `todo`.
 
-[Unreleased]: https://github.com/openzebra/rlm.pi/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/openzebra/rlm.pi/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.9
 [0.1.8]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.8
 [0.1.7]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.7
 [0.1.6]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.6
