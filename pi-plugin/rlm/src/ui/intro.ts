@@ -15,7 +15,8 @@ export const RLM_GUIDE = `# RLM mode
 - \`/rlm-stop\` — cancel the current run but stay in RLM mode (use /rlm or Ctrl+Shift+R to leave)
 - \`/rlm-help\` — show this guide again
 
-When RLM mode is ON, plain messages route to RLM. The footer/status line shows the current state.`;
+When RLM mode is ON, \`read\`/\`grep\` are disabled and the agent reads the repository through the
+\`repl\` tool, delegating bulk analysis to sub-LLMs. The footer/status line shows the current state.`;
 
 export function postRlmGuide(pi: ExtensionAPI, controller: RlmController): void {
   const content = RLM_GUIDE.replace("{state}", formatRlmStateLine(controller));

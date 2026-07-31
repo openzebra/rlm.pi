@@ -17,8 +17,11 @@ services the request in-process (it holds API keys).
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import heapq
 import io
 import json
+import math
 import os
 import pickle
 import re
@@ -102,12 +105,17 @@ RESERVED = frozenset(
     {
         "llm_query", "llm_query_batched", "llm_query_chunked",
         "rlm_query", "rlm_query_batched",
+        "map_files", "llm_map_reduce",
+        "search", "grep_context", "outline",
         "advance_phase", "save_artifact",
         "ask_user_question", "todo",
         "load_library",
         "SHOW_VARS", "answer", "context",
     }
 )
+# NOTE: `answers` and `plan` are deliberately NOT reserved. They are seeded by the scaffold but
+# owned by the model, so they must appear in SHOW_VARS and be captured by snapshots — losing a
+# memoized answer across a resume is exactly the failure the memo exists to prevent.
 # Only the single name `context` is the packed world. Legacy context_N names are filtered out.
 _CONTEXT_NAME = re.compile(r"context(_\d+)?\Z")
 
@@ -132,6 +140,145 @@ def _chunk_text(text: str, chunk_chars: int) -> list[str]:
         chunks.append(text[start:end])
         start = end
     return chunks
+
+
+# ---- deterministic retrieval over `context` -----------------------------------------------
+#
+# The RLM paper's trajectories retrieve by having the root model hand-write regex over the
+# context (App. E.1). Frontier models do that well; small/fast models guess keywords badly and
+# the first decomposition attempt disproportionately decides the outcome (paper §5, Fig. 4a).
+# These primitives make retrieval deterministic and token-free: no sub-LLM call, no root tokens
+# spent on printed file bodies — the model gets ranked pointers and decides what to delegate.
+
+_INDEX_WINDOW_LINES = 40       # a window is the retrieval unit: big enough to carry meaning
+_INDEX_MAX_WINDOWS = 20_000    # ceiling so a huge load_library() cannot exhaust worker memory
+_SNIPPET_CHARS = 400
+_GREP_HARD_CAP = 200           # absolute ceiling on returned grep hits, whatever k asks for
+_BM25_K1 = 1.2
+_BM25_B = 0.75
+
+_TOKEN_SPLIT = re.compile(r"[^0-9A-Za-z]+")     # also splits snake_case and paths
+_CAMEL_SPLIT = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+# Definition-ish lines across the languages this plugin is likely to meet. Deliberately
+# lexical: an outline is an orientation aid, not a parse tree.
+_OUTLINE_LINE = re.compile(
+    r"^\s*(?:"
+    r"(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|enum|struct|impl|trait|namespace)\s+\w+"
+    r"|(?:export\s+)?(?:const|let|var)\s+\w+\s*[:=]\s*(?:async\s*)?(?:function|\(|<)"
+    r"|(?:pub\s+)?(?:async\s+)?fn\s+\w+"
+    r"|def\s+\w+|class\s+\w+"
+    r"|func\s+\w+"
+    r"|#{1,4}\s+\S"
+    r")"
+)
+
+
+def _tokenize(text: str) -> list[str]:
+    """Lowercased alphanumeric runs, plus camelCase parts so `resolveModelId` matches `model id`."""
+    out: list[str] = []
+    for raw in _TOKEN_SPLIT.split(text):
+        if not raw:
+            continue
+        lowered = raw.lower()
+        out.append(lowered)
+        if len(raw) > 3:
+            parts = _CAMEL_SPLIT.split(raw)
+            if len(parts) > 1:
+                for part in parts:
+                    piece = part.lower()
+                    if piece and piece != lowered:
+                        out.append(piece)
+    return out
+
+
+def _context_entries(context: Any) -> list[tuple[str, str]]:
+    """(path, content) pairs for either context shape: list[dict] bundles or a raw string."""
+    if isinstance(context, str):
+        return [("<context>", context)]
+    if not isinstance(context, list):
+        return []
+    out: list[tuple[str, str]] = []
+    for i, item in enumerate(context):
+        if isinstance(item, dict):
+            content = item.get("content", "")
+            out.append((
+                str(item.get("path", f"<context[{i}]>")),
+                content if isinstance(content, str) else str(content),
+            ))
+        elif isinstance(item, str):
+            out.append((f"<context[{i}]>", item))
+    return out
+
+
+class _Bm25Index:
+    """Okapi BM25 over fixed-line windows of `context`. Built lazily, discarded on change."""
+
+    __slots__ = ("paths", "starts", "texts", "postings", "doc_len", "avg_len", "truncated")
+
+    def __init__(self, entries: list[tuple[str, str]]) -> None:
+        self.paths: list[str] = []
+        self.starts: list[int] = []
+        self.texts: list[str] = []
+        self.postings: dict[str, list[tuple[int, int]]] = {}
+        self.doc_len: list[int] = []
+        self.truncated = False
+
+        for path, content in entries:
+            if not content:
+                continue
+            lines = content.split("\n")
+            for start in range(0, len(lines), _INDEX_WINDOW_LINES):
+                if len(self.texts) >= _INDEX_MAX_WINDOWS:
+                    self.truncated = True
+                    break
+                window = "\n".join(lines[start:start + _INDEX_WINDOW_LINES])
+                idx = len(self.texts)
+                self.paths.append(path)
+                self.starts.append(start + 1)
+                self.texts.append(window)
+                terms = _tokenize(window)
+                self.doc_len.append(len(terms))
+                freq: dict[str, int] = {}
+                for term in terms:
+                    freq[term] = freq.get(term, 0) + 1
+                for term, tf in freq.items():
+                    self.postings.setdefault(term, []).append((idx, tf))
+            if self.truncated:
+                break
+
+        total = len(self.doc_len)
+        self.avg_len = (sum(self.doc_len) / total) if total else 1.0
+
+    def query(self, terms: list[str], k: int, path_glob: str | None) -> list[dict[str, Any]]:
+        total = len(self.texts)
+        if total == 0:
+            return []
+        scores: dict[int, float] = {}
+        for term in set(terms):
+            posting = self.postings.get(term)
+            if not posting:
+                continue
+            df = len(posting)
+            idf = math.log(1.0 + (total - df + 0.5) / (df + 0.5))
+            for idx, tf in posting:
+                norm = _BM25_K1 * (1.0 - _BM25_B + _BM25_B * self.doc_len[idx] / self.avg_len)
+                scores[idx] = scores.get(idx, 0.0) + idf * (tf * (_BM25_K1 + 1.0)) / (tf + norm)
+        if path_glob:
+            scores = {i: s for i, s in scores.items() if fnmatch.fnmatch(self.paths[i], path_glob)}
+        if not scores:
+            return []
+        top = heapq.nlargest(k, scores.items(), key=lambda kv: kv[1])
+        out: list[dict[str, Any]] = [None] * len(top)  # type: ignore[list-item]
+        for i, (idx, score) in enumerate(top):
+            text = self.texts[idx]
+            out[i] = {
+                "path": self.paths[idx],
+                "line": self.starts[idx],
+                "score": round(score, 3),
+                "snippet": text[:_SNIPPET_CHARS],
+            }
+        return out
 
 
 class _AnswerDict(dict):
@@ -174,6 +321,8 @@ class Worker:
         self.ns = {"__builtins__": builtins, "__name__": "__main__"}
         self._context_payload: Any | None = None  # pristine restore for the single `context` var
         self._nudged: set[str] = set()
+        self._index: _Bm25Index | None = None
+        self._index_stamp: tuple[int, int] | None = None  # (id(context), len(context))
         self._restore_scaffold()
 
     def _capture_answer(self, content: Any) -> None:
@@ -187,6 +336,17 @@ class Worker:
         ns["llm_query_chunked"] = self._llm_query_chunked
         ns["rlm_query"] = self._rlm_query
         ns["rlm_query_batched"] = self._rlm_query_batched
+        ns["map_files"] = self._map_files
+        ns["llm_map_reduce"] = self._llm_map_reduce
+        ns["search"] = self._search
+        ns["grep_context"] = self._grep_context
+        ns["outline"] = self._outline
+        # env_tips memo (paper App. C.3): "If a value isn't in `answers`, it doesn't exist."
+        # Re-created only when deleted — contents must survive every turn.
+        if not isinstance(ns.get("answers"), dict):
+            ns["answers"] = {}
+        if not isinstance(ns.get("plan"), dict):
+            ns["plan"] = {}
         ns["advance_phase"] = self._advance_phase
         ns["save_artifact"] = self._save_artifact
         ns["ask_user_question"] = self._ask_user_question
@@ -302,6 +462,200 @@ class Worker:
             ]
             results.extend(self._llm_query_batched(batch, model))
         return results
+
+    # ---- deterministic retrieval (no sub-LLM calls, no root tokens) -----------------------
+
+    def _entries(self) -> list[tuple[str, str]]:
+        return _context_entries(self.ns.get("context"))
+
+    def _get_index(self) -> _Bm25Index:
+        """Build the BM25 index on first use; rebuild when `context` was replaced or resized.
+
+        Identity+length is a cheap stamp that catches the two ways context actually changes:
+        load_library() extending the list, and the model re-binding the name. In-place edits
+        that preserve length are not detected — documented, and rare in practice.
+        """
+        ctx = self.ns.get("context")
+        stamp = (id(ctx), len(ctx) if isinstance(ctx, (list, str)) else 0)
+        if self._index is None or self._index_stamp != stamp:
+            self._index = _Bm25Index(self._entries())
+            self._index_stamp = stamp
+        return self._index
+
+    def _search(self, query: str, k: int = 10, path_glob: str | None = None) -> list[dict[str, Any]]:
+        """Rank `context` windows against a natural-language query (BM25).
+
+        Returns [{path, line, score, snippet}] — pointers, not bodies. Follow up by slicing the
+        named files out of `context` and delegating them to llm_query / map_files.
+        """
+        terms = _tokenize(str(query))
+        if not terms:
+            return []
+        try:
+            limit = max(1, min(int(k), 100))
+        except (TypeError, ValueError):
+            limit = 10
+        return self._get_index().query(terms, limit, path_glob)
+
+    def _grep_context(
+        self,
+        pattern: str,
+        k: int = 50,
+        path_glob: str | None = None,
+        before: int = 0,
+        after: int = 0,
+    ) -> dict[str, Any]:
+        """Regex over `context`, capped and shaped.
+
+        Returns {"hits": [{path, line, text}], "counts": {path: n}, "total": n, "truncated": bool}.
+        `counts` is complete even when `hits` is capped, so a wide pattern reports its shape
+        instead of flooding stdout.
+        """
+        try:
+            rx = re.compile(pattern)
+        except re.error as e:
+            return {"hits": [], "counts": {}, "total": 0, "truncated": False, "error": f"bad regex: {e}"}
+        try:
+            limit = max(1, min(int(k), _GREP_HARD_CAP))
+        except (TypeError, ValueError):
+            limit = 50
+        pad_before = max(0, min(int(before or 0), 10))
+        pad_after = max(0, min(int(after or 0), 10))
+
+        hits: list[dict[str, Any]] = []
+        counts: dict[str, int] = {}
+        total = 0
+        for path, content in self._entries():
+            if path_glob and not fnmatch.fnmatch(path, path_glob):
+                continue
+            if not rx.search(content):
+                continue
+            lines = content.split("\n")
+            for i, line in enumerate(lines):
+                if not rx.search(line):
+                    continue
+                total += 1
+                counts[path] = counts.get(path, 0) + 1
+                if len(hits) >= limit:
+                    continue
+                lo = max(0, i - pad_before)
+                hi = min(len(lines), i + pad_after + 1)
+                hits.append({"path": path, "line": i + 1, "text": "\n".join(lines[lo:hi])[:_SNIPPET_CHARS]})
+        return {"hits": hits, "counts": counts, "total": total, "truncated": total > len(hits)}
+
+    def _outline(self, path: str) -> str:
+        """Definition/heading skeleton of one context file — orient in ~200 chars, not 20K.
+
+        `path` matches exactly, then by suffix, then as a glob.
+        """
+        target = str(path)
+        entries = self._entries()
+        content: str | None = None
+        for p, c in entries:
+            if p == target:
+                content = c
+                break
+        if content is None:
+            for p, c in entries:
+                if p.endswith(target) or fnmatch.fnmatch(p, target):
+                    content = c
+                    target = p
+                    break
+        if content is None:
+            return f"Error: no context file matching {path!r} — use search() or list paths from context"
+        out: list[str] = [f"# {target}"]
+        for i, line in enumerate(content.split("\n")):
+            if _OUTLINE_LINE.match(line):
+                out.append(f"{i + 1}: {line.strip()[:160]}")
+        if len(out) == 1:
+            return f"# {target}\n(no definition-like lines found)"
+        return "\n".join(out)
+
+    # ---- one-line delegation (structural: orchestrating must be easier than solving) -------
+
+    def _map_files(self, files: Any, prompt: str, model: str | None = None) -> dict[str, str]:
+        """Ask `prompt` of every given file, batched, and return {path: answer}.
+
+        `files` accepts context entries (dicts), paths (strings), or a mix — the whole
+        chunk/batch/collect loop the system prompt used to spell out, as one call.
+        Oversized files are split and their per-chunk answers joined.
+        """
+        prompt = str(prompt)
+        by_path: list[tuple[str, str]] = []
+        lookup: dict[str, str] | None = None
+        for item in files if isinstance(files, (list, tuple)) else [files]:
+            if isinstance(item, dict):
+                content = item.get("content", "")
+                by_path.append((str(item.get("path", "?")), content if isinstance(content, str) else str(content)))
+            elif isinstance(item, str):
+                if lookup is None:
+                    lookup = {p: c for p, c in self._entries()}
+                if item in lookup:
+                    by_path.append((item, lookup[item]))
+                else:
+                    by_path.append((item, ""))
+        if not by_path:
+            return {}
+
+        # Per-file prompt budget; anything larger is chunked and its answers concatenated.
+        budget = self.max_prompt_chars - len(prompt) - _CHUNK_HEADER_OVERHEAD - 256
+        if budget < 1_000:
+            return {p: "Error: prompt too long to leave room for file content" for p, _ in by_path}
+
+        requests: list[str] = []
+        spans: list[tuple[str, int]] = []  # (path, number of chunks contributed)
+        for path, content in by_path:
+            chunks = _chunk_text(content, budget) if len(content) > budget else [content]
+            spans.append((path, len(chunks)))
+            for j, chunk in enumerate(chunks):
+                header = f"[file {path}" + (f", part {j + 1}/{len(chunks)}]" if len(chunks) > 1 else "]")
+                requests.append(f"{prompt}\n\n{header}\n{chunk}")
+
+        responses: list[str] = []
+        for i in range(0, len(requests), _MAX_CHUNK_BATCH):
+            responses.extend(self._llm_query_batched(requests[i:i + _MAX_CHUNK_BATCH], model))
+
+        out: dict[str, str] = {}
+        cursor = 0
+        for path, count in spans:
+            part = responses[cursor:cursor + count]
+            cursor += count
+            out[path] = part[0] if count == 1 and part else "\n\n".join(part)
+        return out
+
+    def _llm_map_reduce(
+        self,
+        items: Any,
+        map_prompt: str,
+        reduce_prompt: str,
+        model: str | None = None,
+    ) -> str:
+        """Map `map_prompt` over `items` in one batch, then reduce the answers with one call.
+
+        The paper's canonical strategy ("query an LLM per chunk ... then query an LLM with all
+        the buffers") as a single call, so the root never hand-rolls the loop.
+        """
+        map_prompt, reduce_prompt = str(map_prompt), str(reduce_prompt)
+        seq = list(items) if isinstance(items, (list, tuple)) else [items]
+        if not seq:
+            return "Error: llm_map_reduce got no items"
+        texts = [
+            (str(it.get("content", "")) if isinstance(it, dict) else str(it))
+            for it in seq
+        ]
+        labels = [
+            (str(it.get("path", f"item {i + 1}")) if isinstance(it, dict) else f"item {i + 1}")
+            for i, it in enumerate(seq)
+        ]
+        mapped: list[str] = []
+        for i in range(0, len(texts), _MAX_CHUNK_BATCH):
+            batch = [
+                f"{map_prompt}\n\n[{labels[i + j]}]\n{t}"
+                for j, t in enumerate(texts[i:i + _MAX_CHUNK_BATCH])
+            ]
+            mapped.extend(self._llm_query_batched(batch, model))
+        joined = "\n\n".join(f"[{labels[i]}]\n{a}" for i, a in enumerate(mapped))
+        return self._llm_query(f"{reduce_prompt}\n\nPartial answers:\n{joined}", model)
 
     def _rlm_query(self, prompt: str, model: str | None = None) -> str:
         r = self._rpc("rlm_query", {"prompt": str(prompt), "model": model})

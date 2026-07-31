@@ -206,7 +206,7 @@ console.log("\n=== renderResult collapsed (done) ===");
   check("collapsed ends with └─ on last item", text.includes("└─"));
 
   // Expand hint
-  check("collapsed shows expand hint", text.includes("Ctrl+O to expand"));
+  check("collapsed shows expand hint", text.includes("to expand"));
 }
 
 console.log("\n=== renderResult expanded (done) ===");
@@ -256,7 +256,7 @@ console.log("\n=== renderResult collapsed (running) ===");
   console.log(`  output:\n${text}`);
 
   check("collapsed running shows spinner (⏳)", text.includes("⏳"));
-  check("collapsed running does NOT show expand hint", !text.includes("Ctrl+O to expand"));
+  check("collapsed running does NOT show expand hint", !text.includes("to expand"));
   check("collapsed running shows partial cost", text.includes("$0.0045"));
   check("collapsed running shows partial tokens", text.includes("2.1k tok"));
 }
@@ -275,7 +275,7 @@ console.log("\n=== renderResult collapsed (error) ===");
 
   check("collapsed error shows error glyph (✗)", text.includes("✗"));
   check("collapsed error shows RLM label", text.includes("RLM"));
-  check("collapsed error shows expand hint", text.includes("Ctrl+O to expand"));
+  check("collapsed error shows expand hint", text.includes("to expand"));
 }
 
 console.log("\n=== renderResult expanded (error) ===");

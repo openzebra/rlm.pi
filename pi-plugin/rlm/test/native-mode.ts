@@ -57,8 +57,10 @@ function testNativeSystemPrompt() {
   check("buildNativeSystemPrompt — mentions context", prompt.includes("context"));
   check("buildNativeSystemPrompt — mentions llm_query", prompt.includes("llm_query"));
   check("buildNativeSystemPrompt — mentions rlm_query", prompt.includes("rlm_query"));
-  check("buildNativeSystemPrompt — mentions orchestrator", prompt.includes("orchestrator, not a solver"));
-  check("buildNativeSystemPrompt — mentions chunking", prompt.includes("chunk_size"));
+  check("buildNativeSystemPrompt — mentions orchestrator", prompt.includes("Orchestrate; don't solve"));
+  check("buildNativeSystemPrompt — locate-then-delegate example", prompt.includes("search(") && prompt.includes("map_files("));
+  check("buildNativeSystemPrompt — retrieval primitives", prompt.includes("grep_context(") && prompt.includes("outline("));
+  check("buildNativeSystemPrompt — memo dicts", prompt.includes("`answers`"));
   check("buildNativeSystemPrompt — mentions answer dict", prompt.includes("answer[\"ready\"]"));
   check("buildNativeSystemPrompt — authoring rule", prompt.includes("AUTHORING RULE"));
   check("buildNativeSystemPrompt — native edit", prompt.includes("`edit`"));

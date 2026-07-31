@@ -52,9 +52,6 @@ export interface WorkerResponse {
   readonly var_names?: readonly string[];
   // load_context:
   readonly index?: number;
-  // snapshot/restore:
-  readonly skipped?: readonly string[];
-  readonly restored?: readonly string[];
 }
 
 /** Kinds of sub-LLM interrupt the worker can raise mid-exec. */
@@ -86,10 +83,6 @@ export interface AskAnswer {
   readonly question: string;
   readonly selected: readonly string[];
   readonly custom?: string;
-}
-
-export interface AskUserQuestionReply {
-  readonly answers: readonly AskAnswer[];
 }
 
 interface InterruptBase {

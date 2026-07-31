@@ -7,11 +7,10 @@
  * garbage from a crash is tolerated.
  */
 
-import { readFile } from "node:fs/promises";
 import { type ChatMsg } from "../bridge/model.ts";
 import { appendUserMessage } from "../core/history.ts";
 import { buildTurnPrompt } from "../prompts/user.ts";
-import { readHeader } from "./reads.ts";
+import { readHeader, readTrailLines } from "./reads.ts";
 import {
   isCompaction,
   isHeader,
@@ -24,8 +23,8 @@ import {
   type Row,
   type RunHeader,
 } from "./rows.ts";
-import { trailPath, snapshotPath } from "./paths.ts";
-import { failSoft, pathExists } from "./internal.ts";
+import { snapshotPath } from "./paths.ts";
+import { pathExists } from "./internal.ts";
 
 /** Artifact path + supersede flag reconstructed from phase rows. */
 export interface PhaseReconArtifact {
@@ -63,15 +62,10 @@ export type ReconstructResult =
 
 /** QB: single read + parse — detects mid-file holes without reading the trail twice. */
 async function readRowsStrict(cwd: string, dir: string, runId: string): Promise<{ readonly rows: Row[]; readonly hole: boolean }> {
-  const path = trailPath(cwd, dir, runId);
-  if (!await pathExists(path)) return { rows: [], hole: false };
-  const content = await failSoft(() => readFile(path, "utf-8"), undefined as string | undefined);
-  const trimmed = content?.trim();
-  if (!trimmed) return { rows: [], hole: false };
-
+  const lines = await readTrailLines(cwd, dir, runId);
   const rows: Row[] = [];
   let sawBad = false;
-  for (const line of trimmed.split("\n")) {
+  for (const line of lines) {
     try {
       const row = JSON.parse(line) as unknown;
       if (!isRow(row)) {

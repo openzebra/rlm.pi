@@ -37,13 +37,14 @@ export function formatReplOutputs(results: readonly ReplResult[], skippedBlocks 
     return "No ```repl``` block found in your response. Write one to interact with the REPL.";
   }
   const multi = results.length > 1;
-  const parts: string[] = [];
+  const parts = new Array<string>(results.length);
   let hadElision = false;
-  for (const [i, r] of results.entries()) {
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
     const head = multi ? `[block ${i + 1}]\n` : "";
     const { text, elided } = formatStdout(r);
     hadElision ||= elided;
-    parts.push(`${head}${text}${formatStderr(r)}`);
+    parts[i] = `${head}${text}${formatStderr(r)}`;
   }
   const body = parts.join("\n\n");
   const skipNote = skippedBlocks > 0

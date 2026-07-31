@@ -24,7 +24,7 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "./protocol.ts";
-import { formatError } from "../util/errors.ts";
+import { errorMessage, formatError } from "../util/errors.ts";
 
 /** Result of a host-side library pack requested by `load_library`. */
 export interface LibraryLoadResult {
@@ -76,6 +76,7 @@ export interface SandboxOptions {
 }
 
 const WORKER_PATH = join(dirname(fileURLToPath(import.meta.url)), "worker.py");
+const STDERR_TAIL_CHARS = 8_192;
 const TODO_PROTO_KEYS = new Set(["type", "rid", "depth", "action"]);
 
 // The sandbox runs untrusted model-authored code; it must never inherit provider secrets.
@@ -124,7 +125,23 @@ export class PythonSandbox {
   private readonly handlers: SubLlmHandlers;
   private readonly requestTimeoutMs: number;
   private readonly initTimeoutMs: number;
-  private stderr = "";
+  /** Bounded stderr tail (chunks, newest last) — avoids rebuilding the buffer per chunk. */
+  private readonly stderrTail: string[] = [];
+  private stderrLen = 0;
+
+  /** Bounded tail of everything written to stderr, oldest chunks already dropped. */
+  private get stderr(): string {
+    return this.stderrTail.join("");
+  }
+
+  /** Record a diagnostic on the same bounded tail as real worker stderr. */
+  private appendStderr(text: string): void {
+    this.stderrTail.push(text);
+    this.stderrLen += text.length;
+    while (this.stderrLen > STDERR_TAIL_CHARS && this.stderrTail.length > 1) {
+      this.stderrLen -= (this.stderrTail.shift() ?? "").length;
+    }
+  }
   private disposed = false;
   private ready: Promise<void>;
 
@@ -153,9 +170,7 @@ export class PythonSandbox {
     this.proc.stdout.setEncoding("utf8");
     this.proc.stdout.on("data", (chunk: string) => this.onData(chunk));
     this.proc.stderr.setEncoding("utf8");
-    this.proc.stderr.on("data", (chunk: string) => {
-      this.stderr = (this.stderr + chunk).slice(-8192);
-    });
+    this.proc.stderr.on("data", (chunk: string) => this.appendStderr(chunk));
     this.proc.on("error", (err: NodeJS.ErrnoException) => {
       const hint = err.code === "ENOENT" ? ` ('${python}' not found — is Python installed and on PATH?)` : "";
       this.failAll(new Error(`failed to start sandbox${hint}: ${err.message}`));
@@ -189,12 +204,12 @@ export class PythonSandbox {
     return sandbox;
   }
 
-  async loadContext(payload: unknown, index?: number): Promise<number> {
+  async loadContext(payload: unknown): Promise<number> {
     const isJson = typeof payload !== "string";
     let path: string | undefined;
     try {
       path = await this.writeContextFile(payload, isJson);
-      const res = await this.request({ type: "load_context", path, index, json: isJson });
+      const res = await this.request({ type: "load_context", path, json: isJson });
       if (!res.ok) throw new Error(res.error ?? "load_context failed");
       return res.index ?? 0;
     } finally {
@@ -308,15 +323,6 @@ export class PythonSandbox {
     }
   }
 
-  /**
-   * Refresh the parent-side request watchdog for every pending request.
-   * Used during long mid-exec work that does not
-   * produce additional worker interrupts on this sandbox.
-   */
-  refreshWatchdog(): void {
-    this.touchPending();
-  }
-
   private send(msg: ParentMessage): void {
     this.proc.stdin.write(`${JSON.stringify(msg)}\n`);
   }
@@ -331,11 +337,11 @@ export class PythonSandbox {
         try {
           const message = JSON.parse(line) as unknown;
           if (isWorkerMessage(message)) this.dispatch(message);
-          else this.stderr = `${this.stderr}\n[protocol] skipped invalid stdout message: ${line.slice(0, 200)}`.slice(-8192);
+          else this.appendStderr(`\n[protocol] skipped invalid stdout message: ${line.slice(0, 200)}`);
         } catch {
           // Non-JSON line on the protocol stream — likely a subprocess writing to fd 1.
           // Skip it so a rogue write doesn't kill the pump, but retain a breadcrumb for watchdog errors.
-          this.stderr = `${this.stderr}\n[protocol] skipped non-JSON stdout line: ${line.slice(0, 200)}`.slice(-8192);
+          this.appendStderr(`\n[protocol] skipped non-JSON stdout line: ${line.slice(0, 200)}`);
         }
       }
     }
@@ -419,7 +425,7 @@ export class PythonSandbox {
         }
       }
     } catch (err) {
-      this.reply(msg.rid, { error: err instanceof Error ? err.message : String(err) });
+      this.reply(msg.rid, { error: errorMessage(err) });
     }
   }
 

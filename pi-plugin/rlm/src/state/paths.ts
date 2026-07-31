@@ -20,7 +20,7 @@ export function generateRunId(
   now: Date = new Date(),
   suffix: string = randomBytes(RUN_ID_SUFFIX_BYTES).toString("hex"),
 ): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
+  const pad = (n: number): string => String(n).padStart(2, "0");
   const iso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   return `${iso.slice(0, ISO_DATETIME_LENGTH).replaceAll(":", "-").replace("T", "_")}-${suffix}`;
 }

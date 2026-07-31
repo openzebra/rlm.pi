@@ -208,7 +208,7 @@ export function advancePhase(
   current: Phase | undefined,
   target: string,
 ): AdvancePhaseOutcome {
-  if (!PHASES.includes(target as Phase)) {
+  if (!isPhase(target)) {
     return {
       ok: false,
       error: `unknown phase '${target}'; valid phases: ${PHASES.join(", ")}`,
@@ -231,7 +231,7 @@ export function advancePhase(
       phase: from,
     };
   }
-  return { ok: true, phase: target as Phase };
+  return { ok: true, phase: target };
 }
 
 /** Return the current phase (defaults to first phase if undefined). */
