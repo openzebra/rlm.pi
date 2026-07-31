@@ -78,6 +78,35 @@ export function countHeadingsOutsideFences(content: string, re: RegExp): number 
   return count;
 }
 
+/** Count newlines without materialising a line array. */
+export function lineCountOf(text: string): number {
+  let count = 1;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) count++;
+  return count;
+}
+
+/** Names of `## Phase N:` sections that contain no `### Success Criteria` heading. */
+export function phasesMissingSuccessCriteria(content: string): readonly string[] {
+  const missing: string[] = [];
+  let currentPhase: string | undefined;
+  let sawCriteria = false;
+  const flush = (): void => {
+    if (currentPhase !== undefined && !sawCriteria) missing.push(currentPhase);
+  };
+  forEachLineOutsideFences(content, (line) => {
+    const phase = /^## Phase (\d+):/.exec(line);
+    if (phase) {
+      flush();
+      currentPhase = `Phase ${phase[1] ?? "?"}`;
+      sawCriteria = false;
+      return;
+    }
+    if (currentPhase !== undefined && /^### Success Criteria/.test(line)) sawCriteria = true;
+  });
+  flush();
+  return Object.freeze(missing);
+}
+
 /**
  * Fence-aware count of top-level (column-0) `- ` bullets under a `## <heading>` section.
  * Nested/indented sub-bullets are ignored. The next `## ` heading ends the section.
@@ -207,7 +236,7 @@ export function verifyCitations(body: string, cwd: string): GateResult<undefined
     }
     let lineCount: number;
     try {
-      lineCount = readFileSync(abs, "utf-8").split("\n").length;
+      lineCount = lineCountOf(readFileSync(abs, "utf-8"));
     } catch {
       errors.push(`unbacked citation ${key} — file could not be read`);
       continue;

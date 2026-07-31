@@ -21,23 +21,20 @@ export interface LlmReply {
   readonly response?: string;
   readonly responses?: readonly string[];
   readonly answers?: readonly AskAnswer[];
-  /** load_library reply: temp file with the packed payload + assigned slot. */
+  /** load_library reply: temp file with the packed payload (+ resume index / namespace). */
   readonly path?: string;
   readonly json?: boolean;
   readonly index?: number;
   readonly files?: number;
   readonly chars?: number;
+  readonly source_id?: string;
+  readonly path_prefix?: string;
+  /** Host-side idempotency: library already loaded — no path payload. */
+  readonly already_loaded?: boolean;
   readonly error?: string;
 }
 
 export type ParentMessage = WorkerRequest | LlmReply;
-
-export interface ProposedEdit {
-  readonly id: string;
-  readonly path: string;
-  readonly oldText: string;
-  readonly newText: string;
-}
 
 /** A normal response to a request (keyed by the request `id`). */
 export interface WorkerResponse {
@@ -49,7 +46,6 @@ export interface WorkerResponse {
   readonly stderr?: string;
   readonly final_answer?: string | null;
   readonly answer_content?: string;
-  readonly edits?: readonly ProposedEdit[];
   readonly raised?: boolean;
   readonly execution_time?: number;
   // user-created variable names after this exec (filters builtins/context) — Metadata(stdout) for history orientation
@@ -201,7 +197,6 @@ export interface ReplResult {
   readonly stderr: string;
   readonly finalAnswer: string | null;
   readonly answerContent: string;
-  readonly edits: readonly ProposedEdit[];
   readonly raised: boolean;
   readonly executionTimeMs: number;
   /** User-created variable names after this exec (builtins/context filtered out). */

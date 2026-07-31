@@ -5,8 +5,7 @@
  * depth cap it degrades to a plain `llm_query` (ported from rlm/core/rlm.py `_subcall`). The
  * concurrency pool bounds parallel children for `rlm_query_batched`.
  *
- * `childRun` is the single spawn path: rlmQuery returns `.answer`; implement fanout also
- * needs `.edits` — both share this implementation (DRY).
+ * `childRun` is the single spawn path shared by `rlmQuery` / `rlmQueryBatched`.
  */
 
 import type { RlmResult, RunRlm } from "../core/types.ts";
@@ -27,7 +26,7 @@ export interface ChildRunInput {
 export interface RlmHandlers {
   rlmQuery(prompt: string, model: string | null, depth: number): Promise<string>;
   rlmQueryBatched(prompts: string[], model: string | null, depth: number): Promise<string[]>;
-  /** Full child-run result (answer + edits + usage) for engine-driven fanout. */
+  /** Full child-run result (answer + usage) for recursive spawns. */
   childRun(input: ChildRunInput): Promise<RlmResult>;
 }
 
@@ -49,7 +48,6 @@ export interface RlmBridgeOptions {
 function emptyResult(answer: string): RlmResult {
   return {
     answer,
-    edits: [],
     iterations: 0,
     costUsd: 0,
     inputTokens: 0,

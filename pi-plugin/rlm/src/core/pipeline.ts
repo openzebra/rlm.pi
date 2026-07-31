@@ -1,11 +1,14 @@
 /**
  * RLM pipeline stage graph — data-driven transitions with deterministic gates.
  *
- * Stages: clarify → research → blueprint → implement → validate
+ * Stages: clarify → research → blueprint → validate
  * (clarify skipped when askUserQuestion is off).
  * The root RLM writes artifacts via save_artifact(); advance_phase() is gated by
  * TypeScript floors (never LLM judgment). Validate routes on measured
  * blockers_count with a bounded corrective loop back to blueprint.
+ * The pipeline is read-only by design: it produces a validated plan and does not
+ * write source. Accidental sandbox writes are blocked (open/pathlib/os.open);
+ * this is steering, not a hard security boundary.
  */
 import {
   checkStatusReady,
@@ -19,15 +22,30 @@ import {
   verifyCitations,
 } from "./gates.ts";
 
-export type Phase = "clarify" | "research" | "blueprint" | "implement" | "validate";
+export type Phase = "clarify" | "research" | "blueprint" | "validate";
 
 export const PHASES = Object.freeze([
   "clarify",
   "research",
   "blueprint",
-  "implement",
   "validate",
 ] as const satisfies readonly Phase[]);
+
+const PHASE_SET: ReadonlySet<string> = Object.freeze(new Set<string>(PHASES));
+
+export function isPhase(value: unknown): value is Phase {
+  return typeof value === "string" && PHASE_SET.has(value);
+}
+
+/**
+ * Map a persisted phase name onto the current graph. Trails written before the
+ * implement phase was retired resume at `blueprint` — the last phase whose
+ * artifact is still meaningful.
+ */
+export function reconcilePhase(persisted: unknown): Phase {
+  if (isPhase(persisted)) return persisted;
+  return "blueprint";
+}
 
 /** Kind string the model passes to save_artifact(kind, content). */
 export type ArtifactKind = "clarification" | "research" | "plan" | "validation";
@@ -37,8 +55,7 @@ export type StageGateData =
   | { readonly kind: "clarification"; readonly clarification: ClarificationGateData }
   | { readonly kind: "research" }
   | { readonly kind: "plan"; readonly plan: PlanGateData }
-  | { readonly kind: "validation"; readonly validation: ValidationGateData }
-  | { readonly kind: "side-effect" };
+  | { readonly kind: "validation"; readonly validation: ValidationGateData };
 
 export interface StageDef {
   readonly phase: Phase;
@@ -90,13 +107,6 @@ export const STAGES: Readonly<Record<Phase, StageDef>> = Object.freeze({
   clarify: { phase: "clarify", artifactDir: "clarifications", artifactKind: "clarification", gate: clarifyGate },
   research: { phase: "research", artifactDir: "research", artifactKind: "research", gate: researchGate },
   blueprint: { phase: "blueprint", artifactDir: "plans", artifactKind: "plan", gate: blueprintGate },
-  // implement is a side-effect stage; exit is engine-driven (serial fanout).
-  implement: {
-    phase: "implement",
-    artifactDir: "",
-    artifactKind: "",
-    gate: (): GateResult<StageGateData> => ({ ok: true, value: { kind: "side-effect" } }),
-  },
   validate: { phase: "validate", artifactDir: "validations", artifactKind: "validation", gate: validateGate },
 });
 
@@ -115,12 +125,27 @@ export function stageForArtifactKind(kind: string): StageDef | undefined {
   return undefined;
 }
 
+/** An artifact path plus its lifecycle status — append-only, never deleted. */
+export interface ArtifactRef {
+  readonly path: string;
+  readonly status: "active" | "superseded";
+  /** Path of the artifact that superseded this one (the rejecting validation). */
+  readonly supersededBy?: string;
+}
+
+/** The latest artifact saved for a stage, plus its gate result when it passed. */
+export interface SavedArtifact {
+  readonly path: string;
+  /** Gate payload when the artifact passed; undefined ⇒ advance_phase must re-gate. */
+  readonly gateData?: StageGateData;
+}
+
 export interface PhaseState {
   readonly current: Phase;
   readonly advancedAt: number;
   readonly summary?: string;
   /** Artifact each completed stage produced — the named channels. */
-  readonly artifacts: Readonly<Partial<Record<Phase, string>>>;
+  readonly artifacts: Readonly<Partial<Record<Phase, ArtifactRef>>>;
   /** Corrective validate→blueprint re-entries taken so far. */
   readonly backwardJumps: number;
 }

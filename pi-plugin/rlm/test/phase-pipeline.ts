@@ -5,6 +5,7 @@
  * Requires: python3 on PATH
  */
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
@@ -344,19 +345,13 @@ async function testAskOffStartsAtResearch(): Promise<void> {
   }
 }
 
-/** Fanout refuses when maxDepth leaves no room for a child RLM. */
-async function testDepthCapRefusesFanout(): Promise<void> {
-  const tmp = mkdtempSync(join(tmpdir(), "rlm-pipe-depth-"));
+/** Retired implement phase is rejected as unknown. */
+async function testImplementUnknownPhase(): Promise<void> {
+  const tmp = mkdtempSync(join(tmpdir(), "rlm-pipe-impl-gone-"));
   writeFileSync(join(tmp, "app.ts"), "line1\n");
-  let childSpawned = false;
   let rootTurn = 0;
 
-  const complete: CompleteFn = async (messages) => {
-    const blob = historyBlob(messages);
-    if (blob.includes("Implement ONLY Phase")) {
-      childSpawned = true;
-      return { text: repl(`answer["content"]="no"; answer["ready"]=True`), usage: ZERO_USAGE };
-    }
+  const complete: CompleteFn = async () => {
     rootTurn++;
     if (rootTurn === 1) {
       return {
@@ -385,34 +380,94 @@ async function testDepthCapRefusesFanout(): Promise<void> {
         model: MOCK_MODEL,
         workerModel: MOCK_MODEL,
         registry: MOCK_REGISTRY,
-        config: baseConfig({ maxIterations: 6, maxDepth: 1 }),
+        config: baseConfig({ maxIterations: 6 }),
         emitter: new RlmEmitter(),
         runState: { cwd: tmp, dir: ".rlm/runs", snapshot: false },
         complete,
       });
-      const res = await engine({ rootPrompt: "depth", context: "c", depth: 0 });
-      check("depth cap refuses fanout with error", /maxDepth|fanout/i.test(res.answer), res.answer.slice(0, 200));
-      check("no child spawned at depth cap", !childSpawned);
+      const res = await engine({ rootPrompt: "impl gone", context: "c", depth: 0 });
+      check(
+        "advance_phase implement returns unknown phase",
+        /unknown phase 'implement'/i.test(res.answer),
+        res.answer.slice(0, 200),
+      );
     });
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 }
 
-/** Loop-back requires a NEW plan: stale lastSaved plan must not re-pass the gate. */
+/** save_artifact with draft plan returns BLOCKER immediately (preflight critique). */
+async function testSaveArtifactCritique(): Promise<void> {
+  const tmp = mkdtempSync(join(tmpdir(), "rlm-pipe-critique-"));
+  writeFileSync(join(tmp, "app.ts"), "line1\n");
+  let rootTurn = 0;
+  const draftPlan = `---
+status: draft
+phase_count: 1
+phases:
+  - n: 1
+    title: Phase1
+---
+## Phase 1: Phase1
+### Changes Required
+- app.ts:1 change
+`;
+
+  const complete: CompleteFn = async () => {
+    rootTurn++;
+    if (rootTurn === 1) {
+      return {
+        text: repl(
+          `print(save_artifact("research", ${JSON.stringify(RESEARCH_DOC)}))\n` +
+          `print(advance_phase("blueprint"))`,
+        ),
+        usage: ZERO_USAGE,
+      };
+    }
+    return {
+      text: repl(
+        `r = save_artifact("plan", ${JSON.stringify(draftPlan)})\n` +
+        `print(r)\n` +
+        `answer["content"] = r\n` +
+        `answer["ready"] = True`,
+      ),
+      usage: ZERO_USAGE,
+    };
+  };
+
+  try {
+    await withCwd(tmp, async () => {
+      const engine = createEngine({
+        model: MOCK_MODEL,
+        workerModel: MOCK_MODEL,
+        registry: MOCK_REGISTRY,
+        config: baseConfig({ maxIterations: 6 }),
+        emitter: new RlmEmitter(),
+        runState: { cwd: tmp, dir: ".rlm/runs", snapshot: false },
+        complete,
+      });
+      const res = await engine({ rootPrompt: "critique", context: "c", depth: 0 });
+      check("save_artifact draft returns BLOCKER", /BLOCKER:/i.test(res.answer), res.answer.slice(0, 300));
+      check("save_artifact not bare ok — saved only", !/^ok — saved [^\n]+$/.test(res.answer.trim()));
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/** Loop-back requires a NEW plan: stale lastSaved plan must not re-pass the gate.
+ *  Superseded blueprint ref is kept in context (C2). */
 async function testLoopBackRequiresNewPlan(): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), "rlm-pipe-stale-loop-"));
   writeFileSync(join(tmp, "app.ts"), "line1\n");
   let blueprintSaves = 0;
-  let implementAttempts = 0;
+  let sawSuperseded = false;
 
   const complete: CompleteFn = async (messages) => {
     const blob = historyBlob(messages);
-    if (blob.includes("Implement ONLY Phase")) {
-      return {
-        text: repl(`stage_edit("src/p1.ts", "", "x\\n")\nanswer["content"]="done"; answer["ready"]=True`),
-        usage: ZERO_USAGE,
-      };
+    if (blob.includes("Superseded artifact from 'blueprint'")) {
+      sawSuperseded = true;
     }
     if (blob.includes("You are entering the 'validate' phase") || blob.includes("## Validate phase")) {
       return {
@@ -423,10 +478,6 @@ async function testLoopBackRequiresNewPlan(): Promise<void> {
         ),
         usage: ZERO_USAGE,
       };
-    }
-    if (blob.includes("You are entering the 'implement' phase") || blob.includes("implement complete")) {
-      implementAttempts++;
-      return { text: repl(`print(advance_phase("validate"))`), usage: ZERO_USAGE };
     }
     if (
       blob.includes("You are entering the 'blueprint' phase")
@@ -439,14 +490,14 @@ async function testLoopBackRequiresNewPlan(): Promise<void> {
         return {
           text: repl(
             `print(save_artifact("plan", ${JSON.stringify(planDoc(1))}))\n` +
-            `print(advance_phase("implement"))`,
+            `print(advance_phase("validate"))`,
           ),
           usage: ZERO_USAGE,
         };
       }
       return {
         text: repl(
-          `r = advance_phase("implement")\n` +
+          `r = advance_phase("validate")\n` +
           `print(r)\n` +
           `answer["content"] = r\n` +
           `answer["ready"] = True`,
@@ -481,40 +532,34 @@ async function testLoopBackRequiresNewPlan(): Promise<void> {
         /no saved artifact|save_artifact/i.test(res.answer),
         res.answer.slice(0, 200),
       );
-      check("only one implement fanout (first plan)", implementAttempts === 1, String(implementAttempts));
+      check("superseded blueprint ref kept in context", sawSuperseded);
     });
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 }
 
-/** Happy path: research → blueprint → implement fanout → validate pass. */
+function gitState(cwd: string): string {
+  return execFileSync("git", ["status", "--short"], { cwd, encoding: "utf-8" });
+}
+
+/** Happy path: research → blueprint → validate pass. Read-only — no tree writes. */
 async function testHappyPath(): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), "rlm-pipe-happy-"));
   mkdirSync(join(tmp, "src"), { recursive: true });
   writeFileSync(join(tmp, "app.ts"), "console.log(1);\n");
-
-  const childPhases: number[] = [];
-  const editsAppliedOrder: string[] = [];
+  // Artifact dir is host-side (not Python open); ignore so git status proves no source writes.
+  writeFileSync(join(tmp, ".gitignore"), ".rlm/\n");
+  execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
+  execFileSync("git", ["add", "-A"], { cwd: tmp, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"], {
+    cwd: tmp, stdio: "ignore",
+  });
+  const appBefore = readFileSync(join(tmp, "app.ts"), "utf-8");
+  const beforeGit = gitState(tmp);
 
   const complete: CompleteFn = async (messages) => {
     const blob = historyBlob(messages);
-    if (blob.includes("Implement ONLY Phase")) {
-      const m = /Implement ONLY Phase (\d+)/.exec(blob);
-      const n = m ? Number(m[1]) : 0;
-      childPhases.push(n);
-      const path = `src/p${n}.ts`;
-      editsAppliedOrder.push(path);
-      return {
-        text: repl(
-          `eid = stage_edit(${JSON.stringify(path)}, "", ${JSON.stringify(`// phase ${n}\n`)})\n` +
-          `print(eid)\n` +
-          `answer["content"] = "phase ${n} done"\n` +
-          `answer["ready"] = True`,
-        ),
-        usage: ZERO_USAGE,
-      };
-    }
 
     if (blob.includes("You are entering the 'validate' phase") || blob.includes("## Validate phase")) {
       return {
@@ -526,17 +571,11 @@ async function testHappyPath(): Promise<void> {
         usage: ZERO_USAGE,
       };
     }
-    if (blob.includes("You are entering the 'implement' phase") || blob.includes("implement complete")) {
-      return {
-        text: repl(`print(advance_phase("validate", "impl done"))`),
-        usage: ZERO_USAGE,
-      };
-    }
     if (blob.includes("You are entering the 'blueprint' phase") || blob.includes("## Blueprint phase")) {
       return {
         text: repl(
           `print(save_artifact("plan", ${JSON.stringify(planDoc(2))}))\n` +
-          `print(advance_phase("implement", "plan ready"))`,
+          `print(advance_phase("validate", "plan ready"))`,
         ),
         usage: ZERO_USAGE,
       };
@@ -563,7 +602,7 @@ async function testHappyPath(): Promise<void> {
       });
 
       const res = await engine({
-        rootPrompt: "add two phase files",
+        rootPrompt: "plan two phase files",
         context: "small fixture",
         depth: 0,
       });
@@ -578,19 +617,23 @@ async function testHappyPath(): Promise<void> {
       if (goalFile !== undefined) {
         check(
           "goal content verbatim",
-          readFileSync(join(goalDir, goalFile), "utf-8") === "add two phase files",
+          readFileSync(join(goalDir, goalFile), "utf-8") === "plan two phase files",
         );
       }
 
-      // (c) serial children — one per plan phase
-      check("exactly 2 implement children", childPhases.length === 2, String(childPhases));
-      check("children in order 1 then 2", childPhases[0] === 1 && childPhases[1] === 2, String(childPhases));
-      check("phase1 file applied", existsSync(join(tmp, "src/p1.ts")));
-      check("phase2 file applied", existsSync(join(tmp, "src/p2.ts")));
+      // Read-only: working tree source files unchanged
+      check("app.ts unchanged (read-only pipeline)", readFileSync(join(tmp, "app.ts"), "utf-8") === appBefore);
+      check("no phase1 file created", !existsSync(join(tmp, "src/p1.ts")));
+      check("no phase2 file created", !existsSync(join(tmp, "src/p2.ts")));
+      const afterGit = gitState(tmp);
       check(
-        "phase1 content before phase2 (serial apply)",
-        editsAppliedOrder[0] === "src/p1.ts" && editsAppliedOrder[1] === "src/p2.ts",
+        "pipeline is read-only — working tree unchanged",
+        afterGit === beforeGit,
+        `before=${JSON.stringify(beforeGit)} after=${JSON.stringify(afterGit)}`,
       );
+
+      // Python open write must be refused under pipeline read-only
+      // (probed via a separate assertion in smoke; here we verify source integrity)
 
       check("final answer not error", !res.answer.startsWith("Error:"), res.answer.slice(0, 200));
       check("final mentions success", /all good|pass|complete/i.test(res.answer), res.answer.slice(0, 200));
@@ -605,13 +648,13 @@ async function testStalePlanGate(): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), "rlm-pipe-stale-"));
   writeFileSync(join(tmp, "app.ts"), "line1\n");
 
-  let advancedToImplement = false;
+  let enteredValidate = false;
   let rootTurn = 0;
 
   const complete: CompleteFn = async (messages) => {
     const blob = historyBlob(messages);
-    if (blob.includes("Implement ONLY Phase")) {
-      advancedToImplement = true;
+    if (blob.includes("You are entering the 'validate' phase") || blob.includes("## Validate phase")) {
+      enteredValidate = true;
       return {
         text: repl(`answer["content"]="should not run"; answer["ready"]=True`),
         usage: ZERO_USAGE,
@@ -631,7 +674,7 @@ async function testStalePlanGate(): Promise<void> {
       return {
         text: repl(
           `print(save_artifact("plan", ${JSON.stringify(planDoc(2, true))}))\n` +
-          `r = advance_phase("implement", "bad plan")\n` +
+          `r = advance_phase("validate", "bad plan")\n` +
           `print(r)\n` +
           `answer["content"] = r\n` +
           `answer["ready"] = True`,
@@ -651,7 +694,7 @@ async function testStalePlanGate(): Promise<void> {
         model: MOCK_MODEL,
         workerModel: MOCK_MODEL,
         registry: MOCK_REGISTRY,
-        config: baseConfig({ maxIterations: 6, maxDepth: 2 }),
+        config: baseConfig({ maxIterations: 6 }),
         emitter: new RlmEmitter(),
         runState: { cwd: tmp, dir: ".rlm/runs", snapshot: false },
         complete,
@@ -665,8 +708,7 @@ async function testStalePlanGate(): Promise<void> {
 
       const sawGateError = res.answer.includes("phases") || res.answer.includes("Error:");
       check("stale plan gate error surfaced", sawGateError, res.answer.slice(0, 200));
-      check("implement fanout did not run", !advancedToImplement);
-      check("no p1 from fanout", !existsSync(join(tmp, "src/p1.ts")));
+      check("validate not entered on bad plan", !enteredValidate);
     });
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -683,15 +725,6 @@ async function testLoopBackAndHalt(): Promise<void> {
 
   const complete: CompleteFn = async (messages) => {
     const blob = historyBlob(messages);
-    if (blob.includes("Implement ONLY Phase")) {
-      return {
-        text: repl(
-          `stage_edit("src/p1.ts", "", "x\\n")\n` +
-          `answer["content"]="done"; answer["ready"]=True`,
-        ),
-        usage: ZERO_USAGE,
-      };
-    }
     if (blob.includes("You are entering the 'validate' phase") || blob.includes("## Validate phase")) {
       validateFinalizes++;
       return {
@@ -700,12 +733,6 @@ async function testLoopBackAndHalt(): Promise<void> {
           `answer["content"] = "validation report: 1 blocker"\n` +
           `answer["ready"] = True`,
         ),
-        usage: ZERO_USAGE,
-      };
-    }
-    if (blob.includes("You are entering the 'implement' phase") || blob.includes("implement complete")) {
-      return {
-        text: repl(`print(advance_phase("validate"))`),
         usage: ZERO_USAGE,
       };
     }
@@ -718,7 +745,7 @@ async function testLoopBackAndHalt(): Promise<void> {
       return {
         text: repl(
           `print(save_artifact("plan", ${JSON.stringify(planDoc(1))}))\n` +
-          `print(advance_phase("implement", "replan"))`,
+          `print(advance_phase("validate", "replan"))`,
         ),
         usage: ZERO_USAGE,
       };
@@ -826,7 +853,8 @@ async function main(): Promise<void> {
   await testStalePlanGate();
   await testLoopBackAndHalt();
   await testHistoryResetOnBoundary();
-  await testDepthCapRefusesFanout();
+  await testImplementUnknownPhase();
+  await testSaveArtifactCritique();
   await testLoopBackRequiresNewPlan();
   await testClarifyRequiresAskRound();
   await testClarifyAdvancesAfterAsk();

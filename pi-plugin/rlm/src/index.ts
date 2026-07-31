@@ -7,8 +7,6 @@ import { registerRlmCommand } from "./commands/rlm.ts";
 import { registerRlmConfigCommand } from "./commands/rlm-config.ts";
 import { createRlmTool } from "./tool/rlm-tool.ts";
 import { createReplTool } from "./tool/repl-tool.ts";
-import { createApplyEditsTool } from "./tool/apply-edits-tool.ts";
-import { EditRegistry } from "./registry/edit-registry.ts";
 import { loadSettings, mergeConfig, resolveModelId } from "./config/settings.ts";
 import { RlmController, cheapestModel } from "./mode/rlm-mode.ts";
 import { postRlmGuide } from "./ui/intro.ts";
@@ -26,7 +24,6 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // Init synchronously with defaults — ensures commands/tools/handlers register before session_start
   const config = mergeConfig({});
   const controller = new RlmController(config);
-  const editRegistry = new EditRegistry();
   let onSandboxDiscardExtra: (() => void) | undefined;
   const sandboxManager = new SandboxManager({
     execTimeoutS: config.execTimeoutS,
@@ -34,10 +31,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     python: config.python,
     sandboxInitTimeoutMs: config.sandboxInitTimeoutMs,
     maxPromptChars: config.maxPromptChars,
-    onSandboxDiscarded: () => {
-      editRegistry.clear();
-      onSandboxDiscardExtra?.();
-    },
+    onSandboxDiscarded: () => { onSandboxDiscardExtra?.(); },
   });
   let packedContextText: string | undefined;
   let contextPackPromise: Promise<string | undefined> | undefined;
@@ -85,7 +79,6 @@ export default function rlmExtension(pi: ExtensionAPI): void {
 
   // ── Tool registration ──
   pi.registerTool(createRlmTool(controller));
-  pi.registerTool(createApplyEditsTool(editRegistry));
   let guidePosted = false;
 
   pi.on("session_start", async (_event, ctx) => {
@@ -109,7 +102,6 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           getModel: () => controller.resolveModels(ctx)?.model,
           getWorkerModel: () => controller.resolveModels(ctx)?.worker,
           registry: ctx.modelRegistry,
-          editRegistry,
           config: controller.config,
           registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
           ensureContext: async () => {

@@ -1,7 +1,7 @@
 /** Shared configuration + runtime types for the RLM engine. */
 
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
-import type { AskAnswer, AskQuestion, ProposedEdit } from "../sandbox/protocol.ts";
+import type { AskAnswer, AskQuestion } from "../sandbox/protocol.ts";
 import type { ReconstructResult } from "../state/resume.ts";
 
 export interface Sampling {
@@ -105,8 +105,6 @@ export interface RlmInput {
 /** Result of a completed RLM run. */
 export interface RlmResult {
   readonly answer: string;
-  /** Legacy anchor edits retained for compatibility while older run-state rows exist. */
-  readonly edits?: readonly ProposedEdit[];
   readonly iterations: number;
   readonly costUsd: number;
   readonly inputTokens: number;

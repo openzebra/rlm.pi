@@ -9,7 +9,6 @@
  */
 
 import type { ChatMsg } from "../bridge/model.ts";
-import type { ProposedEdit } from "../sandbox/protocol.ts";
 
 /** Bump when a row shape changes such that the resume fold cannot replay older files. */
 export const STATE_SCHEMA_VERSION = 5;
@@ -47,7 +46,6 @@ export interface TurnRow {
   readonly response: string;        // assistant message
   readonly replOutputs?: string;    // formatReplOutputs(results) → next user message
   readonly answerContent?: string;  // restores `best`
-  readonly edits?: readonly ProposedEdit[]; // restores editsAcc (latest wins)
   readonly error: boolean;          // turnHadError → limits.observe on resume
   readonly usage: UsageRow;
   readonly cumulativeDurationMs: number; // limits.usage().durationMs at turn-write time
@@ -94,6 +92,8 @@ export interface PhaseRow {
   readonly artifactPhase?: string;
   readonly blockersCount?: number;
   readonly backwardJumps?: number;
+  /** Path of the artifact this transition superseded (validate loop-back). */
+  readonly supersededPath?: string;
 }
 
 export type Row = RunHeader | TurnRow | CompactionRow | TodoRow | TerminalRow | PhaseRow;

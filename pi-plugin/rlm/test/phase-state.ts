@@ -38,11 +38,8 @@ function testTransitions(): void {
   const r1 = advancePhase("research", "blueprint");
   check("research → blueprint ok", r1.ok && r1.phase === "blueprint", outcomeDetail(r1));
 
-  const r2 = advancePhase("blueprint", "implement");
-  check("blueprint → implement ok", r2.ok && r2.phase === "implement", outcomeDetail(r2));
-
-  const r3 = advancePhase("implement", "validate");
-  check("implement → validate ok", r3.ok && r3.phase === "validate", outcomeDetail(r3));
+  const r2 = advancePhase("blueprint", "validate");
+  check("blueprint → validate ok", r2.ok && r2.phase === "validate", outcomeDetail(r2));
 
   // Terminal phase cannot advance
   const term = advancePhase("validate", "research");
@@ -52,12 +49,15 @@ function testTransitions(): void {
   const back = advancePhase("blueprint", "research");
   check("blueprint → research rejected", !back.ok, outcomeDetail(back));
 
-  const same = advancePhase("implement", "implement");
-  check("implement → implement rejected", !same.ok, outcomeDetail(same));
+  const same = advancePhase("validate", "validate");
+  check("validate → validate rejected", !same.ok, outcomeDetail(same));
 
-  // Unknown phase
+  // Unknown phase (retired implement included)
   const bad = advancePhase("research", "garbage");
   check("unknown phase rejected", !bad.ok && outcomeDetail(bad).includes("unknown phase"), outcomeDetail(bad));
+
+  const retired = advancePhase("blueprint", "implement");
+  check("implement retired — unknown phase", !retired.ok && outcomeDetail(retired).includes("unknown phase"), outcomeDetail(retired));
 
   // Skip phases rejected (must advance one step at a time)
   const skip = advancePhase("research", "validate");
@@ -145,7 +145,7 @@ async function testPhasePersistence(): Promise<void> {
 
     const phaseRow2: PhaseRow = {
       kind: "phase", turn: 3, ts: "2026-01-01T00:00:04Z",
-      phase: "implement", summary: "blueprint complete",
+      phase: "validate", summary: "blueprint complete",
     };
     check("phase2 row written", await appendRow(tmp, dir, runId, phaseRow2));
 
@@ -159,7 +159,7 @@ async function testPhasePersistence(): Promise<void> {
     const phaseRows = rows.filter(isPhase);
     check("two phase rows found", phaseRows.length === 2, String(phaseRows.length));
     check("first phase = blueprint", phaseRows[0]?.phase === "blueprint");
-    check("second phase = implement", phaseRows[1]?.phase === "implement");
+    check("second phase = validate", phaseRows[1]?.phase === "validate");
 
     // Reconstruct and verify phase state
     const system = buildRlmSystemPrompt({ contextType: "none", contextChars: 0 });
@@ -167,7 +167,7 @@ async function testPhasePersistence(): Promise<void> {
     check("reconstruct ok", recon.ok, recon.ok ? "ok" : `${recon.reason}: ${recon.detail}`);
     if (recon.ok) {
       check("recon has phase", recon.phase !== undefined);
-      check("recon phase = implement", recon.phase?.current === "implement");
+      check("recon phase = validate", recon.phase?.current === "validate");
       check("recon phase advancedAt = 2", recon.phase?.advancedAt === 2);
       check("recon phase summary", recon.phase?.summary === "blueprint complete");
       check("recon completedTurns = 2", recon.completedTurns === 2);

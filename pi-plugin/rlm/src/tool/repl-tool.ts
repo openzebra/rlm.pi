@@ -28,14 +28,13 @@ import { checkResourceLimits } from "../core/resource-limits.ts";
 import type { InteractiveDeps, RlmConfig, Sampling } from "../core/types.ts";
 import { SandboxManager } from "../sandbox/sandbox-manager.ts";
 import type { SubLlmHandlers } from "../sandbox/sandbox.ts";
-import type { ProposedEdit, ReplResult } from "../sandbox/protocol.ts";
+import type { ReplResult } from "../sandbox/protocol.ts";
 import { RlmEmitter } from "./rlm-events.ts";
 import { SubcallStore } from "./subcall-store.ts";
 import type { ReplDetails } from "./repl-details.ts";
 import type { RlmSubcall } from "./rlm-details.ts";
 import { createEngine } from "../core/engine.ts";
 import { formatCost, formatTokens, spinnerFrame } from "../ui/theme.ts";
-import type { EditRegistry } from "../registry/edit-registry.ts";
 import { errorMessage, formatError, isErrorText } from "../util/errors.ts";
 import {
   headlineStatusGlyph,
@@ -51,59 +50,44 @@ export const ReplToolParams = Object.freeze(Type.Object({
   code: Type.String({ description: "Python code to execute in the persistent REPL sandbox" }),
 }));
 
-export function surfaceReplEdits(edits: readonly ProposedEdit[], raised: boolean): readonly ProposedEdit[] | undefined {
-  return edits.length > 0 && !raised ? edits : undefined;
-}
-
-/** Model-visible text assembled from a repl() result, plus the surfaced edits for `details`. */
+/** Model-visible text assembled from a repl() result. */
 export interface ReplResultText {
   readonly text: string;
-  readonly surfacedEdits: readonly ProposedEdit[] | undefined;
-}
-
-function countLines(text: string): number {
-  if (text.length === 0) return 0;
-  let count = 1;
-  for (const ch of text) if (ch === "\n") count++;
-  return count;
-}
-
-function stagedEditSummary(edits: readonly ProposedEdit[]): string {
-  const rows = new Array<string>(edits.length);
-  for (let i = 0; i < edits.length; i++) {
-    const edit = edits[i];
-    rows[i] = `  ${edit.id}  ${edit.path}  (-${countLines(edit.oldText)}/+${countLines(edit.newText)} lines)`;
-  }
-  return [
-    "STAGED_EDITS (apply by id with apply_edits; do NOT re-type content):",
-    ...rows,
-  ].join("\n");
 }
 
 /**
- * Assemble the model-visible text for a repl() result: cap stdout, append a zero-subcall
- * delegation nudge (suppressed when edits were staged), and summarize staged edits by ID
- * without exposing oldText/newText bodies to the root model.
+ * Assemble the model-visible text for a repl() result: cap stdout and append a
+ * zero-subcall delegation nudge when a bulk read went undelegated.
  */
 export function buildReplResultText(
   stdout: string,
   finalAnswer: string | undefined,
-  edits: readonly ProposedEdit[],
-  raised: boolean,
   subcalls: readonly RlmSubcall[],
 ): ReplResultText {
   const answerSubmitted = finalAnswer !== undefined;
   const rawText = answerSubmitted
     ? `ANSWER_SUBMITTED (${finalAnswer.length} chars) — delivered to user. Do not restate it.`
     : stdout || "(no output)";
-  const surfacedEdits = surfaceReplEdits(edits, raised);
-  const editsBlock = surfacedEdits ? `\n\n${stagedEditSummary(surfacedEdits)}` : "";
-  const modelText = rawText + editsBlock;
-  // Model-visible text is capped; the caller keeps full stdout/final answer in `details` for the TUI.
-  const cappedText = capReplResultText(modelText) ?? modelText;
+  // Model-visible text is capped; the caller keeps full stdout in `details` for the TUI.
+  const cappedText = capReplResultText(rawText) ?? rawText;
   const delegated = subcalls.some((s) => s.kind === "llm" || s.kind === "batch" || s.kind === "rlm");
-  const nudge = surfacedEdits || answerSubmitted ? undefined : replDelegationNudge(rawText.length, delegated);
-  return { text: cappedText + (nudge ?? ""), surfacedEdits };
+  const nudge = answerSubmitted ? undefined : replDelegationNudge(rawText.length, delegated);
+  return { text: cappedText + (nudge ?? "") };
+}
+
+/** Advisory diagnostics derived from a completed invocation's sub-calls. */
+export function collectReplWarnings(subcalls: readonly RlmSubcall[]): readonly string[] | undefined {
+  let failed = 0;
+  let total = 0;
+  for (let i = 0; i < subcalls.length; i++) {
+    const call = subcalls[i];
+    if (call.status !== "error") continue;
+    // A batch subcall stands for many prompts; a single call stands for one.
+    failed += call.failedCount ?? 1;
+    total += call.totalCount ?? 1;
+  }
+  if (failed === 0) return undefined;
+  return Object.freeze([`${failed}/${total} sub-call(s) failed — results may be incomplete`]);
 }
 
 // ── Mutable bridge state (handler indirection) ──
@@ -214,6 +198,7 @@ class NativeBridgeState {
         if (id) state.currentEmitter?.emitSubcallUpdated({ id,
           status: error ? "error" : "done", costUsd: cost, tokens,
           resultPreview: previewText(out[0] ?? ""), detail: error,
+          failedCount: failed, totalCount: out.length,
         });
         return out;
       },
@@ -337,7 +322,6 @@ export interface ReplToolDeps {
   readonly getModel?: () => Model<Api> | undefined;
   readonly getWorkerModel?: () => Model<Api> | undefined;
   readonly registry: ModelRegistry;
-  readonly editRegistry?: EditRegistry;
   readonly config: RlmConfig;
   readonly signal?: AbortSignal;
   readonly onUsage?: (usage: Usage, role: "sub") => void;
@@ -347,7 +331,7 @@ export interface ReplToolDeps {
 }
 
 export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplToolParams, ReplDetails> {
-  const { sandboxManager, workerModel, registry, editRegistry, config, signal, onUsage } = deps;
+  const { sandboxManager, workerModel, registry, config, signal, onUsage } = deps;
   const bridgeState = new NativeBridgeState();
 
   // Late-bound cwd — getOrCreate installs handlers only at spawn; never rebuild the closure.
@@ -508,14 +492,11 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         if (queuedId) emitter.emitSubcallUpdated({ id: queuedId, status: "done" });
 
         const finalAnswer = result.finalAnswer ?? undefined;
-        const { text: resultText, surfacedEdits } = buildReplResultText(
+        const { text: resultText } = buildReplResultText(
           result.stdout,
           finalAnswer,
-          result.edits,
-          result.raised,
           store.getSubcalls(),
         );
-        editRegistry?.registerAll(surfacedEdits);
 
         const details: ReplDetails = {
           status: "done",
@@ -525,7 +506,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           subcalls: store.getSubcalls(),
           totals: store.getTotals(),
           finalAnswer,
-          edits: surfacedEdits,
+          warnings: collectReplWarnings(store.getSubcalls()),
         };
         const progressText = finalAnswer !== undefined
           ? `ANSWER_SUBMITTED (${finalAnswer.length} chars)`
@@ -588,9 +569,6 @@ function renderReplCollapsed(details: ReplDetails, theme: Theme): Text {
   parts.push(formatCost(details.totals.costUsd));
   if (details.totals.tokens > 0) parts.push(`${formatTokens(details.totals.tokens)} tok`);
   if (details.executionTimeMs > 0) parts.push(`${details.executionTimeMs}ms`);
-  if (details.edits && details.edits.length > 0) {
-    parts.push(theme.fg("success", `${details.edits.length} staged`));
-  }
   const stats = parts.length > 0 ? ` ${theme.fg("dim", parts.join(" · "))}` : "";
 
   const header = `${glyph} ${theme.fg("toolTitle", theme.bold("REPL"))}${stats}`;
@@ -625,13 +603,9 @@ function renderReplExpanded(details: ReplDetails, theme: Theme): Container {
     container.addChild(new Text(out, 0, 0));
   }
 
-  if (details.edits && details.edits.length > 0) {
-    const editFiles = new Set<string>();
-    for (const edit of details.edits) editFiles.add(edit.path);
+  if (details.warnings && details.warnings.length > 0) {
     container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("success",
-      `${details.edits.length} edit${details.edits.length > 1 ? "s" : ""} staged across ${editFiles.size} file${editFiles.size > 1 ? "s" : ""}`,
-    ), 0, 0));
+    container.addChild(new Text(theme.fg("muted", details.warnings.join("\n")), 0, 0));
   }
 
   // Stderr

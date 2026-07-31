@@ -179,6 +179,105 @@ async function main(): Promise<void> {
     const recon3 = await reconstructRlmState(cwd, dir, runId2, systemPrompt);
     check("R-C2: reconstruct ok without sidecar", recon3.ok);
     // The caller (rlm.ts) would check readContextSidecar and warn — here we just verify it doesn't crash.
+
+    // --- Legacy trail: edits on TurnRow + phase: implement → reconcile to blueprint ---
+    const { reconcilePhase } = await import("../src/core/pipeline.ts");
+    const { resetHistoryForPhase } = await import("../src/core/engine.ts");
+    check("reconcilePhase implement → blueprint", reconcilePhase("implement") === "blueprint");
+    check("reconcilePhase research stays research", reconcilePhase("research") === "research");
+    check("reconcilePhase garbage → blueprint", reconcilePhase("garbage") === "blueprint");
+
+    const runIdLegacy = generateRunId();
+    const headerLegacy: RunHeader = { ...header, runId: runIdLegacy };
+    await appendRow(cwd, dir, runIdLegacy, headerLegacy);
+    await writeContextSidecar(cwd, dir, runIdLegacy, contextText, false);
+    // Legacy row with optional `edits` field — type system dropped it; JSONL still accepts extras.
+    const legacyTurn = {
+      kind: "turn" as const,
+      turn: 1,
+      ts: new Date().toISOString(),
+      response: "legacy",
+      error: false,
+      usage: { costUsd: 0.01, inputTokens: 10, outputTokens: 5 },
+      cumulativeDurationMs: 100,
+      snapshotOk: false,
+      edits: [{ id: "e1", path: "a.ts", oldText: "old", newText: "new" }],
+    };
+    await appendRow(cwd, dir, runIdLegacy, legacyTurn as TurnRow);
+    await appendRow(cwd, dir, runIdLegacy, {
+      kind: "phase",
+      turn: 2,
+      ts: new Date().toISOString(),
+      phase: "implement",
+      summary: "old fanout",
+      artifactPath: ".rlm/artifacts/plans/plan.md",
+      artifactPhase: "blueprint",
+    });
+    const reconLegacy = await reconstructRlmState(cwd, dir, runIdLegacy, systemPrompt);
+    check("legacy trail with edits reconstructs", reconLegacy.ok);
+    if (reconLegacy.ok) {
+      check("legacy phase raw is implement", reconLegacy.phase?.current === "implement");
+      check(
+        "engine would reconcile implement → blueprint",
+        reconcilePhase(reconLegacy.phase?.current) === "blueprint",
+      );
+    }
+
+    // --- Supersede round-trip: loop-back trail resumes with superseded blueprint ---
+    const runIdSuper = generateRunId();
+    const headerSuper: RunHeader = { ...header, runId: runIdSuper };
+    await appendRow(cwd, dir, runIdSuper, headerSuper);
+    await writeContextSidecar(cwd, dir, runIdSuper, contextText, false);
+    await appendRow(cwd, dir, runIdSuper, {
+      kind: "turn", turn: 1, ts: new Date().toISOString(),
+      response: "planned", error: false,
+      usage: { costUsd: 0.01, inputTokens: 10, outputTokens: 5 },
+      cumulativeDurationMs: 100, snapshotOk: false,
+    } as TurnRow);
+    await appendRow(cwd, dir, runIdSuper, {
+      kind: "phase", turn: 2, ts: new Date().toISOString(),
+      phase: "validate", summary: "plan ready",
+      artifactPath: ".rlm/artifacts/plans/plan-v1.md",
+      artifactPhase: "blueprint",
+    });
+    await appendRow(cwd, dir, runIdSuper, {
+      kind: "phase", turn: 3, ts: new Date().toISOString(),
+      phase: "blueprint", summary: "loop-back: 1 blocker(s)",
+      artifactPath: ".rlm/artifacts/validations/val-1.md",
+      artifactPhase: "validate",
+      backwardJumps: 1,
+      supersededPath: ".rlm/artifacts/plans/plan-v1.md",
+    });
+    const reconSuper = await reconstructRlmState(cwd, dir, runIdSuper, systemPrompt);
+    check("supersede trail reconstructs", reconSuper.ok);
+    if (reconSuper.ok) {
+      const bp = reconSuper.phase?.artifacts?.blueprint;
+      check("resume blueprint is superseded", bp?.superseded === true, JSON.stringify(bp));
+      check("resume blueprint path kept", bp?.path === ".rlm/artifacts/plans/plan-v1.md");
+      check("resume current is blueprint", reconSuper.phase?.current === "blueprint");
+      // Engine rehydration + history label
+      const artifacts = {
+        blueprint: Object.freeze({
+          path: bp?.path ?? "",
+          status: (bp?.superseded ? "superseded" : "active") as "superseded" | "active",
+        }),
+        validate: Object.freeze({
+          path: reconSuper.phase?.artifacts?.validate?.path ?? "",
+          status: "active" as const,
+        }),
+      };
+      const hist = resetHistoryForPhase("sys", {
+        current: "blueprint",
+        advancedAt: 0,
+        artifacts,
+        backwardJumps: 1,
+      });
+      check(
+        "resetHistoryForPhase emits Superseded artifact label",
+        hist[1]?.content.includes("Superseded artifact from 'blueprint'") === true,
+        hist[1]?.content.slice(0, 200),
+      );
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

@@ -12,7 +12,6 @@
 
 import { EventEmitter } from "node:events";
 import type { SubcallKind, SubcallStatus, RlmRunStatus } from "./rlm-details.ts";
-import type { ProposedEdit } from "../sandbox/protocol.ts";
 
 // ── Event payloads ──
 
@@ -40,6 +39,14 @@ export interface SubcallUpdatedEvent {
   readonly costUsd?: number;
   /** Delta — additive on both the subcall and running totals. */
   readonly tokens?: number;
+  /** For batch subcalls: failed prompt count. */
+  readonly failedCount?: number;
+  /** For batch subcalls: total prompt count. */
+  readonly totalCount?: number;
+}
+
+export interface WarningsEvent {
+  readonly warnings: readonly string[];
 }
 
 export interface TurnEvent {
@@ -54,10 +61,6 @@ export interface RootUsageEvent {
 
 export interface AnswerEvent {
   readonly text: string;
-}
-
-export interface EditsEvent {
-  readonly edits: readonly ProposedEdit[];
 }
 
 export interface StatusEvent {
@@ -110,9 +113,9 @@ export class RlmEmitter {
     this.ee.emit("answer", { text } satisfies AnswerEvent);
   }
 
-  /** Set proposed edits (root-only). */
-  emitEdits(edits: readonly ProposedEdit[]): void {
-    this.ee.emit("edits", { edits } satisfies EditsEvent);
+  /** Set advisory warnings (root-only; never a failure). */
+  emitWarnings(warnings: readonly string[]): void {
+    this.ee.emit("warnings", { warnings } satisfies WarningsEvent);
   }
 
   /** Set the root run status (done/error/aborted). */
@@ -152,9 +155,9 @@ export class RlmEmitter {
     return () => { this.ee.off("answer", handler); };
   }
 
-  onEdits(handler: (event: EditsEvent) => void): () => void {
-    this.ee.on("edits", handler);
-    return () => { this.ee.off("edits", handler); };
+  onWarnings(handler: (event: WarningsEvent) => void): () => void {
+    this.ee.on("warnings", handler);
+    return () => { this.ee.off("warnings", handler); };
   }
 
   onStatus(handler: (event: StatusEvent) => void): () => void {

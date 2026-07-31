@@ -11,18 +11,55 @@ import {
   clarificationRecord,
   countBulletsUnderHeading,
   countHeadingsOutsideFences,
+  lineCountOf,
   MAX_PHASES,
+  phasesMissingSuccessCriteria,
   planPhaseRecords,
   validationRecord,
   verifyCitations,
 } from "../src/core/gates.ts";
-import { routeAfterValidate } from "../src/core/pipeline.ts";
+import { routeAfterValidate, initialPhaseState } from "../src/core/pipeline.ts";
 import { captureGoal, saveArtifact, ARTIFACTS_DIR } from "../src/core/artifacts.ts";
-import { applyProposedEdits } from "../src/text/edits.ts";
 import { resetHistoryForPhase } from "../src/core/engine.ts";
-import { initialPhaseState } from "../src/core/pipeline.ts";
+import { critiqueArtifact, formatCritique } from "../src/core/critique.ts";
+import { STAGES } from "../src/core/pipeline.ts";
 
 // ── countHeadingsOutsideFences ──
+
+function testLineCountAndPhasesMissing(): void {
+  check("lineCountOf empty is 1", lineCountOf("") === 1);
+  check("lineCountOf one line is 1", lineCountOf("hello") === 1);
+  check("lineCountOf two lines is 2", lineCountOf("a\nb") === 2);
+  check("lineCountOf trailing newline counts", lineCountOf("a\nb\n") === 3);
+
+  const balanced = [
+    "## Phase 1: A",
+    "### Success Criteria",
+    "ok",
+    "## Phase 2: B",
+    "### Success Criteria",
+    "ok",
+    "## Phase 3: C",
+    "### Success Criteria",
+    "ok",
+  ].join("\n");
+  check("phasesMissingSuccessCriteria none when all have criteria", phasesMissingSuccessCriteria(balanced).length === 0);
+
+  const skewed = [
+    "## Phase 1: A",
+    "### Success Criteria",
+    "ok",
+    "### Success Criteria",
+    "extra",
+    "## Phase 2: B",
+    "no criteria here",
+    "## Phase 3: C",
+    "### Success Criteria",
+    "ok",
+  ].join("\n");
+  const missing = phasesMissingSuccessCriteria(skewed);
+  check("phasesMissingSuccessCriteria catches phase without criteria", missing.length === 1 && missing[0] === "Phase 2", String(missing));
+}
 
 function testHeadings(): void {
   const body = [
@@ -258,9 +295,9 @@ function testRoute(): void {
   check("under cap still loops", stillLoop.kind === "loop-back");
 }
 
-// ── artifacts + applyProposedEdits + history reset ──
+// ── artifacts + history reset + critique ──
 
-async function testArtifactsAndEditsAsync(): Promise<void> {
+async function testArtifactsAndCritiqueAsync(): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), "rlm-art-"));
   try {
     const goal = captureGoal(tmp, "verbatim brief text");
@@ -274,89 +311,48 @@ async function testArtifactsAndEditsAsync(): Promise<void> {
     const saved = saveArtifact(tmp, "research", "research", "---\nstatus: ready\n---\nbody\n");
     check("saveArtifact ok", saved.ok);
 
-    writeFileSync(join(tmp, "target.ts"), "old\n");
-    const apply = await applyProposedEdits(
-      [{ id: "e1", path: "target.ts", oldText: "old\n", newText: "new\n" }],
-      tmp,
-    );
-    check("applyProposedEdits ok", apply.ok && apply.applied === 1);
-    check("file updated", readFileSync(join(tmp, "target.ts"), "utf-8") === "new\n");
-
-    const create = await applyProposedEdits(
-      [{ id: "e2", path: "newfile.ts", oldText: "", newText: "created\n" }],
-      tmp,
-    );
-    check("create-file edit ok", create.ok && existsSync(join(tmp, "newfile.ts")));
-
     const hist = resetHistoryForPhase("sys", initialPhaseState(), { goal: goal.value });
     check("history reset has system+user", hist.length === 2 && hist[0]?.role === "system" && hist[1]?.role === "user");
     check("history mentions goal path", hist[1]?.content.includes(goal.value.goalPath) === true);
 
-    // Deletion edits (newText === "") must not silently skip on a missing anchor
-    writeFileSync(join(tmp, "del.ts"), "keep me\n");
-    const delMiss = await applyProposedEdits(
-      [{ id: "d1", path: "del.ts", oldText: "typo-anchor", newText: "" }],
-      tmp,
-    );
+    // Superseded artifact label in history
+    const withSuperseded = resetHistoryForPhase("sys", {
+      current: "blueprint",
+      advancedAt: 0,
+      artifacts: {
+        blueprint: { path: ".rlm/artifacts/plans/plan-old.md", status: "superseded", supersededBy: "val.md" },
+        validate: { path: "val.md", status: "active" },
+      },
+      backwardJumps: 1,
+    });
     check(
-      "deletion with missing anchor fails (not already-applied)",
-      !delMiss.ok && delMiss.error.includes("anchor occurs 0"),
-      delMiss.ok ? "ok" : delMiss.error,
-    );
-    check("deletion miss leaves file unchanged", readFileSync(join(tmp, "del.ts"), "utf-8") === "keep me\n");
-
-    // $ replacement hazard: newText with $& / $$ must be literal
-    writeFileSync(join(tmp, "dollar.ts"), "OLD\n");
-    const dollar = await applyProposedEdits(
-      [{ id: "e3", path: "dollar.ts", oldText: "OLD", newText: "echo $& and $$PID" }],
-      tmp,
-    );
-    check("applyProposedEdits $ literal ok", dollar.ok);
-    check(
-      "newText $& not treated as replacement pattern",
-      readFileSync(join(tmp, "dollar.ts"), "utf-8") === "echo $& and $$PID\n",
-      readFileSync(join(tmp, "dollar.ts"), "utf-8"),
+      "history labels superseded blueprint",
+      withSuperseded[1]?.content.includes("Superseded artifact from 'blueprint'") === true,
+      withSuperseded[1]?.content.slice(0, 200),
     );
 
-    // Idempotent re-apply of the same replace list (failed-fanout retry)
-    const twice = await applyProposedEdits(
-      [{ id: "e3b", path: "dollar.ts", oldText: "OLD", newText: "echo $& and $$PID" }],
-      tmp,
-    );
-    check("idempotent re-apply of same replace succeeds", twice.ok && twice.applied === 1);
-    check(
-      "idempotent re-apply does not corrupt content",
-      readFileSync(join(tmp, "dollar.ts"), "utf-8") === "echo $& and $$PID\n",
-    );
+    // Critique preflight: draft status is a blocker
+    const draft = "---\nstatus: draft\n---\n## Findings\nok\n";
+    const c = critiqueArtifact(STAGES.research, draft, "x.md", tmp);
+    check("critique draft has issues", !c.canAdvance && c.issues.length > 0);
+    check("formatCritique has BLOCKER", formatCritique(c).includes("BLOCKER:"));
 
-    // Create idempotent: identical content → skip; different content → refuse clobber
-    const create1 = await applyProposedEdits(
-      [{ id: "c1", path: "created.ts", oldText: "", newText: "hello\n" }],
-      tmp,
-    );
-    check("create-file first apply ok", create1.ok);
-    const create2 = await applyProposedEdits(
-      [{ id: "c2", path: "created.ts", oldText: "", newText: "hello\n" }],
-      tmp,
-    );
-    check("create-file identical re-apply ok", create2.ok);
-    const createClash = await applyProposedEdits(
-      [{ id: "c3", path: "created.ts", oldText: "", newText: "other\n" }],
-      tmp,
-    );
-    check("create-file clobber refused", !createClash.ok && createClash.error.includes("clobber"), createClash.ok ? "ok" : createClash.error);
+    const clean = "---\nstatus: ready\n---\n## Findings\nok\n";
+    const c2 = critiqueArtifact(STAGES.research, clean, "y.md", tmp);
+    check("critique ready research clean", c2.canAdvance && c2.issues.length === 0);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 }
 
+testLineCountAndPhasesMissing();
 testHeadings();
 testPlanGate();
 testCitations();
 testValidation();
 testClarification();
 testRoute();
-await testArtifactsAndEditsAsync();
+await testArtifactsAndCritiqueAsync();
 
 console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
 process.exit(failureCount() === 0 ? 0 : 1);

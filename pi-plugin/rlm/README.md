@@ -100,8 +100,8 @@ sub-LLM calls, hence the name.
 
 While a run is active, a **live tree** shows the root orchestrator and every sub-LLM /
 recursive child with status, model, cost, tokens, and duration. The final answer is posted
-to the chat as markdown; any code edits are collected as diffs and reviewed via a popup
-(unless `yolo` is on).
+to the chat as markdown. File changes use Pi's native `edit` / `write` tools (with their
+built-in diff preview).
 
 ## Sandbox API
 
@@ -117,10 +117,9 @@ These functions are injected into the model's Python namespace inside the REPL:
 | `rlm_query_batched` | `(prompts, model=None) -> list[str]` | Concurrent recursive child RLMs |
 | `todo` | `(action, **kwargs) -> str` | Task list: `create`/`update`/`list`/`get`/`delete`/`clear` |
 | `ask_user_question` | `(questions) -> list[dict]` | Ask the user structured questions (depth 0 only) |
-| `load_library` | `(source) -> dict \| str` | Load an external dir, file, or git URL into a new `context_N` slot |
-| `stage_edit` | `(path, old_text, new_text) -> str` | Stage a file edit; relayed to the host's native edit flow |
-| `save_artifact` | `(kind, content) -> str` | Persist a stage artifact (`clarification` / `research` / `plan` / `validation`) under `.rlm/artifacts/` (root depth only) |
-| `advance_phase` | `(phase, summary=None) -> str` | Advance one step in order `clarify → research → blueprint → implement → validate` (clarify skipped when `askUserQuestion` is off). **Engine-gated** on the latest artifact + interview rounds. Rejected transitions return the gate error. |
+| `load_library` | `(source) -> dict \| str` | Append an external dir, file, or git URL into `context` under `lib/<id>/` |
+| `save_artifact` | `(kind, content) -> str` | Persist a stage artifact (`clarification` / `research` / `plan` / `validation`) under `.rlm/artifacts/` (root depth only). Returns preflight gate critique. |
+| `advance_phase` | `(phase, summary=None) -> str` | Advance one step in order `clarify → research → blueprint → validate` (clarify skipped when `askUserQuestion` is off). **Engine-gated** on the latest artifact + interview rounds. Rejected transitions return the gate error. |
 | `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
 | `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
 
@@ -130,27 +129,31 @@ When the task needs an **external library, another source tree, or standalone do
 not in the packed repo `context`, the model calls `load_library(source)` mid-run:
 
 ```python
-info = load_library("../some-lib")           # local directory → repomix-packed list[dict]
-info = load_library("docs/api.md")           # single file → plain str
-info = load_library("https://github.com/x/y.git")  # shallow clone, then pack
-# info == {"index": 1, "var": "context_1", "files": …, "chars": …}
-# then chunk context_1 exactly like context
+info = load_library("../some-lib")                # local directory → packed + appended
+info = load_library("docs/api.md")                # single file → one entry in context
+info = load_library("https://github.com/x/y.git") # shallow clone, then pack + append
+# Files land in the SAME `context` list under lib/<source_id>/…
+# info == {"source_id", "path_prefix", "files", "chars", "context_len", "already_loaded", …}
+lib = [f for f in context if f["path"].startswith(info["path_prefix"])]
 ```
 
-Slots start at `context_1` (`context` / `context_0` remains the repo). Toggle via
-`/rlm-config` → **Library loader** (`libraryLoader`, default on). On headless runs with
-persistence, each loaded slot is written as a resume sidecar (`context.<N>.json`).
+There is no `context_1` / `context_2` — only `context`. Paths are namespaced so multiple
+libraries do not collide. Toggle via `/rlm-config` → **Library loader** (`libraryLoader`,
+default on). On headless runs with persistence, each load writes a resume sidecar
+(`context.<N>.json`) that is **merged back into `context`** on resume.
 
 ### Artifact-gated pipeline (opt-in via `pipeline: true`)
 
 When enabled at root depth:
 
 1. **Goal capture** — the brief is written verbatim to `.rlm/artifacts/goal/goal-<ts>.md` with a pre-run dirty-tree baseline.
-2. **Stages** — `clarify → research → blueprint → implement → validate`. Each produces a durable markdown artifact with frontmatter contracts; chat history is **reset** at every phase boundary (artifacts are the only channel; REPL vars persist).
+2. **Stages** — `clarify → research → blueprint → validate` (**read-only** — produces a validated plan; does not write code). Each produces a durable markdown artifact with frontmatter contracts; chat history is **reset** at every phase boundary (artifacts are the only channel; REPL vars persist).
 3. **Clarify (intake)** — interviews the user via `ask_user_question` (intent first, then evidence-confirmed decisions). Writes `.rlm/artifacts/clarifications/*` with `decisions_count` / `open_questions_count`. Engine gate: **≥1 serviced ask round** + artifact contract. When **`askUserQuestion` is off**, clarify is skipped and the run starts at research.
-4. **Gates (TypeScript, never LLM judgment)** — `status: ready`; clarify structure; plan `phases:` ≡ fence-aware `## Phase N:` headings; every `file:line` citation resolves; validate carries `blockers_count` + `verdict`.
-5. **Implement fanout** — on `advance_phase("implement")` the engine runs one **serial** child RLM per plan phase and applies that child's edits before the next phase starts.
-6. **Corrective loop** — `blockers_count > 0` re-enters blueprint, bounded by `maxBackwardJumps` (default 2).
+4. **Gates (TypeScript, never LLM judgment)** — `status: ready`; clarify structure; plan `phases:` ≡ fence-aware `## Phase N:` headings; every `file:line` citation resolves; validate carries `blockers_count` + `verdict`. Preflight critique runs on every `save_artifact`.
+5. **Validate** — adversarial plan review against the tree (not a post-implementation diff check). Final answer is the validated plan.
+6. **Corrective loop** — `blockers_count > 0` re-enters blueprint (superseded plan kept for context), bounded by `maxBackwardJumps` (default 2).
+
+Native RLM mode authors file changes with Pi's native `edit` / `write` tools. Sub-LLMs extract and locate; they never ship code.
 
 ## Settings (`/rlm-config`)
 
@@ -167,7 +170,7 @@ When enabled at root depth:
 | Token ceiling | none | total input+output token cap for the whole recursive tree |
 | Max consecutive errors | `5` | stop after N consecutive failing turns (none = off) |
 | Orchestrator addendum | on | divide-and-conquer guidance in the root system prompt |
-| Phase pipeline | off | artifact-gated clarify→research→blueprint→implement fanout→validate |
+| Phase pipeline | off | artifact-gated clarify→research→blueprint→validate (read-only plan pipeline) |
 | Max validate→blueprint loops | `2` | bounded corrective re-entries when validation reports blockers |
 | Ask user question | on | when pipeline is on, enables clarify intake; when off, pipeline starts at research |
 | Trajectory compaction | on (0.65) | summarize old turns when history nears the context window |

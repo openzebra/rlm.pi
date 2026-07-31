@@ -6,8 +6,6 @@
  * after every mutation, enabling Pi's built-in progressive TUI re-render.
  */
 
-import type { ProposedEdit } from "../sandbox/protocol.ts";
-
 export type SubcallKind = "root" | "rlm" | "llm" | "batch" | "tool";
 export type SubcallStatus = "running" | "done" | "error";
 export type RlmRunStatus = "running" | "done" | "error" | "aborted";
@@ -29,6 +27,10 @@ export interface RlmSubcall {
   readonly endedAt?: number;
   readonly costUsd: number;
   readonly tokens: number;
+  /** For batch subcalls: failed prompt count (partial failure). */
+  readonly failedCount?: number;
+  /** For batch subcalls: total prompt count. */
+  readonly totalCount?: number;
 }
 
 export interface RlmDetails {
@@ -38,7 +40,8 @@ export interface RlmDetails {
   readonly subcalls: readonly RlmSubcall[];
   readonly totals: { readonly costUsd: number; readonly tokens: number };
   readonly answer?: string;
-  readonly edits?: readonly ProposedEdit[];
+  /** Advisory diagnostics — surfaced to the user, never a failure. */
+  readonly warnings?: readonly string[];
 }
 
 export interface SubcallInit {

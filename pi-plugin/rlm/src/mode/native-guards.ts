@@ -86,7 +86,7 @@ export function replDelegationNudge(stdoutChars: number, delegated: boolean): st
   if (delegated || stdoutChars <= NUDGE_STDOUT_CHARS) return undefined;
   return (
     `\n[RLM: this repl() printed ${stdoutChars.toLocaleString()} chars with 0 sub-LLM calls — ` +
-    "delegate semantic reading via llm_query / llm_query_batched / llm_query_chunked instead of " +
-    "reading output yourself.]"
+    "if you were READING, delegate via llm_query / llm_query_batched / llm_query_chunked. " +
+    "Authoring an edit body yourself is correct and needs no delegation.]"
   );
 }

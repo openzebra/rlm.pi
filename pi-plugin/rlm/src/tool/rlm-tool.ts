@@ -156,14 +156,9 @@ function renderExpanded(details: RlmDetails, theme: Theme): Component {
     container.addChild(new Markdown(details.answer, 0, 0, getMarkdownTheme()));
   }
 
-  if (details.edits && details.edits.length > 0) {
+  if (details.warnings && details.warnings.length > 0) {
     container.addChild(new Spacer(1));
-    const editFiles = new Set(details.edits.map(e => e.path));
-    container.addChild(new Text(
-      theme.fg("muted", "─── Edits ───") +
-      `\n  ${theme.fg("dim", `${details.edits.length} edit${details.edits.length > 1 ? "s" : ""} proposed across ${editFiles.size} file${editFiles.size > 1 ? "s" : ""}`)}`,
-      0, 0,
-    ));
+    container.addChild(new Text(theme.fg("muted", details.warnings.join("\n")), 0, 0));
   }
 
   return container;

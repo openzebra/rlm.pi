@@ -11,7 +11,6 @@ import { readFile } from "node:fs/promises";
 import { type ChatMsg } from "../bridge/model.ts";
 import { appendUserMessage } from "../core/history.ts";
 import { buildTurnPrompt } from "../prompts/user.ts";
-import type { ProposedEdit } from "../sandbox/protocol.ts";
 import { readHeader } from "./reads.ts";
 import {
   isCompaction,
@@ -28,12 +27,18 @@ import {
 import { trailPath, snapshotPath } from "./paths.ts";
 import { failSoft, pathExists } from "./internal.ts";
 
+/** Artifact path + supersede flag reconstructed from phase rows. */
+export interface PhaseReconArtifact {
+  readonly path: string;
+  readonly superseded: boolean;
+}
+
 export interface PhaseRecon {
   readonly current: string;
   readonly advancedAt: number;
   readonly summary?: string;
-  /** Repo-relative artifact paths keyed by the phase that produced them. */
-  readonly artifacts?: Readonly<Partial<Record<string, string>>>;
+  /** Repo-relative artifacts keyed by the phase that produced them. */
+  readonly artifacts?: Readonly<Partial<Record<string, PhaseReconArtifact>>>;
   readonly backwardJumps?: number;
 }
 
@@ -45,7 +50,6 @@ export type ReconstructResult =
       readonly pendingReplOutputs?: string;
       readonly usageSeed: { readonly costUsd: number; readonly inputTokens: number; readonly outputTokens: number; readonly durationMs: number };
       readonly best: string;
-      readonly editsAcc: ProposedEdit[];
       readonly completedTurns: number;
       readonly compactions: number;
       /** R-C1: the latest turn whose per-turn snapshot file exists on disk (undefined ⇒ no restore). */
@@ -102,7 +106,6 @@ export async function reconstructRlmState(
   let history: ChatMsg[] = [{ role: "system", content: systemPrompt }];
   const usageSeed = { costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 0 };
   let best = "";
-  let editsAcc: ProposedEdit[] = [];
   let completedTurns = 0;
   let compactions = 0;
   let snapshotTurn: number | undefined; // R-C1: latest turn with an existing snapshot file
@@ -110,8 +113,8 @@ export async function reconstructRlmState(
   const todoRows: { action: string; params: Record<string, unknown>; result: string }[] = [];
   let terminated = false;
   let phase: PhaseRecon | undefined;
-  // Accumulate artifact paths keyed by the producing phase (artifactPhase on the row).
-  const artifactsAcc: Record<string, string> = {};
+  // Append-only journal: paths stay; supersededPath flips the blueprint slot.
+  const artifactsAcc = new Map<string, PhaseReconArtifact>();
 
   for (const row of rows) {
     if (isHeader(row)) continue;
@@ -134,7 +137,6 @@ export async function reconstructRlmState(
       usageSeed.outputTokens += row.usage.outputTokens;
       if (row.answerContent) best = row.answerContent;
       else if (!best && row.response.trim()) best = row.response; // C3: mirror engine fallback
-      if (row.edits && row.edits.length > 0) editsAcc = [...row.edits];
       completedTurns = row.turn;
       // R-C1: verify the per-turn snapshot file exists — a crashed finalize leaves the row claiming snapshotOk:true with no pkl.
       if (row.snapshotOk && await pathExists(snapshotPath(cwd, dir, runId, row.turn)))
@@ -145,17 +147,22 @@ export async function reconstructRlmState(
     }
     if (isPhase(row)) {
       if (row.artifactPath !== undefined && row.artifactPhase !== undefined) {
-        artifactsAcc[row.artifactPhase] = row.artifactPath;
+        artifactsAcc.set(row.artifactPhase, { path: row.artifactPath, superseded: false });
       }
-      // On loop-back to blueprint, drop stale plan so resume cannot re-gate with it.
-      if (row.phase === "blueprint" && row.backwardJumps !== undefined && row.backwardJumps > 0) {
-        delete artifactsAcc.blueprint;
+      // Append-only: a superseded artifact keeps its slot, flipped to superseded.
+      if (row.supersededPath !== undefined) {
+        const prior = artifactsAcc.get("blueprint");
+        if (prior !== undefined) {
+          artifactsAcc.set("blueprint", { path: prior.path, superseded: true });
+        }
       }
+      const artifactsObj: Record<string, PhaseReconArtifact> = {};
+      for (const [k, v] of artifactsAcc) artifactsObj[k] = v;
       phase = {
         current: row.phase,
         advancedAt: row.turn - 1,
         summary: row.summary,
-        artifacts: Object.keys(artifactsAcc).length > 0 ? { ...artifactsAcc } : undefined,
+        artifacts: artifactsAcc.size > 0 ? artifactsObj : undefined,
         backwardJumps: row.backwardJumps,
       };
       continue;
@@ -168,5 +175,5 @@ export async function reconstructRlmState(
   }
 
   if (completedTurns === 0 && !terminated) return { ok: false, reason: "no-turns", detail: runId };
-  return { ok: true, header, history, pendingReplOutputs, usageSeed, best, editsAcc, completedTurns, compactions, snapshotTurn, todoRows, terminated, phase };
+  return { ok: true, header, history, pendingReplOutputs, usageSeed, best, completedTurns, compactions, snapshotTurn, todoRows, terminated, phase };
 }

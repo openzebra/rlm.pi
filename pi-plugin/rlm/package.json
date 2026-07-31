@@ -27,6 +27,7 @@
   ],
   "scripts": {
     "check": "tsc --noEmit",
+    "test": "bun run test/smoke.ts",
     "prepublishOnly": "npm run check"
   },
   "pi": {

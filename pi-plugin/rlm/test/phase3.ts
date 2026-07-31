@@ -53,17 +53,31 @@ async function main() {
   });
 
   const installedPackagePath = join(getAgentDir(), "npm", "node_modules", "@hicaru", "pi-rlm");
-  const installedPackageConflict = existsSync(installedPackagePath) && extensionsResult.errors.some((err) =>
+  const errors = extensionsResult.errors;
+  const toolConflict = errors.some((err) =>
     String((err as { readonly error?: unknown }).error).includes('Tool "rlm" conflicts'),
   );
-  if (installedPackageConflict) {
-    console.log(`\n(skipping phase3: installed @hicaru/pi-rlm at ${installedPackagePath} already registers the rlm tool)`);
+  // Host already has rlm registered (global install or dual factory) — load wiring is fine.
+  if (toolConflict) {
+    console.log(
+      `\n(skipping phase3: Tool "rlm" already registered`
+      + (existsSync(installedPackagePath) ? ` via ${installedPackagePath}` : "")
+      + ")",
+    );
     session.dispose();
     finish();
     return;
   }
 
-  check("extension loads without errors", extensionsResult.errors.length === 0, JSON.stringify(extensionsResult.errors));
+  // Only fail on errors from *this* package — other agent-dir extensions (zebra-catch, etc.)
+  // may be broken on the host and are not this suite's concern.
+  const rlmErrors = errors.filter((err) => {
+    const path = String((err as { readonly path?: unknown }).path ?? "");
+    const msg = String((err as { readonly error?: unknown }).error ?? "");
+    return path.includes("pi-plugin/rlm") || path.includes("@hicaru/pi-rlm")
+      || msg.includes("pi-plugin/rlm") || msg.includes("@hicaru/pi-rlm");
+  });
+  check("rlm extension loads without errors", rlmErrors.length === 0, JSON.stringify(rlmErrors));
 
   if (!live) {
     console.log("\n(skipping live /rlm run; set RLM_TEST_LIVE=1)");

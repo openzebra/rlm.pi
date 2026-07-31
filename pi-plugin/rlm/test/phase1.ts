@@ -111,7 +111,7 @@ async function main() {
   check("F3: context rebind persists across exec calls", r.stdout.trim() === "changed", r.stdout.trim());
   r = await sandbox.exec("del context");
   r = await sandbox.exec("print(type(context).__name__, len(context))");
-  check("F3: deleted context is restored from context_0", r.stdout.trim() === "list 3", r.stdout.trim());
+  check("F3: deleted context is restored from pristine payload", r.stdout.trim() === "list 3", r.stdout.trim());
 
   // --- varNames surface + two-tier stdout elision (Algorithm 1: Metadata(stdout)) ---
   {
@@ -124,7 +124,7 @@ async function main() {
       JSON.stringify(rr.varNames));
     check("scaffold vars filtered from varNames",
       !rr.varNames.includes("llm_query") && !rr.varNames.includes("context") && !rr.varNames.includes("answer")
-      && !rr.varNames.includes("SHOW_VARS") && !rr.varNames.includes("context_0"),
+      && !rr.varNames.includes("SHOW_VARS"),
       JSON.stringify(rr.varNames));
     rr = await vb.exec("context_summary = 'kept'");
     check("F6: context-prefixed user vars are visible", rr.varNames.includes("context_summary"), JSON.stringify(rr.varNames));
@@ -144,13 +144,13 @@ async function main() {
   {
     const noVars = formatReplOutputs([{
       stdout: "x".repeat(5000), stderr: "", finalAnswer: null, answerContent: "",
-      edits: [], raised: false, executionTimeMs: 0, varNames: [],
+      raised: false, executionTimeMs: 0, varNames: [],
     }]);
     check("elision note uses slices, not 'assign first'", noVars.includes("inspect slices"), noVars.slice(-80));
     check("elision + empty vars gives fallback hint", noVars.includes("No REPL vars yet"), noVars.slice(-80));
     const skipped = formatReplOutputs([{
       stdout: "boom", stderr: "", finalAnswer: null, answerContent: "",
-      edits: [], raised: true, executionTimeMs: 0, varNames: [],
+      raised: true, executionTimeMs: 0, varNames: [],
     }], 2);
     check("M2: skipped later block note is included", skipped.includes("2 later") && skipped.includes("skipped"), skipped);
   }

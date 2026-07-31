@@ -66,6 +66,8 @@ export class SubcallStore extends EmitterListener {
       sc.tokens += event.tokens;
       this.totalTokens += event.tokens;
     }
+    if (event.failedCount !== undefined) sc.failedCount = event.failedCount;
+    if (event.totalCount !== undefined) sc.totalCount = event.totalCount;
   }
 
   // ── Read ──

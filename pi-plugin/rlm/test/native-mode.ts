@@ -6,18 +6,13 @@
  * and ReplDetails type structure.
  */
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { check, fail, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
 import { formatForLLM } from "../src/context/repomix-context.ts";
 import { buildNativeSystemPrompt } from "../src/prompts/system.ts";
-import { buildReplResultText, surfaceReplEdits } from "../src/tool/repl-tool.ts";
-import { createApplyEditsTool, diffStats } from "../src/tool/apply-edits-tool.ts";
-import { EditRegistry } from "../src/registry/edit-registry.ts";
+import { buildReplResultText, collectReplWarnings } from "../src/tool/repl-tool.ts";
 import type { ContextBundle } from "../src/context/repomix-context.ts";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { RlmSubcall } from "../src/tool/rlm-details.ts";
 
 
 // ── formatForLLM tests ──
@@ -65,88 +60,45 @@ function testNativeSystemPrompt() {
   check("buildNativeSystemPrompt — mentions orchestrator", prompt.includes("orchestrator, not a solver"));
   check("buildNativeSystemPrompt — mentions chunking", prompt.includes("chunk_size"));
   check("buildNativeSystemPrompt — mentions answer dict", prompt.includes("answer[\"ready\"]"));
-  check("buildNativeSystemPrompt — mentions apply_edits", prompt.includes("apply_edits({ ids"));
-  check("buildNativeSystemPrompt — no stale edit relay", !prompt.includes("relay STAGED_EDITS to `edit`"));
+  check("buildNativeSystemPrompt — authoring rule", prompt.includes("AUTHORING RULE"));
+  check("buildNativeSystemPrompt — native edit", prompt.includes("`edit`"));
+  check("buildNativeSystemPrompt — no stage_edit", !prompt.includes("stage_edit"));
+  check("buildNativeSystemPrompt — no apply_edits", !prompt.includes("apply_edits"));
   check("buildNativeSystemPrompt — mentions native tools", prompt.includes("zebra-mcp"));
 }
 
-function testStagedEditSurfacing() {
-  const edits = Object.freeze([{ id: "e1", path: "a.ts", oldText: "old", newText: "new" }]);
-  check("surfaceReplEdits — successful exec exposes staged edits", surfaceReplEdits(edits, false) === edits);
-  check("surfaceReplEdits — raised exec discards staged edits", surfaceReplEdits(edits, true) === undefined);
-  check("surfaceReplEdits — empty edits stay hidden", surfaceReplEdits(Object.freeze([]), false) === undefined);
-}
-
 function testAnswerSubmittedSummary() {
-  const result = buildReplResultText("stdout", "final answer", Object.freeze([]), false, []);
+  const result = buildReplResultText("stdout", "final answer", []);
   check("buildReplResultText — final answer by reference", result.text.includes("ANSWER_SUBMITTED (12 chars)"));
   check("buildReplResultText — final answer content hidden", !result.text.includes("final answer"));
 }
 
-function contextFor(cwd: string): ExtensionContext {
-  return {
-    ui: undefined as unknown as ExtensionContext["ui"],
-    mode: "tui",
-    hasUI: false,
-    cwd,
-    sessionManager: undefined as unknown as ExtensionContext["sessionManager"],
-    modelRegistry: undefined as unknown as ExtensionContext["modelRegistry"],
-    model: undefined,
-    isIdle: () => true,
-    isProjectTrusted: () => false,
-    signal: undefined,
-    abort: () => {},
-    hasPendingMessages: () => false,
-    shutdown: () => {},
-    getContextUsage: () => undefined,
-    compact: () => {},
-    getSystemPrompt: () => "",
-  };
-}
+function testCollectReplWarnings() {
+  const ok: readonly RlmSubcall[] = Object.freeze([
+    { id: "s1", depth: 0, kind: "llm", label: "a", status: "done", startedAt: 0, costUsd: 0, tokens: 0 },
+  ]);
+  check("collectReplWarnings — none when all ok", collectReplWarnings(ok) === undefined);
 
-async function testApplyEditsTool() {
-  const cwd = await mkdtemp(join(tmpdir(), "rlm-apply-edits-"));
-  try {
-    const registry = new EditRegistry();
-    const tool = createApplyEditsTool(registry);
-    const ctx = contextFor(cwd);
+  const mixed: readonly RlmSubcall[] = Object.freeze([
+    { id: "s1", depth: 0, kind: "llm", label: "a", status: "done", startedAt: 0, costUsd: 0, tokens: 0 },
+    { id: "s2", depth: 0, kind: "llm", label: "b", status: "error", startedAt: 0, costUsd: 0, tokens: 0 },
+  ]);
+  const w = collectReplWarnings(mixed);
+  check("collectReplWarnings — single error is 1/1", w !== undefined && w[0] === "1/1 sub-call(s) failed — results may be incomplete");
 
-    await writeFile(join(cwd, "a.ts"), "const value = 'old';\n", "utf8");
-    registry.registerAll([{ id: "e1", path: "a.ts", oldText: "old", newText: "new" }]);
-    const success = await tool.execute("apply-1", { ids: ["e1"] }, undefined, undefined, ctx);
-    const updated = await readFile(join(cwd, "a.ts"), "utf8");
-    check("apply_edits — applies known id", success.details?.status === "done" && updated.includes("new"));
-    check("apply_edits — reports applied file stats", success.details?.appliedCount === 1 && success.details.fileStats[0]?.status === "applied");
-    check("apply_edits — reports line stats", success.details?.fileStats[0]?.added === 0 && success.details.fileStats[0]?.removed === 0);
-    check("apply_edits — deletes applied id", registry.get("e1") === undefined);
-
-    const unknown = await tool.execute("apply-2", { ids: ["missing"] }, undefined, undefined, ctx);
-    check("apply_edits — unknown id fails softly", unknown.details?.status === "error" && unknown.details.errors[0]?.id === "missing");
-    check("apply_edits — unknown id reports failed file stats", unknown.details?.failedCount === 1 && unknown.details.fileStats[0]?.status === "failed");
-
-    await writeFile(join(cwd, "b.ts"), "old old\n", "utf8");
-    registry.registerAll([{ id: "e2", path: "b.ts", oldText: "old", newText: "new" }]);
-    const mismatch = await tool.execute("apply-3", { ids: ["e2"] }, undefined, undefined, ctx);
-    check("apply_edits — duplicate anchor rejected", mismatch.details?.status === "error" && mismatch.details.errors[0]?.error.includes("anchor occurs 2"));
-    check("apply_edits — rejected id remains registered", registry.get("e2") !== undefined);
-
-    registry.registerAll([{ id: "e3", path: "created.ts", oldText: "", newText: "export const created = true;\n" }]);
-    const created = await tool.execute("apply-4", { ids: ["e3"] }, undefined, undefined, ctx);
-    const createdContent = await readFile(join(cwd, "created.ts"), "utf8");
-    check("apply_edits — creates files from empty anchor", created.details?.status === "done" && createdContent.includes("created = true"));
-    check("apply_edits — create file reports added lines", created.details?.fileStats[0]?.added === 2 && created.details.fileStats[0]?.removed === 0);
-    check("apply_edits — deletes create-file id", registry.get("e3") === undefined);
-
-    const added = diffStats("one\n", "one\ntwo\n");
-    const removed = diffStats("one\ntwo\n", "one\n");
-    check("apply_edits — diffStats counts added lines", added.added === 1 && added.removed === 0);
-    check("apply_edits — diffStats counts removed lines", removed.added === 0 && removed.removed === 1);
-
-    registry.clear();
-    check("EditRegistry — clear removes unapplied ids", registry.get("e2") === undefined);
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
+  // Batch subcall: 3 of 8 prompts failed — must report real counts, not 1/1.
+  const batch: readonly RlmSubcall[] = Object.freeze([
+    {
+      id: "s1", depth: 0, kind: "batch", label: "llm_query ×8", status: "error",
+      startedAt: 0, costUsd: 0, tokens: 0, failedCount: 3, totalCount: 8,
+    },
+  ]);
+  const bw = collectReplWarnings(batch);
+  check(
+    "collectReplWarnings — batch reports real prompt counts",
+    bw !== undefined && bw[0] === "3/8 sub-call(s) failed — results may be incomplete",
+    bw?.[0],
+  );
 }
 
 // ── SandboxManager tests ──
@@ -180,24 +132,13 @@ async function testSandboxManager() {
   const r2 = await mgr.exec("print(x)");
   check("SandboxManager — REPL state persists across calls", r2.stdout.includes("42"));
 
-  // propose_diff was removed from the namespace — calling it raises NameError.
-  const r3 = await mgr.exec("print(callable(propose_diff))");
-  check("SandboxManager — propose_diff removed from namespace (NameError)", r3.raised && r3.stderr.includes("NameError"));
+  // stage_edit was removed — calling it raises NameError.
+  const gone = await mgr.exec("print(stage_edit)");
+  check("SandboxManager — stage_edit removed (NameError)", gone.raised && gone.stderr.includes("NameError"));
 
-  // stage_edit records exact edit payloads and clears them after each exec.
-  const staged = await mgr.exec([
-    "print(stage_edit('test.ts', 'old', 'new'))",
-    "print(stage_edit('bar.ts', 'a', 'b'))",
-  ].join("\n"));
-  const expectedEdits = JSON.stringify([
-    { id: "e1", path: "test.ts", oldText: "old", newText: "new" },
-    { id: "e2", path: "bar.ts", oldText: "a", newText: "b" },
-  ]);
-  check("SandboxManager — stage_edit returns edit IDs", staged.stdout.includes("e1") && staged.stdout.includes("e2"));
-  check("SandboxManager — stage_edit returns edits", JSON.stringify(staged.edits) === expectedEdits);
-
-  const cleared = await mgr.exec("print('no edits staged')");
-  check("SandboxManager — stage_edit clears after return", cleared.edits.length === 0);
+  // Core surface still present (context is only set after loadContext)
+  const alive = await mgr.exec("print(callable(llm_query), callable(SHOW_VARS), callable(load_library))");
+  check("SandboxManager — core REPL surface intact", !alive.raised && alive.stdout.includes("True True True"));
 
   // Idempotent dispose
   await mgr.dispose();
@@ -217,17 +158,9 @@ async function main() {
   console.log("\n─── buildNativeSystemPrompt ───");
   testNativeSystemPrompt();
 
-  console.log("\n─── Staged edit surfacing ───");
-  testStagedEditSurfacing();
+  console.log("\n─── Result text / warnings ───");
   testAnswerSubmittedSummary();
-
-  console.log("\n─── apply_edits ───");
-  try {
-    await testApplyEditsTool();
-  } catch (err) {
-    console.error("apply_edits tests failed:", err instanceof Error ? err.message : String(err));
-    fail();
-  }
+  testCollectReplWarnings();
 
   console.log("\n─── SandboxManager ───");
   try {

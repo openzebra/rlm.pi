@@ -28,10 +28,14 @@ import { formatError } from "../util/errors.ts";
 
 /** Result of a host-side library pack requested by `load_library`. */
 export interface LibraryLoadResult {
-  readonly payload: unknown;     // string (single file) or ContextFile[] (packed dir/repo)
-  readonly index: number;        // slot assigned by the host
+  readonly payload: unknown;     // always ContextFile[] under lib/<id>/
+  readonly index: number;        // resume-sidecar index (not a REPL var name); -1 if alreadyLoaded
   readonly files?: number;
   readonly chars: number;
+  readonly sourceId: string;
+  readonly pathPrefix: string;
+  /** Host already has this library — no pack, no sidecar, empty payload. */
+  readonly alreadyLoaded?: boolean;
 }
 
 /** Handlers the bridge installs to service sub-LLM interrupts. Return the reply payload. */
@@ -64,6 +68,11 @@ export interface SandboxOptions {
   readonly initTimeoutMs?: number;
   /** Sub-LLM prompt cap (chars) — sizes llm_query_chunked chunks inside the worker. */
   readonly maxPromptChars?: number;
+  /**
+   * When true, the worker rejects open() write modes (pipeline read-only runs).
+   * Native repl() data work leaves this false so scratch-file writes still work.
+   */
+  readonly readOnly?: boolean;
 }
 
 const WORKER_PATH = join(dirname(fileURLToPath(import.meta.url)), "worker.py");
@@ -131,6 +140,9 @@ export class PythonSandbox {
     ];
     if (opts.maxPromptChars !== undefined) {
       workerArgs.push("--max-prompt-chars", String(opts.maxPromptChars));
+    }
+    if (opts.readOnly) {
+      workerArgs.push("--read-only");
     }
     this.proc = spawn(
       python,
@@ -212,7 +224,6 @@ export class PythonSandbox {
       stderr: res.stderr ?? "",
       finalAnswer: res.final_answer ?? null,
       answerContent: res.answer_content ?? "",
-      edits: res.edits ?? [],
       raised: res.raised ?? false,
       executionTimeMs: Math.round((res.execution_time ?? 0) * 1000),
       varNames: res.var_names ?? [],
@@ -299,7 +310,7 @@ export class PythonSandbox {
 
   /**
    * Refresh the parent-side request watchdog for every pending request.
-   * Used during long mid-exec work (e.g. serial implement fanout) that does not
+   * Used during long mid-exec work that does not
    * produce additional worker interrupts on this sandbox.
    */
   refreshWatchdog(): void {
@@ -381,11 +392,31 @@ export class PythonSandbox {
         this.reply(msg.rid, { response });
       } else if (msg.type === "load_library") {
         const lib = await h.loadLibrary(msg.source ?? "", d);
-        const isJson = typeof lib.payload !== "string";
-        const path = await this.writeContextFile(lib.payload, isJson);
-        // Worker reads then unlinks (worker._load_library). Host must not unlink here —
-        // if the worker is SIGKILLed before os.remove, the temp file leaks in tmpdir (acceptable).
-        this.reply(msg.rid, { path, json: isJson, index: lib.index, files: lib.files, chars: lib.chars });
+        if (lib.alreadyLoaded) {
+          // No temp file — worker short-circuits on already_loaded.
+          this.reply(msg.rid, {
+            already_loaded: true,
+            index: lib.index,
+            files: 0,
+            chars: lib.chars,
+            source_id: lib.sourceId,
+            path_prefix: lib.pathPrefix,
+          });
+        } else {
+          const isJson = typeof lib.payload !== "string";
+          const path = await this.writeContextFile(lib.payload, isJson);
+          // Worker reads then unlinks (worker._load_library). Host must not unlink here —
+          // if the worker is SIGKILLed before os.remove, the temp file leaks in tmpdir (acceptable).
+          this.reply(msg.rid, {
+            path,
+            json: isJson,
+            index: lib.index,
+            files: lib.files,
+            chars: lib.chars,
+            source_id: lib.sourceId,
+            path_prefix: lib.pathPrefix,
+          });
+        }
       }
     } catch (err) {
       this.reply(msg.rid, { error: err instanceof Error ? err.message : String(err) });
@@ -401,6 +432,9 @@ export class PythonSandbox {
     index?: number;
     files?: number;
     chars?: number;
+    source_id?: string;
+    path_prefix?: string;
+    already_loaded?: boolean;
     error?: string;
   }): void {
     if (!this.disposed) this.send({ type: "llm_reply", rid, ...body });

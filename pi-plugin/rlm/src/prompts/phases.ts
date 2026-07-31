@@ -3,7 +3,6 @@
  * Injected at each phase boundary; the only channel between phases is durable
  * artifacts under .rlm/artifacts/.
  */
-import type { PhaseRecord } from "../core/gates.ts";
 import type { Phase } from "../core/pipeline.ts";
 
 const CLARIFY_GUIDANCE = Object.freeze([
@@ -48,7 +47,7 @@ const RESEARCH_GUIDANCE = Object.freeze([
   "Probe the repository, delegate long reads via `llm_query_batched` / `llm_query_chunked`.",
   "Every factual claim about the code MUST be cited as `path/file.ext:LINE` (or `LINE-LINE`).",
   "The engine VERIFIES citations against the working tree — unbacked citations reject advance.",
-  "When research is complete, write ONE research document and call:",
+  "When research is complete, write ONE research document with a `## Findings` section and call:",
   '  `save_artifact("research", content)`  # frontmatter must include `status: ready`',
   '  `advance_phase("blueprint", summary)`',
   "Do not implement code in this phase.",
@@ -59,39 +58,37 @@ const BLUEPRINT_GUIDANCE = Object.freeze([
   "Read the clarifications artifact (if present) and plan only within recorded Decisions;",
   "Open Questions that would block the design must be re-asked via ask_user_question, not assumed.",
   'Produce ONE plan document and save it with `save_artifact("plan", content)`.',
+  "This pipeline is read-only: it produces a plan a human or a native-mode agent executes;",
+  "do not write source files here (sandbox write modes are blocked).",
+  "Write changes as exact, copy-pasteable before/after code — never as prose instructions.",
   "The ENGINE derive-checks the document — these are hard gates, not suggestions:",
   "- frontmatter: `status: ready`, `phase_count: N`, `phases: [{n: 1, title: ...}, ...]`",
   "- `phases:` / `phase_count` MUST match the `## Phase N:` body headings exactly (fenced examples ignored)",
   "- every `file:line` citation MUST resolve against the working tree at this revision",
   "Each `## Phase N: <title>` section contains:",
-  "- `### Changes Required` — per file: path + exact intended change (code from research)",
+  "- `### Changes Required` — per file: path + the exact intended change",
   "- `### Success Criteria` — `#### Automated Verification:` (runnable commands) and",
   "  `#### Manual Verification:` checklists",
-  "Phases are executed by ISOLATED workers, one at a time, in order: each phase must be",
-  "independently implementable, leave the tree working, and never share a file with a",
-  "later phase unless that phase only EDITS what an earlier phase CREATED.",
-  'When ready: `advance_phase("implement", summary)` — the engine runs implement fanout itself.',
-].join("\n"));
-
-const IMPLEMENT_GUIDANCE = Object.freeze([
-  "## Implement phase",
-  "The engine drives serial child-RLM workers over each plan phase — you do not implement",
-  "here. If you were re-entered into implement unexpectedly, call",
-  '`advance_phase("validate")` only after the fanout has already completed.',
+  "Phases must be independently implementable in order, each leaving the tree working.",
+  'When ready: `advance_phase("validate", summary)`.',
 ].join("\n"));
 
 const VALIDATE_GUIDANCE = Object.freeze([
-  "## Validate phase",
+  "## Validate phase (adversarial plan review)",
+  "Nothing has been implemented — you are reviewing the PLAN, not a diff.",
   "Read the goal artifact (verbatim brief), the clarifications artifact (recorded Decisions),",
-  "and the plan. Check each phase's Success Criteria against the working tree.",
-  "Exclude paths listed in the baseline JSON (pre-existing dirt).",
-  "Open Questions are not silently resolved — a blocking one surfaces via ask_user_question.",
-  "Write ONE validation document via `save_artifact(\"validation\", content)` with frontmatter:",
+  "and the plan. For each plan phase check against the working tree:",
+  "- every cited `file:line` still resolves and says what the plan claims",
+  "- every file the phase edits exists (or is created by an earlier phase)",
+  "- no phase contradicts a recorded Decision or silently resolves an Open Question",
+  "- the Success Criteria are actually runnable and actually prove the change",
+  "- phases are independently implementable in the stated order",
+  "Write ONE review via `save_artifact(\"validation\", content)` with frontmatter:",
   "- `status: ready`",
-  "- `blockers_count: <int ≥ 0>`  # MEASURED — routing key; not prose",
+  "- `blockers_count: <int >= 0>`  # MEASURED — routing key; not prose",
   "- `verdict: pass | fail`  # pass requires blockers_count === 0",
   "Each blocker needs a resolvable `file:line` citation.",
-  "Then finalize: `answer[\"content\"] = <report>; answer[\"ready\"] = True`.",
+  "Then finalize: `answer[\"content\"] = <the reviewed plan + review summary>; answer[\"ready\"] = True`.",
   "If `blockers_count > 0`, the engine re-enters blueprint (bounded by maxBackwardJumps).",
 ].join("\n"));
 
@@ -99,27 +96,9 @@ const GUIDANCE: Readonly<Record<Phase, string>> = Object.freeze({
   clarify: CLARIFY_GUIDANCE,
   research: RESEARCH_GUIDANCE,
   blueprint: BLUEPRINT_GUIDANCE,
-  implement: IMPLEMENT_GUIDANCE,
   validate: VALIDATE_GUIDANCE,
 });
 
 export function phaseGuidance(phase: Phase): string {
   return GUIDANCE[phase];
-}
-
-/** Single-phase implement prompt for an isolated child RLM (serial fanout unit). */
-export function buildImplementPhasePrompt(planPath: string, r: PhaseRecord): string {
-  return [
-    `Implement ONLY Phase ${r.n} (${r.title}) of the plan at ${planPath} (${r.index + 1}/${r.total}).`,
-    `Read the plan from the REPL (open("${planPath}").read()).`,
-    "Hard rules (you are one unit of a sequenced run):",
-    "- CRITICAL: `context` is a STALE snapshot from run start. Always `open(path).read()` any file",
-    "  you will edit BEFORE computing stage_edit anchors — earlier phases may have already changed them.",
-    "- Touch ONLY the files this phase's ### Changes Required lists.",
-    "- Earlier phases have already landed; a missing prerequisite file is a HARD ERROR —",
-    "  finalize with 'Error: prerequisite missing: <path>' instead of creating it.",
-    "- Stage every change via stage_edit(path, old_text, new_text); never defer your own edits.",
-    "- Run only THIS phase's '#### Automated Verification:' commands; whole-plan checks are validate's job.",
-    `Finalize with a short summary of what landed for Phase ${r.n}.`,
-  ].join("\n");
 }

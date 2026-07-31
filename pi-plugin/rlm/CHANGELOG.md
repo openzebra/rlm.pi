@@ -7,22 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+#### `load_library` appends into `context` (breaking)
+
+- **`load_library(source)`** no longer creates `context_1` / `context_2` slots. Packed files are
+  **appended into the single `context` list** under namespaced paths `lib/<source_id>/…`.
+- Return value is metadata only:
+  `{"source", "source_id", "path_prefix", "files", "chars", "context_len", "already_loaded"}`
+  (or an `"Error: …"` string). Do not iterate the return value as files.
+- Single-file sources become one `context` entry (not a bare string payload).
+- Re-loading the same library is **idempotent** (prefix check).
+- Resume still uses `context.<N>.json` sidecars, but merges them back into `context` on restore.
+- System / native prompts updated so the agent always searches `context`.
+
+#### Remove `stage_edit` / `apply_edits` — native edit only (breaking)
+
+- **`stage_edit`** removed from the Python sandbox. File changes go through Pi's native
+  `edit` / `write` tools only.
+- **`apply_edits` tool**, `EditRegistry`, and `text/edits.ts` deleted.
+- Native prompts require the root agent to **author** edit bodies itself; sub-LLMs read only.
+
+#### Pipeline is read-only — drop implement phase (breaking)
+
+- Phase graph is now **`clarify → research → blueprint → validate`**.
+- Serial implement fanout and plugin-owned write path removed.
+- Validate is adversarial **plan** review (not a post-diff check).
+- Legacy trails with `phase: "implement"` resume at `blueprint` via `reconcilePhase`.
+- Sandbox write modes are blocked during pipeline runs (`open` / `pathlib` / `os.open`) —
+  steering against accidental writes, not a hard security boundary.
+
+### Added
+
+- **Preflight artifact critique** on `save_artifact`: same gate as `advance_phase`, with
+  `BLOCKER:` / `warning:` lines and advisory checks (Success Criteria, Open Questions, Findings).
+- **Append-only artifacts on validate loop-back**: superseded blueprint refs kept for context;
+  a fresh `save_artifact` is still required to re-pass the gate.
+- **Warnings channel** on `ReplDetails` / `RlmDetails` (e.g. partial sub-call failures).
+- Aggregate **`bun run test`** smoke harness (`test/smoke.ts`).
+
 ## [0.1.8] - 2026-07-19
 
 ### Added
 
 #### External library context
 
-- **`load_library(source)`** — agent-driven extra context slots for external libraries, docs, or
-  other source trees mid-run. Sources:
-  - local directory → repomix-packed `list[dict]` (same shape as repo `context`)
-  - single file path → plain `str`
-  - `https://` or `git@` URL → shallow clone (`--depth 1`), then pack
-- Result lands in `context_1`, `context_2`, … (`context` / `context_0` remains the repo).
-  Returns `{"index", "var", "files", "chars"}` or an `"Error: …"` string.
-- Shared host handler for headless engine and native `repl()` (no duplicated bridge logic);
-  slot indices assigned on the host so resume sidecars are deterministic.
-- Headless resume restores library slots from `context.<N>.json` / `context.<N>.txt` sidecars.
+- **`load_library(source)`** — agent-driven external libraries, docs, or other source trees mid-run.
+  Sources: local directory (repomix-packed), single file, or `https://` / `git@` shallow clone.
+- Shared host handler for headless engine and native `repl()` (no duplicated bridge logic).
+- Headless resume restores library sidecars from `context.<N>.json` / `context.<N>.txt`.
 - Config toggle **Library loader** (`libraryLoader`, default on) in `/rlm-config`.
 
 #### Artifact-gated pipeline

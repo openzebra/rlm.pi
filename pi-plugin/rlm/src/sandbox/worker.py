@@ -57,8 +57,44 @@ _SAFE_BUILTINS = {
         "ArithmeticError", "ZeroDivisionError", "LookupError", "Warning", "True", "False", "None",
     )
 }
-# `open` is allowed (data work needs files); eval/exec/compile/input/globals/locals are not.
-_SAFE_BUILTINS["open"] = open
+# `open` is allowed for data work; eval/exec/compile/input/globals/locals are not.
+# When read_only=True (pipeline runs), write modes raise PermissionError via
+# builtins.open, io.open (pathlib), and os.open. Steering, not a security sandbox.
+_WRITE_MODE_CHARS = frozenset("wax+")
+_OS_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
+
+_REAL_IO_OPEN = io.open
+_REAL_OS_OPEN = os.open
+
+
+def _install_read_only_guards():
+    """Route every common file-open path through the read-only check.
+
+    Steering, not a sandbox: closes builtins.open, io.open (hence pathlib), and
+    os.open. A determined model can still reach the filesystem via ctypes or a
+    subprocess — the goal is that ACCIDENTAL writes cannot pass silently.
+    Worker-internal I/O keeps using _REAL_IO_OPEN / _REAL_OS_OPEN.
+    """
+    def guarded_io_open(file, mode="r", *args, **kwargs):
+        if _WRITE_MODE_CHARS & set(str(mode)):
+            raise PermissionError(
+                f"read-only RLM run: refusing to open {file!r} with mode {mode!r}. "
+                "This pipeline produces a plan; file changes go through the host edit tool."
+            )
+        return _REAL_IO_OPEN(file, mode, *args, **kwargs)
+
+    def guarded_os_open(path, flags, *args, **kwargs):
+        if flags & _OS_WRITE_FLAGS:
+            raise PermissionError(
+                f"read-only RLM run: refusing os.open({path!r}) with write flags."
+            )
+        return _REAL_OS_OPEN(path, flags, *args, **kwargs)
+
+    io.open = guarded_io_open
+    os.open = guarded_os_open
+    return guarded_io_open
+
+
 for _blocked in ("eval", "exec", "compile", "input", "globals", "locals"):
     _SAFE_BUILTINS[_blocked] = None
 
@@ -68,11 +104,12 @@ RESERVED = frozenset(
         "rlm_query", "rlm_query_batched",
         "advance_phase", "save_artifact",
         "ask_user_question", "todo",
-        "stage_edit", "load_library",
+        "load_library",
         "SHOW_VARS", "answer", "context",
     }
 )
-_CONTEXT_SLOT = re.compile(r"context(_\d+)?\Z")
+# Only the single name `context` is the packed world. Legacy context_N names are filtered out.
+_CONTEXT_NAME = re.compile(r"context(_\d+)?\Z")
 
 # Sizing for llm_query_chunked: leave room for the instruction and the chunk header.
 _CHUNK_HEADER_OVERHEAD = 64
@@ -118,21 +155,24 @@ def _send(obj: dict[str, Any]) -> None:
 
 
 class Worker:
-    def __init__(self, depth: int, exec_timeout_s: float, max_prompt_chars: int):
+    def __init__(self, depth: int, exec_timeout_s: float, max_prompt_chars: int, read_only: bool = False):
         self.depth = depth
         self.exec_timeout_s = exec_timeout_s
         self.max_prompt_chars = max_prompt_chars
+        self.read_only = read_only
         self._rid = 0
         self._final_answer: str | None = None
-        self._context_count = 0
         self.ns: dict[str, Any] = {}
         self._setup()
 
     def _setup(self) -> None:
-        self.ns = {"__builtins__": _SAFE_BUILTINS.copy(), "__name__": "__main__"}
-        self._ctx_payloads: dict[int, Any] = {}
-        self._staged_edits: list[dict[str, str]] = []
-        self._edit_counter = 0
+        builtins = _SAFE_BUILTINS.copy()
+        if self.read_only:
+            builtins["open"] = _install_read_only_guards()
+        else:
+            builtins["open"] = open
+        self.ns = {"__builtins__": builtins, "__name__": "__main__"}
+        self._context_payload: Any | None = None  # pristine restore for the single `context` var
         self._nudged: set[str] = set()
         self._restore_scaffold()
 
@@ -151,7 +191,6 @@ class Worker:
         ns["save_artifact"] = self._save_artifact
         ns["ask_user_question"] = self._ask_user_question
         ns["todo"] = self._todo
-        ns["stage_edit"] = self._stage_edit
         ns["load_library"] = self._load_library
         ns["SHOW_VARS"] = self._show_vars
         if not isinstance(ns.get("answer"), _AnswerDict):
@@ -163,17 +202,18 @@ class Worker:
                 if cur.get("ready") and self._final_answer is None:
                     self._final_answer = str(cur.get("content", ""))
             ns["answer"] = ans
-        # Context slots are ordinary variables (RLM paper: the context lives in the
-        # environment and the model may transform it in place). Re-inject only if the
-        # model deleted the name entirely; mutations and re-binds persist within the run.
-        # Resume reloads pristine context; keep derived resume-critical values in user vars.
-        for idx, payload in self._ctx_payloads.items():
-            ns.setdefault(f"context_{idx}", payload)
-        if 0 in self._ctx_payloads:
-            ns.setdefault("context", self._ctx_payloads[0])
+        # Single context variable (RLM paper: the context lives in the environment and
+        # the model may transform it in place). Re-inject only if the model deleted the
+        # name entirely; mutations and re-binds persist within the run.
+        if self._context_payload is not None:
+            ns.setdefault("context", self._context_payload)
+        # Scrub any legacy context_N names so the model never sees multi-slot APIs.
+        for k in list(ns.keys()):
+            if k != "context" and _CONTEXT_NAME.match(k):
+                del ns[k]
 
     def _user_var_names(self) -> list[str]:
-        """User-created variable names — filters builtins, scaffold, and context slots.
+        """User-created variable names — filters builtins, scaffold, and `context`.
 
         Shared by SHOW_VARS() and the exec result so both expose the same namespace view.
         This is the cheap orientation hint that goes into history instead of full stdout.
@@ -181,7 +221,7 @@ class Worker:
         return [
             k for k in self.ns
             if not k.startswith("_")
-            and not _CONTEXT_SLOT.match(k)
+            and not _CONTEXT_NAME.match(k)
             and k not in RESERVED
         ]
 
@@ -325,37 +365,124 @@ class Worker:
             return f"Error: {r['error']}"
         return str(r.get("response", "ok"))
 
-    def _stage_edit(self, path: str, old_text: str, new_text: str) -> str:
-        if not isinstance(path, str) or not isinstance(old_text, str) or not isinstance(new_text, str):
-            return "Error: path, old_text, new_text must be strings"
-        self._edit_counter += 1
-        edit_id = f"e{self._edit_counter}"
-        self._staged_edits.append({"id": edit_id, "path": path, "oldText": old_text, "newText": new_text})
-        return edit_id
-
     def _load_library(self, source: str) -> dict[str, Any] | str:
-        """Ask the host to pack an external dir/file/git-URL and load it as a new context slot."""
+        """Pack an external dir/file/git-URL on the host and append it into `context`.
+
+        Paths are namespaced under lib/<source_id>/ (host). Content is always in the
+        single `context` list — never a new context_N variable.
+        Host-side idempotency may return already_loaded without a payload path.
+        """
         r = self._rpc("load_library", {"source": str(source)})
         if r.get("error"):
             return f"Error: {r['error']}"
+        if r.get("already_loaded"):
+            source_id = r.get("source_id") if isinstance(r.get("source_id"), str) else "lib"
+            path_prefix = r.get("path_prefix") if isinstance(r.get("path_prefix"), str) else f"lib/{source_id}/"
+            ctx = self.ns.get("context")
+            ctx_len = len(ctx) if isinstance(ctx, list) else 0
+            print(
+                f"[rlm] load_library: already loaded {source_id} "
+                f"(paths under {path_prefix}, context len={ctx_len})"
+            )
+            return {
+                "source": str(source),
+                "source_id": source_id,
+                "path_prefix": path_prefix,
+                "files": 0,
+                "chars": r.get("chars"),
+                "context_len": ctx_len,
+                "already_loaded": True,
+            }
         path = r.get("path")
         if not isinstance(path, str):
             return "Error: malformed load_library reply (no path)"
         try:
-            idx = self.load_context(path, r.get("index"), bool(r.get("json")))
+            # Worker-internal read — use real io.open so read-only guards never block us.
+            with _REAL_IO_OPEN(path, "r") as f:
+                payload = json.load(f) if r.get("json") else f.read()
         finally:
             try:
                 os.remove(path)  # worker owns temp-file cleanup (host does NOT unlink)
             except OSError:
                 pass
-        return {"index": idx, "var": f"context_{idx}",
-                "files": r.get("files"), "chars": r.get("chars")}
+        return self._append_library(str(source), payload, r)
+
+    def _append_library(self, source: str, payload: Any, meta: dict[str, Any]) -> dict[str, Any] | str:
+        """Append host-packed library files into `context` (idempotent by path prefix)."""
+        ctx = self.ns.get("context")
+        if not isinstance(ctx, list):
+            kind = type(ctx).__name__ if ctx is not None else "None"
+            return f"Error: load_library requires list context (file bundle); got {kind}"
+
+        source_id = meta.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            source_id = "lib"
+        path_prefix = meta.get("path_prefix")
+        if not isinstance(path_prefix, str) or not path_prefix:
+            path_prefix = f"lib/{source_id}/"
+
+        # Idempotent: already present if any path uses this library prefix.
+        for item in ctx:
+            if isinstance(item, dict) and str(item.get("path", "")).startswith(path_prefix):
+                print(
+                    f"[rlm] load_library: already loaded {source_id} "
+                    f"(paths under {path_prefix}, context len={len(ctx)})"
+                )
+                return {
+                    "source": source,
+                    "source_id": source_id,
+                    "path_prefix": path_prefix,
+                    "files": 0,
+                    "chars": meta.get("chars"),
+                    "context_len": len(ctx),
+                    "already_loaded": True,
+                }
+
+        files = self._library_file_entries(payload, path_prefix)
+        if not files:
+            return "Error: load_library produced no files"
+
+        ctx.extend(files)
+        # Keep restore payload in sync with the live list.
+        self._context_payload = ctx
+        self.ns["context"] = ctx
+
+        print(
+            f"[rlm] load_library: +{len(files)} files into context "
+            f"(len={len(ctx)}); paths under {path_prefix}"
+        )
+        return {
+            "source": source,
+            "source_id": source_id,
+            "path_prefix": path_prefix,
+            "files": len(files),
+            "chars": meta.get("chars"),
+            "context_len": len(ctx),
+            "already_loaded": False,
+        }
+
+    @staticmethod
+    def _library_file_entries(payload: Any, path_prefix: str) -> list[dict[str, Any]]:
+        """Normalize host payload to list[dict]. Host already namespaces; string is fallback."""
+        if isinstance(payload, str):
+            return [{
+                "path": f"{path_prefix}content",
+                "content": payload,
+                "tokens": max(1, (len(payload) + 3) // 4),
+            }]
+        if not isinstance(payload, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for item in payload:
+            if isinstance(item, dict) and "path" in item and "content" in item:
+                out.append(item)
+        return out
 
     def _advance_phase(self, phase: str, summary: str | None = None) -> str:
         """Transition the root RLM pipeline to a new phase.
 
         Only callable at depth 0. The parent handler validates the transition
-        against the phase state machine (research → blueprint → implement → validate)
+        against the phase state machine (research → blueprint → validate)
         and runs deterministic artifact gates before accepting the transition.
         Returns a short confirmation, or an `Error: …` string the model can act on.
         """
@@ -400,16 +527,20 @@ class Worker:
     # ---- context + execution --------------------------------------------------------------
 
     def load_context(self, path: str, index: int | None = None, is_json: bool = False) -> int:
-        if index is None:
-            index = self._context_count
+        """Load the packed world into the single REPL variable `context`.
+
+        `index` is accepted for protocol compatibility but ignored — there is only
+        one context slot. Libraries are merged on the host (or via load_library).
+        """
         with open(path, "r") as f:
             payload = json.load(f) if is_json else f.read()
-        self._ctx_payloads[index] = payload
-        self.ns[f"context_{index}"] = payload
-        if index == 0:
-            self.ns["context"] = payload
-        self._context_count = max(self._context_count, index + 1)
-        return index
+        self._context_payload = payload
+        self.ns["context"] = payload
+        # Drop legacy multi-slot names if present.
+        for k in list(self.ns.keys()):
+            if k != "context" and _CONTEXT_NAME.match(k):
+                del self.ns[k]
+        return 0
 
     @contextmanager
     def _capture(self):
@@ -471,7 +602,6 @@ class Worker:
                 stdout = out.getvalue()
                 stderr = err.getvalue() + f"\n{type(e).__name__}: {e}\n" + traceback.format_exc()
         final, self._final_answer = self._final_answer, None
-        edits, self._staged_edits = self._staged_edits, []
         answer = self.ns.get("answer")
         answer_content = answer.get("content", "") if isinstance(answer, dict) else ""
         # ready may have been flipped with empty content before content was assigned later
@@ -488,7 +618,6 @@ class Worker:
             "stderr": stderr,
             "final_answer": final,
             "answer_content": str(answer_content),
-            "edits": edits,
             "raised": raised,
             "execution_time": time.perf_counter() - start,
             "var_names": self._user_var_names(),
@@ -512,7 +641,7 @@ class Worker:
         out, skipped = {}, []
         MAX_VAR_BYTES = 50 * 1024 * 1024
         for k, v in self.ns.items():
-            if k.startswith("_") or _CONTEXT_SLOT.match(k) or k in RESERVED or k == "__builtins__":
+            if k.startswith("_") or _CONTEXT_NAME.match(k) or k in RESERVED or k == "__builtins__":
                 continue
             try:
                 blob = s.dumps(v)
@@ -525,7 +654,7 @@ class Worker:
         if skipped:
             print(f"[rlm-sandbox] snapshot skipped {len(skipped)} unpicklable/oversized vars: {skipped}", file=_REAL_STDERR)
         tmp = path + ".tmp"
-        with open(tmp, "wb") as f:
+        with _REAL_IO_OPEN(tmp, "wb") as f:
             s.dump({"nonce": nonce, "vars": out}, f)
         os.rename(tmp, path)  # atomic rename
         return {"skipped": skipped}
@@ -538,7 +667,7 @@ class Worker:
         history-only replay (caller skips restore when sessionNonce is undefined).
         """
         s = self._serializer()
-        with open(path, "rb") as f:
+        with _REAL_IO_OPEN(path, "rb") as f:
             data = s.load(f)
         if not isinstance(data, dict) or data.get("nonce") != nonce:
             raise ValueError("snapshot nonce mismatch — not from this session")
@@ -553,10 +682,13 @@ def main() -> None:
     ap.add_argument("--timeout", type=float, default=float(os.environ.get("RLM_EXEC_TIMEOUT_S", "600")))
     ap.add_argument("--max-prompt-chars", type=int,
                     default=int(os.environ.get("RLM_MAX_PROMPT_CHARS", "400000")))
+    ap.add_argument("--read-only", action="store_true",
+                    default=os.environ.get("RLM_READ_ONLY", "").lower() in ("1", "true", "yes"),
+                    help="Reject open() write modes (pipeline runs)")
     args = ap.parse_args()
 
     worker = Worker(depth=args.depth, exec_timeout_s=args.timeout,
-                    max_prompt_chars=args.max_prompt_chars)
+                    max_prompt_chars=args.max_prompt_chars, read_only=args.read_only)
     _send({"id": "_init", "ok": True})
 
     for raw in _REAL_STDIN:

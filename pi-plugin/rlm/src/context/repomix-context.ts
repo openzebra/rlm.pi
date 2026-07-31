@@ -5,8 +5,7 @@
  *
  * Uses repomix internally (worker-thread pool, built-in gitignore support)
  * and caches results in a module-level Map with TTL to avoid re-packing on
- * every run within the same process. `patchContextAfterEdits` updates the
- * cached bundle in-memory after file edits are applied to disk — no re-packing.
+ * every run within the same process.
  */
 
 import { pack } from "repomix";
@@ -172,42 +171,6 @@ export async function packRepository(
   }
 }
 
-export function patchContextAfterEdits(
-  cached: ContextBundle,
-  edits: readonly { readonly path: string; readonly newContent: string }[],
-): ContextBundle {
-  const editMap = new Map<string, string>();
-  for (const edit of edits) {
-    editMap.set(edit.path, edit.newContent);
-  }
-
-  const files = new Array<ContextFile>(cached.files.length);
-  let totalTokens = 0;
-  let totalChars = 0;
-
-  for (let i = 0; i < cached.files.length; i++) {
-    const file = cached.files[i];
-    const newContent = editMap.get(file.path);
-    if (newContent !== undefined) {
-      const tokens = Math.ceil(newContent.length / ESTIMATED_CHARS_PER_TOKEN);
-      files[i] = { path: file.path, content: newContent, tokens };
-      totalTokens += tokens;
-      totalChars += newContent.length;
-    } else {
-      files[i] = file;
-      totalTokens += file.tokens;
-      totalChars += file.content.length;
-    }
-  }
-
-  return {
-    files,
-    totalFiles: files.length,
-    totalTokens,
-    totalChars,
-  };
-}
-
 export function serializeForSandbox(
   bundle: ContextBundle,
 ): readonly ContextFile[] {
@@ -243,13 +206,4 @@ export function formatForLLM(bundle: ContextBundle): string {
   ].join("\n");
 }
 
-export function patchCachedContext(
-  cwd: string,
-  edits: readonly { readonly path: string; readonly newContent: string }[],
-): void {
-  const key = cacheKey(cwd);
-  const entry = cache.get(key);
-  if (!entry) return;
-  const patched = patchContextAfterEdits(entry.bundle, edits);
-  cache.set(key, { bundle: patched, ts: entry.ts });
-}
+

@@ -6,7 +6,6 @@
  * accumulated into the subcalls array for tree rendering.
  */
 
-import type { ProposedEdit } from "../sandbox/protocol.ts";
 import type { RlmSubcall } from "./rlm-details.ts";
 
 export interface ReplDetails {
@@ -23,6 +22,6 @@ export interface ReplDetails {
   readonly totals: { readonly costUsd: number; readonly tokens: number };
   /** Final answer submitted through answer["ready"] without echoing it to the model. */
   readonly finalAnswer?: string;
-  /** File edits staged inside the REPL for native relay through apply_edits(). */
-  readonly edits?: readonly ProposedEdit[];
+  /** Advisory diagnostics — surfaced to the user, never a failure. */
+  readonly warnings?: readonly string[];
 }

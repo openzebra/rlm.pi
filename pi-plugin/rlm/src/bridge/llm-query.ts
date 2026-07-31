@@ -125,6 +125,7 @@ export function createLlmBridge(opts: LlmBridgeOptions): LlmBridge {
       if (emitter && id !== undefined) emitter.emitSubcallUpdated({ id,
         status: error ? "error" : "done", costUsd: cost, tokens,
         resultPreview, detail: error,
+        failedCount: failed, totalCount: out.length,
       });
       return out;
     },

@@ -8,11 +8,17 @@
 
 const CHARS_PER_TOKEN = 4;
 
+/** Rough token count for a character length (≈4 chars/token). Always ≥ 1 for non-empty text. */
+export function estimateTokens(charCount: number): number {
+  if (charCount <= 0) return 0;
+  return Math.ceil(charCount / CHARS_PER_TOKEN);
+}
+
 /** Rough token count for a list of role/content messages. */
 export function estimateMessageTokens(messages: { content: string }[]): number {
   let chars = 0;
   for (const m of messages) chars += m.content.length + 8; // small per-message overhead
-  return Math.ceil(chars / CHARS_PER_TOKEN);
+  return estimateTokens(chars);
 }
 
 /** Total character length of a context payload (string or list of strings). */
