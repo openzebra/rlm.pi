@@ -7,12 +7,8 @@ export function buildTurnPrompt(
   iteration: number,
   maxIterations: number,
   gateMessage?: string,
-  phaseGuidanceText?: string,
 ): string {
-  const parts: string[] = [];
-  if (phaseGuidanceText) parts.push(phaseGuidanceText);
-  if (gateMessage) parts.push(gateMessage);
-  const prefix = parts.length > 0 ? `${parts.join("\n\n")}\n\n` : "";
+  const prefix = gateMessage ? `${gateMessage}\n\n` : "";
   const body = `Turn ${iteration + 1}/${maxIterations}:`;
   if (iteration === 0) {
     return (

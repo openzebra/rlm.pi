@@ -30,8 +30,11 @@ async function main() {
     { orchestrator: true },
   );
   check("prompt describes context as JSON array", sp.includes("list[dict]") && sp.includes("path"));
-  check("prompt shows chunking example", sp.includes("chunk_size") && sp.includes("llm_query_batched"));
-  check("prompt includes batched delegation idiom", sp.includes("llm_query_batched(["));
+  check("prompt shows locate-then-delegate example", sp.includes("search(") && sp.includes("map_files("));
+  check("prompt includes batched delegation idiom", sp.includes("llm_query_batched"));
+  check("prompt carries the decomposition doctrine", sp.includes("Decomposition doctrine") && sp.includes("Red flags"));
+  check("prompt documents the deterministic retrieval primitives",
+    sp.includes("grep_context(") && sp.includes("outline(") && sp.includes("BM25"));
   const childPrompt = buildRlmSystemPrompt({ contextType: "str", contextChars: 5000 }, { orchestrator: false });
   check("F1: string context prompt does not describe list[dict]", !childPrompt.includes("list[dict]") && childPrompt.includes("plain string"), childPrompt.slice(0, 120));
   const metadata = buildMetadataLine({ contextType: "json", contextChars: 5000 });
@@ -120,7 +123,10 @@ async function main() {
     // No llm_query/rlm_query — keep the test free of RPC dependency (pure varNames + elision).
     let rr = await vb.exec("result = 'mock_result'; acc = [1,2,3]");
     check("execute returns user var names",
-      rr.varNames.length === 2 && rr.varNames.includes("result") && rr.varNames.includes("acc"),
+      rr.varNames.includes("result") && rr.varNames.includes("acc"),
+      JSON.stringify(rr.varNames));
+    check("env_tips memo dicts are seeded and user-visible",
+      rr.varNames.includes("answers") && rr.varNames.includes("plan"),
       JSON.stringify(rr.varNames));
     check("scaffold vars filtered from varNames",
       !rr.varNames.includes("llm_query") && !rr.varNames.includes("context") && !rr.varNames.includes("answer")

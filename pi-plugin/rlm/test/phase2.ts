@@ -48,8 +48,7 @@ async function main() {
     gates: createSubcallGates(4),
     registry,
     getWorkerModel: () => worker,
-    maxPromptChars: 400_000,
-    sampling: { maxTokens: 32 },
+    getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 0, subSampling: { maxTokens: 32 } }),
     onUsage: (u) => {
       totalCost += u.cost.total;
     },

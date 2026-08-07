@@ -7,15 +7,17 @@
  */
 
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { keyText } from "@earendil-works/pi-coding-agent";
 import type { RlmSubcall, SubcallStatus } from "./rlm-details.ts";
 import { formatCost, formatDuration, formatTokens, spinnerFrame } from "../ui/theme.ts";
+import { previewText } from "../text/preview.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
-// ── Glyphs ──
+/** Preview budgets for the expanded tree (args are terse, results get more room). */
+const ARGS_PREVIEW_CHARS = 80;
+const RESULT_PREVIEW_CHARS = 120;
 
-export function subcallRunningGlyph(theme: Theme): string {
-  return theme.fg("warning", spinnerFrame());
-}
+// ── Glyphs ──
 
 export function subcallStatusGlyph(sc: Pick<RlmSubcall, "status">, theme: Theme): string {
   if (sc.status === "running") return theme.fg("warning", "⏳");
@@ -38,8 +40,60 @@ export function subcallStatsLine(sc: Pick<RlmSubcall, "costUsd" | "tokens" | "en
   const parts: string[] = [];
   if (sc.costUsd > 0) parts.push(formatCost(sc.costUsd));
   if (sc.tokens > 0) parts.push(`${formatTokens(sc.tokens)} tok`);
-  if (sc.endedAt && sc.startedAt) parts.push(formatDuration(sc.endedAt - sc.startedAt));
+  // Explicit undefined checks: a 0 timestamp is falsy but legitimate (fixtures, epoch clocks).
+  if (sc.endedAt !== undefined && sc.startedAt !== undefined) parts.push(formatDuration(sc.endedAt - sc.startedAt));
   return parts.join(" · ");
+}
+
+// ── Shared card scaffolding (rlm + repl render the same shape) ──
+
+/** The `$0.0123 · 4.2k tok · 812ms` run of a card header. Omits any zero component. */
+export function cardStatsLine(
+  totals: { readonly costUsd: number; readonly tokens: number },
+  theme: Theme,
+  extra?: string,
+): string {
+  const parts: string[] = [formatCost(totals.costUsd)];
+  if (totals.tokens > 0) parts.push(`${formatTokens(totals.tokens)} tok`);
+  if (extra) parts.push(extra);
+  return theme.fg("dim", parts.join(" · "));
+}
+
+/** `<glyph> <TITLE> <stats>` — the first line of both tools' collapsed and expanded views. */
+export function cardHeader(
+  title: string,
+  status: SubcallStatus | "aborted" | "done",
+  stats: string,
+  theme: Theme,
+): string {
+  return `${headlineStatusGlyph(status, theme)} ${theme.fg("toolTitle", theme.bold(title))} ${stats}`;
+}
+
+/**
+ * The expand hint, using the user's actual binding rather than a hardcoded "Ctrl+O".
+ *
+ * Deliberately `keyText` + the injected theme rather than pi's `keyHint`: `keyHint` colours via
+ * pi's module-global theme, which throws when that global is uninitialized — the same jiti
+ * hazard `ui/theme-adapter.ts` exists to avoid. `keyText` only reads the keybinding registry.
+ */
+function expandHint(theme: Theme): string {
+  // Empty outside a live pi session (the app installs the real binding registry at startup) —
+  // the phrase stays the same, only the key prefix drops out.
+  const key = keyText("app.tools.expand");
+  return theme.fg("muted", key ? `${key} to expand` : "to expand");
+}
+
+/** The collapsed card: header, the sub-call tree, and the expand hint. */
+export function renderCollapsedCard(
+  title: string,
+  status: SubcallStatus | "aborted" | "done",
+  stats: string,
+  subcalls: readonly RlmSubcall[],
+  theme: Theme,
+): Text {
+  const body = subcalls.length > 0 ? `\n${renderCollapsedSubcallTree(subcalls, theme)}` : "";
+  const hint = status === "running" ? "" : `\n${expandHint(theme)}`;
+  return new Text(`${cardHeader(title, status, stats, theme)}${body}${hint}`, 0, 0);
 }
 
 // ── Tree building ──
@@ -104,14 +158,12 @@ export function renderExpandedSubcallTree(
     let line = `${pad}${sGlyph} ${sKind}${sModel}${sStats}`;
 
     if (sc.args) {
-      const ap = sc.args.length > 80 ? `${sc.args.slice(0, 80)}...` : sc.args;
-      line += `\n${pad}  ${theme.fg("dim", ap)}`;
+      line += `\n${pad}  ${theme.fg("dim", previewText(sc.args, ARGS_PREVIEW_CHARS))}`;
     }
     if (sc.status === "error" && sc.detail) {
       line += `\n${pad}  ${theme.fg("error", `✗ ${sc.detail}`)}`;
     } else if (sc.resultPreview) {
-      const rp = sc.resultPreview.length > 120 ? `${sc.resultPreview.slice(0, 120)}...` : sc.resultPreview;
-      line += `\n${pad}  ${theme.fg("toolOutput", rp)}`;
+      line += `\n${pad}  ${theme.fg("toolOutput", previewText(sc.resultPreview, RESULT_PREVIEW_CHARS))}`;
     }
 
     container.addChild(new Text(line, 0, 0));

@@ -5,22 +5,28 @@
  * onUpdate(partialResult) for progressive TUI re-rendering.
  */
 
-import { getMarkdownTheme, type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createPiInteractiveDeps } from "../bridge/pi-interactive.ts";
 import type { RlmController, StartInput } from "../mode/rlm-mode.ts";
-import { formatCost, formatTokens, spinnerFrame } from "../ui/theme.ts";
+import { spinnerFrame } from "../ui/theme.ts";
+import { markdownTheme } from "../ui/theme-adapter.ts";
+import { previewText } from "../text/preview.ts";
 import { errorMessage } from "../util/errors.ts";
 import { type RlmDetails } from "./rlm-details.ts";
 import { RlmEmitter } from "./rlm-events.ts";
 import { RlmEventAggregator } from "./rlm-aggregator.ts";
 import {
-  headlineStatusGlyph,
-  renderCollapsedSubcallTree,
+  cardHeader,
+  cardStatsLine,
+  renderCollapsedCard,
   renderExpandedSubcallTree,
 } from "./subcall-render.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
+
+/** Chars of the prompt shown on the tool call line. */
+const CALL_PREVIEW_CHARS = 80;
 
 // ── Parameter schema ──
 
@@ -32,11 +38,8 @@ export const RlmToolParams = Object.freeze(Type.Object({
 // ── Rendering helpers ──
 
 function rootStats(details: RlmDetails, theme: Theme): string {
-  const parts: string[] = [];
-  parts.push(formatCost(details.totals.costUsd));
-  parts.push(`${formatTokens(details.totals.tokens)} tok`);
-  if (details.turns.current > 0) parts.push(`${details.turns.current} turn${details.turns.current > 1 ? "s" : ""}`);
-  return theme.fg("dim", parts.join(" · "));
+  const turns = details.turns.current;
+  return cardStatsLine(details.totals, theme, turns > 0 ? `${turns} turn${turns > 1 ? "s" : ""}` : undefined);
 }
 
 // ── Tool definition ──
@@ -110,18 +113,14 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
       }
     },
 
-    renderCall(args, theme, _context) {
-      const preview = args.prompt.length > 80
-        ? `${args.prompt.slice(0, 80)}...`
-        : args.prompt;
+    renderCall(args, theme) {
       return new Text(
-        theme.fg("toolTitle", theme.bold("rlm ")) +
-        theme.fg("dim", preview.replace(/\n/g, " ")),
+        theme.fg("toolTitle", theme.bold("rlm ")) + theme.fg("dim", previewText(args.prompt, CALL_PREVIEW_CHARS)),
         0, 0,
       );
     },
 
-    renderResult(result, { expanded, isPartial: _isPartial }, theme, _context) {
+    renderResult(result, { expanded }, theme) {
       const details = result.details as RlmDetails | undefined;
       if (!details) {
         const text = result.content[0];
@@ -139,10 +138,7 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
 
 function renderExpanded(details: RlmDetails, theme: Theme): Component {
   const container = new Container();
-
-  const glyph = headlineStatusGlyph(details.status, theme);
-  const header = `${glyph} ${theme.fg("toolTitle", theme.bold("RLM"))} · ${rootStats(details, theme)}`;
-  container.addChild(new Text(header, 0, 0));
+  container.addChild(new Text(cardHeader("RLM", details.status, rootStats(details, theme), theme), 0, 0));
 
   if (details.subcalls.length > 0) {
     container.addChild(new Spacer(1));
@@ -153,7 +149,7 @@ function renderExpanded(details: RlmDetails, theme: Theme): Component {
   if (details.answer) {
     container.addChild(new Spacer(1));
     container.addChild(new Text(theme.fg("muted", "─── Answer ───"), 0, 0));
-    container.addChild(new Markdown(details.answer, 0, 0, getMarkdownTheme()));
+    container.addChild(new Markdown(details.answer, 0, 0, markdownTheme(theme)));
   }
 
   if (details.warnings && details.warnings.length > 0) {
@@ -167,14 +163,5 @@ function renderExpanded(details: RlmDetails, theme: Theme): Component {
 // ── Collapsed view ──
 
 function renderCollapsed(details: RlmDetails, theme: Theme): Text {
-  const glyph = headlineStatusGlyph(details.status, theme);
-  const header = `${glyph} ${theme.fg("toolTitle", theme.bold("RLM"))} · ${rootStats(details, theme)}`;
-
-  let body = "";
-  if (details.subcalls.length > 0) {
-    body = `\n${renderCollapsedSubcallTree(details.subcalls, theme)}`;
-  }
-
-  const expandHint = details.status === "running" ? "" : `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
-  return new Text(`${header}${body}${expandHint}`, 0, 0);
+  return renderCollapsedCard("RLM", details.status, rootStats(details, theme), details.subcalls, theme);
 }

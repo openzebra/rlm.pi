@@ -1,7 +1,6 @@
 /** pi-rlm — Recursive Language Model for Pi. */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
 import { registerRlmCommand } from "./commands/rlm.ts";
 import { registerRlmConfigCommand } from "./commands/rlm-config.ts";
@@ -11,6 +10,7 @@ import { loadSettings, mergeConfig, resolveModelId } from "./config/settings.ts"
 import { RlmController, cheapestModel } from "./mode/rlm-mode.ts";
 import { postRlmGuide } from "./ui/intro.ts";
 import { setRlmModeStatus } from "./ui/status.ts";
+import { markdownTheme } from "./ui/theme-adapter.ts";
 import { SandboxManager } from "./sandbox/sandbox-manager.ts";
 import { createSubcallGates } from "./util/concurrency.ts";
 import { BackgroundTasks } from "./tool/background-tasks.ts";
@@ -83,16 +83,23 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     });
 
   // ── Message renderers ──
-  pi.registerMessageRenderer(
-    "rlm-answer",
-    (message, _options, _theme) => new Markdown(String(message.content ?? ""), 1, 0, getMarkdownTheme()),
+  // Markdown themes are derived from the injected `theme`, never pi's module-global
+  // `getMarkdownTheme()` — under jiti that global can be undefined inside a plugin.
+  pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
+    new Markdown(String(message.content ?? ""), 1, 0, markdownTheme(theme)),
   );
-  pi.registerMessageRenderer("rlm-question", (message, _options, _theme) =>
-    new Markdown(`**RLM question**\n\n${String(message.content ?? "")}`, 1, 0, getMarkdownTheme()),
+  pi.registerMessageRenderer("rlm-question", (message, _options, theme) =>
+    new Markdown(`**RLM question**\n\n${String(message.content ?? "")}`, 1, 0, markdownTheme(theme)),
   );
-  pi.registerMessageRenderer("rlm-intro", (message, _options, _theme) =>
-    new Markdown(String(message.content ?? ""), 1, 0, getMarkdownTheme()),
+  pi.registerMessageRenderer("rlm-intro", (message, _options, theme) =>
+    new Markdown(String(message.content ?? ""), 1, 0, markdownTheme(theme)),
   );
+
+  // ── CLI flag: `pi --rlm` / `pi --rlm=false` overrides the persisted mode for this run ──
+  pi.registerFlag("rlm", {
+    description: "Start with RLM mode on (repl-only repository reading).",
+    type: "boolean",
+  });
 
   // ── Commands ──
   registerRlmCommand(pi, controller);
@@ -105,6 +112,10 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     // Wait for persisted settings before reading controller state
     await settingsReady;
+
+    // An explicit --rlm flag wins over the persisted setting for this session.
+    const flag = pi.getFlag("rlm");
+    if (typeof flag === "boolean") controller.setConfig(Object.freeze({ ...controller.config, enabled: flag }));
 
     if (controller.savedWorkerRef) {
       const resolved = resolveModelId(ctx.modelRegistry, controller.savedWorkerRef);
@@ -123,7 +134,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           getModel: () => controller.resolveModels(ctx)?.model,
           getWorkerModel: () => controller.resolveModels(ctx)?.worker,
           registry: ctx.modelRegistry,
-          config: controller.config,
+          getConfig: () => controller.config,
           gates,
           background,
           registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
@@ -132,14 +143,25 @@ export default function rlmExtension(pi: ExtensionAPI): void {
             if (contextText === undefined) throw new Error("repository context could not be loaded into RLM sandbox");
           },
         }));
-      } catch { /* re-registration on provider change — ignore if already registered */ }
+      } catch (err) {
+        // Re-registering the same tool each session is expected; anything else is a real failure.
+        const message = errorMessage(err);
+        if (!/already (registered|exists)/i.test(message)) {
+          console.warn(`[rlm] repl tool registration failed: ${message}`);
+        }
+      }
     }
 
-    setRlmModeStatus(ctx.ui, controller);
+    setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
     if (!guidePosted && controller.enabled) {
       guidePosted = true;
       postRlmGuide(pi, controller);
     }
+  });
+
+  // ── Keep the footer's context reading live (RLM exists to shrink this number) ──
+  pi.on("turn_end", async (_event, ctx) => {
+    setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
   });
 
   // ── System prompt: native RLM mode addendum (only when enabled) ──
@@ -169,7 +191,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
         const instruction = [
           "ANALYZE THIS REPOSITORY using repl({code}) — read/grep are DISABLED.",
           "Repository contents are pre-loaded in the Python REPL `context` variable.",
-          "Chunk context via Python, delegate to llm_query. If credits exhausted → report and stop.",
+          "Locate with search()/grep_context()/outline() (free), then delegate bulk reading to",
+          "map_files()/llm_query_batched(). If credits exhausted → report and stop.",
           "",
         ].join("\n");
         filtered.unshift({
@@ -188,11 +211,6 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     } as PiMessage);
 
     return { messages: filtered };
-  });
-
-  // ── Input routing: native mode — agent decides whether to use repl() or other tools ──
-  pi.on("input", async (_event, _ctx) => {
-    return { action: "continue" };
   });
 
   // ── Native mode restrictions: keep bulk file content out of root-model context ──

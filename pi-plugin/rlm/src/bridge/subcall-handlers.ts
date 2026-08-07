@@ -16,7 +16,7 @@
 
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { modelRef, resolveModelId } from "../config/settings.ts";
+import { displayModelRef, modelRef, resolveModelId } from "../config/settings.ts";
 import { type ChatMsg, modelComplete } from "./model.ts";
 import { previewText } from "../text/preview.ts";
 import { checkResourceLimits } from "../core/resource-limits.ts";
@@ -69,6 +69,17 @@ export interface Invocation {
   readonly limits: InvocationLimits;
 }
 
+/**
+ * The config slice these handlers read. Structurally satisfied by `RlmConfig`, and re-read on
+ * every call so `/rlm-config` changes take effect without rebuilding the sandbox.
+ */
+export interface SubcallConfig {
+  readonly maxPromptChars: number;
+  readonly maxDepth: number;
+  readonly subSampling?: Sampling;
+  readonly subSystemPrompt?: string;
+}
+
 export interface SubcallHandlerDeps {
   /**
    * Pick the Invocation for this interrupt. `null` ⇒ the bridge is not wired yet.
@@ -81,9 +92,8 @@ export interface SubcallHandlerDeps {
   readonly gates: SubcallGates;
   readonly registry: ModelRegistry;
   readonly getWorkerModel: () => Model<Api>;
-  readonly maxPromptChars: number;
-  readonly sampling?: Sampling;
-  readonly subSystem?: string;
+  /** Live accessor — `/rlm-config` replaces the config object, so never capture the value. */
+  readonly getConfig: () => SubcallConfig;
   readonly signal?: AbortSignal;
   readonly onUsage?: (usage: Usage, role: "sub") => void;
 
@@ -98,7 +108,6 @@ export interface SubcallHandlerDeps {
    */
   readonly runChild?: (input: RlmInput, inv: Invocation) => Promise<RlmResult>;
   readonly getModel?: () => Model<Api>;
-  readonly maxDepth?: number;
   /**
    * What rlm_query degrades to at the depth cap. A child RLM there would just be an LM, so
    * both callers hand in their own one-shot path rather than re-deriving one here.
@@ -134,11 +143,8 @@ function emptyResult(answer: string): RlmResult {
 
 export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers {
   /** DRY #3 — the one display-model resolution. */
-  const displayModel = (model: string | null): string => {
-    const worker = deps.getWorkerModel();
-    const resolved = model ? (resolveModelId(deps.registry, model) ?? worker) : worker;
-    return modelRef(resolved) ?? worker.id;
-  };
+  const displayModel = (model: string | null): string =>
+    displayModelRef(deps.registry, model, deps.getWorkerModel());
 
   /** Detached work is counted by the session registry; attached work runs as-is. */
   const detachable = <T>(opts: SubcallOpts, run: () => Promise<T>): Promise<T> =>
@@ -151,15 +157,16 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
     model: string | null,
     track: (usage: Usage) => void,
   ): Promise<string> {
+    const config = deps.getConfig();
     const limitError = checkResourceLimits({
       budgetUsd: inv.limits.remainingBudgetUsd(),
       timeoutMs: inv.limits.remainingTimeoutMs(),
     });
     if (limitError !== undefined) return limitError;
-    if (prompt.length > deps.maxPromptChars) {
+    if (prompt.length > config.maxPromptChars) {
       return formatError(
         `sub-LLM prompt exceeded the size limit (${prompt.length.toLocaleString()} chars > ` +
-        `${deps.maxPromptChars.toLocaleString()}). Shorten or chunk the prompt before calling llm_query.`,
+        `${config.maxPromptChars.toLocaleString()}). Shorten or chunk the prompt before calling llm_query.`,
       );
     }
     const resolved = model ? resolveModelId(deps.registry, model) : undefined;
@@ -169,10 +176,10 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
       const res = await deps.gates.leaf.run(() => modelComplete(messages, {
         model: resolved ?? deps.getWorkerModel(),
         registry: deps.registry,
-        system: deps.subSystem,
-        maxTokens: deps.sampling?.maxTokens,
-        temperature: deps.sampling?.temperature,
-        reasoning: deps.sampling?.reasoning,
+        system: config.subSystemPrompt,
+        maxTokens: config.subSampling?.maxTokens,
+        temperature: config.subSampling?.temperature,
+        reasoning: config.subSampling?.reasoning,
         signal: deps.signal,
       }));
       inv.limits.addUsage(res.usage);
@@ -236,7 +243,7 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
   async function childRun(inv: Invocation, prompt: string, model: string | null): Promise<RlmResult> {
     const childDepth = inv.depth + 1;
     const run = deps.runChild;
-    const maxDepth = deps.maxDepth ?? 0;
+    const maxDepth = deps.getConfig().maxDepth;
 
     // At the cap a child RLM would just be an LM — short-circuit to the caller's one-shot path.
     if (run === undefined || childDepth >= maxDepth) {

@@ -47,9 +47,8 @@ function rlmOnlyHandlers(opts: {
     getWorkerModel: () => {
       throw new Error("leaf completion must not be reached in the recursion tests");
     },
-    maxPromptChars: Number.MAX_SAFE_INTEGER,
+    getConfig: () => ({ maxPromptChars: Number.MAX_SAFE_INTEGER, maxDepth: opts.maxDepth }),
     runChild: opts.run,
-    maxDepth: opts.maxDepth,
     degrade: opts.degrade,
     onChildUsage: opts.onChildUsage,
   });
@@ -209,7 +208,7 @@ async function main() {
       gates: createSubcallGates(2),
       registry,
       getWorkerModel: () => fallbackModel,
-      maxPromptChars: 400_000,
+      getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 0 }),
     });
     const guardedOut = await guardedLlm.llmQuery("must not call provider", null, 0, ATTACHED);
     const guardedOk = guardedOut === "Error: budget exhausted";

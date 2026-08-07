@@ -1,34 +1,9 @@
 /** Small presentation helpers shared by the RLM widgets (glyphs, spinner, formatting). */
 
-import type { SubcallKind, SubcallStatus } from "../tool/rlm-details.ts";
-
 export const SPINNER = Object.freeze(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]);
 
 export function spinnerFrame(): string {
   return SPINNER[Math.floor(Date.now() / 100) % SPINNER.length] ?? "⠋";
-}
-
-/** Glyph for a node's status. */
-export function statusGlyph(status: SubcallStatus): string {
-  if (status === "done") return "✓";
-  if (status === "error") return "✗";
-  return spinnerFrame();
-}
-
-/** Short role label for a node kind. */
-export function kindLabel(kind: SubcallKind): string {
-  switch (kind) {
-    case "root":
-      return "RLM ▸ root";
-    case "rlm":
-      return "rlm_query";
-    case "batch":
-      return "llm_query×";
-    case "tool":
-      return "tool";
-    default:
-      return "llm_query";
-  }
 }
 
 export function formatCost(usd: number): string {

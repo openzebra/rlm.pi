@@ -168,9 +168,10 @@ check("SandboxManager — disposed", !mgr.isAlive);
 
 const nativeOnly = buildNativeSystemPrompt();
 check("native prompt — within the documented budget", nativeOnly.length < NATIVE_PROMPT_BUDGET,
-      ` (${nativeOnly.length.toLocaleString()} chars)`);
+      ` (${nativeOnly.length.toLocaleString()} / ${NATIVE_PROMPT_BUDGET.toLocaleString()} chars)`);
 check("native prompt — includes REPL glossary", nativeOnly.includes("REPL Environment"));
-check("native prompt — includes workflow steps", nativeOnly.includes("Workflow"));
+check("native prompt — includes the decomposition doctrine", nativeOnly.includes("Decomposition doctrine"));
+check("native prompt — includes worked pattern", nativeOnly.includes("Worked pattern"));
 check("native prompt — includes tool table", nativeOnly.includes("Choosing Between Tools"));
 check("native prompt — guides native edit/write", nativeOnly.includes("edit") && nativeOnly.includes("write"));
 

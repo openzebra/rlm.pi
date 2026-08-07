@@ -24,7 +24,7 @@ import { buildInteractiveHandlers } from "../bridge/interactive.ts";
 import { buildLibraryHandler } from "../bridge/library.ts";
 import { createPiInteractiveDeps } from "../bridge/pi-interactive.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
-import { LimitGuard } from "../core/limits.ts";
+import { LimitGuard, limitsFromConfig } from "../core/limits.ts";
 import type { InteractiveDeps, RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
 import { SandboxManager } from "../sandbox/sandbox-manager.ts";
 import type { SubcallOpts } from "../sandbox/sandbox.ts";
@@ -36,15 +36,22 @@ import { SubcallStore } from "./subcall-store.ts";
 import type { ReplDetails } from "./repl-details.ts";
 import type { RlmSubcall } from "./rlm-details.ts";
 import { createEngine } from "../core/engine.ts";
-import { formatCost, formatTokens, spinnerFrame } from "../ui/theme.ts";
+import { spinnerFrame } from "../ui/theme.ts";
+import { previewText } from "../text/preview.ts";
 import { errorMessage } from "../util/errors.ts";
 import {
-  headlineStatusGlyph,
-  renderCollapsedSubcallTree,
+  cardHeader,
+  cardStatsLine,
+  renderCollapsedCard,
   renderExpandedSubcallTree,
 } from "./subcall-render.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 import { capReplResultText, replDelegationNudge } from "../mode/native-guards.ts";
+
+/** Chars of code shown on the tool call line, and of stdout in the expanded view. */
+const CALL_PREVIEW_CHARS = 80;
+const EXPANDED_STDOUT_CHARS = 2_000;
+const EXPANDED_STDERR_CHARS = 500;
 
 // ── Parameter schema ──
 
@@ -146,7 +153,8 @@ export interface ReplToolDeps {
   readonly getModel?: () => Model<Api> | undefined;
   readonly getWorkerModel?: () => Model<Api> | undefined;
   readonly registry: ModelRegistry;
-  readonly config: RlmConfig;
+  /** Live accessor — `/rlm-config` replaces the config object, so never capture the value. */
+  readonly getConfig: () => RlmConfig;
   /** Session-wide sub-call admission, shared with every child engine this tool spawns. */
   readonly gates: SubcallGates;
   /** Session-scoped home for detached spawn() work. */
@@ -159,7 +167,7 @@ export interface ReplToolDeps {
 }
 
 export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplToolParams, ReplDetails> {
-  const { sandboxManager, workerModel, registry, config, signal, onUsage, background } = deps;
+  const { sandboxManager, workerModel, registry, getConfig, signal, onUsage, background } = deps;
   const bridgeState = new NativeBridgeState(background);
 
   // Late-bound cwd — getOrCreate installs handlers only at spawn; never rebuild the closure.
@@ -175,7 +183,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     model: getModel(),
     workerModel: getWorkerModel(),
     registry,
-    config,
+    config: getConfig(),
     signal,
     gates: deps.gates,
     // Same emitter the parent subcall node lives on — see SubcallHandlerDeps.runChild.
@@ -183,12 +191,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     // Everything a child engine spends is sub-work from this tool's perspective, including
     // the child's own root turns — so fold both roles into "sub" rather than casting.
     onUsage: onUsage === undefined ? undefined : (usage: Usage) => onUsage(usage, "sub"),
-    limits: {
-      maxBudgetUsd: config.maxBudgetUsd,
-      maxTimeoutMs: config.maxTimeoutMs,
-      maxTokens: config.maxTokens,
-      maxErrors: config.maxErrors,
-    },
+    limits: limitsFromConfig(getConfig()),
     onTodo: bridgeState.interactive?.onTodo,
     onAskUserQuestion: bridgeState.interactive?.onAskUserQuestion,
   })(input);
@@ -201,17 +204,14 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     registry,
     getWorkerModel,
     getModel,
-    maxPromptChars: config.maxPromptChars,
-    sampling: config.subSampling,
-    subSystem: config.subSystemPrompt,
+    getConfig,
     signal,
     onUsage,
     runChild,
-    maxDepth: config.maxDepth,
     trackDetached: (task) => background.track(task),
   });
 
-  const libraryBundle = config.libraryLoader
+  const libraryBundle = getConfig().libraryLoader
     ? buildLibraryHandler({
         getCwd: () => sessionCwd,
         getEmitter: () => bridgeState.currentEmitter,
@@ -227,11 +227,19 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     label: "REPL",
     description:
       "PRIMARY tool for ALL repository reading and analysis (read/grep are disabled in RLM mode). " +
-      "Persistent Python sandbox with every file pre-loaded in `context`. You are an orchestrator: " +
-      "chunk `context` and delegate semantic work to llm_query / llm_query_batched / " +
-      "llm_query_chunked / rlm_query — stdout returned to you is hard-capped at 4K chars, so " +
-      "printing file bodies is useless. Variables, imports, and state persist across calls. " +
-      "Also supports todo, ask_user_question, and load_library inside the sandbox.",
+      "Persistent Python sandbox with every file pre-loaded in `context`. Locate first with the " +
+      "free primitives search(query) / grep_context(pattern) / outline(path), then delegate the " +
+      "semantic reading to map_files / llm_query / llm_query_batched / llm_query_chunked " +
+      "(rlm_query for iterative sub-tasks) — stdout returned to you is hard-capped at 4K chars, " +
+      "so printing file bodies is useless. Variables, imports, and the `answers`/`plan` memo " +
+      "persist across calls. Also supports todo, ask_user_question, and load_library.",
+    promptSnippet:
+      "repl: run Python in a persistent sandbox holding the whole repository in `context`; " +
+      "search/grep_context/outline to locate, map_files/llm_query* to read.",
+    promptGuidelines: [
+      "In RLM mode, read the repository through `repl` only — `read`/`grep` and bash readers are blocked.",
+      "Inside `repl`, locate with search()/grep_context()/outline() before delegating bulk reading to map_files()/llm_query_batched().",
+    ],
     parameters: ReplToolParams,
 
     async execute(_toolCallId, rawParams, _execSignal, onUpdate, ctx) {
@@ -252,12 +260,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       let capturedStderr = "";
       let progressStatus: ReplDetails["status"] = "running";
       const startedAt = Date.now();
-      const limits = new LimitGuard({
-        maxBudgetUsd: config.maxBudgetUsd,
-        maxTimeoutMs: config.maxTimeoutMs,
-        maxTokens: config.maxTokens,
-        maxErrors: config.maxErrors,
-      });
+      const limits = new LimitGuard(limitsFromConfig(getConfig()));
 
       // ── Progressive rendering: spinner + live sub-call tree ──
       const progress = createProgressNotifier<ReplDetails>({
@@ -289,7 +292,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         // Build interactive handlers (session-stable callbacks)
         const interactive = createPiInteractiveDeps(ctx);
         const interactiveHandlers = buildInteractiveHandlers({
-          onAskUserQuestion: config.askUserQuestion ? interactive.onAskUserQuestion : undefined,
+          onAskUserQuestion: getConfig().askUserQuestion ? interactive.onAskUserQuestion : undefined,
           onTodo: interactive.onTodo,
           onTodoRow: undefined,
           emitter,
@@ -403,10 +406,8 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     },
 
     renderCall(args, theme) {
-      const preview = args.code.length > 80 ? `${args.code.slice(0, 80)}...` : args.code;
       return new Text(
-        theme.fg("toolTitle", theme.bold("repl ")) +
-        theme.fg("dim", preview.replace(/\n/g, " ")),
+        theme.fg("toolTitle", theme.bold("repl ")) + theme.fg("dim", previewText(args.code, CALL_PREVIEW_CHARS)),
         0, 0,
       );
     },
@@ -425,26 +426,13 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
 
 // ── Collapsed view ──
 
+function replStats(details: ReplDetails, theme: Theme): string {
+  const elapsed = details.executionTimeMs > 0 ? `${details.executionTimeMs}ms` : undefined;
+  return cardStatsLine(details.totals, theme, elapsed);
+}
+
 function renderReplCollapsed(details: ReplDetails, theme: Theme): Text {
-  const glyph = details.status === "running"
-    ? headlineStatusGlyph("running", theme)
-    : details.status === "error" ? theme.fg("error", "✗") : theme.fg("success", "✓");
-
-  const parts: string[] = [];
-  parts.push(formatCost(details.totals.costUsd));
-  if (details.totals.tokens > 0) parts.push(`${formatTokens(details.totals.tokens)} tok`);
-  if (details.executionTimeMs > 0) parts.push(`${details.executionTimeMs}ms`);
-  const stats = parts.length > 0 ? ` ${theme.fg("dim", parts.join(" · "))}` : "";
-
-  const header = `${glyph} ${theme.fg("toolTitle", theme.bold("REPL"))}${stats}`;
-
-  let body = "";
-  if (details.subcalls.length > 0) {
-    body = `\n${renderCollapsedSubcallTree(details.subcalls, theme)}`;
-  }
-
-  const expandHint = details.status === "running" ? "" : `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
-  return new Text(`${header}${body}${expandHint}`, 0, 0);
+  return renderCollapsedCard("REPL", details.status, replStats(details, theme), details.subcalls, theme);
 }
 
 // ── Expanded view ──
@@ -452,19 +440,14 @@ function renderReplCollapsed(details: ReplDetails, theme: Theme): Text {
 function renderReplExpanded(details: ReplDetails, theme: Theme): Container {
   const container = new Container();
 
-  // Header: status + stats
-  const glyph = details.status === "error" ? theme.fg("error", "✗") : theme.fg("success", "✓");
-  const parts: string[] = [];
-  parts.push(formatCost(details.totals.costUsd));
-  if (details.totals.tokens > 0) parts.push(`${formatTokens(details.totals.tokens)} tok`);
-  if (details.executionTimeMs > 0) parts.push(`${details.executionTimeMs}ms`);
-  const stats = parts.length > 0 ? ` · ${theme.fg("dim", parts.join(" · "))}` : "";
-  container.addChild(new Text(`${glyph} ${theme.fg("toolTitle", theme.bold("REPL"))}${stats}`, 0, 0));
+  container.addChild(new Text(cardHeader("REPL", details.status, replStats(details, theme), theme), 0, 0));
 
   // Output
   if (details.output) {
     container.addChild(new Spacer(1));
-    const out = details.output.length > 2000 ? `${details.output.slice(0, 2000)}...` : details.output;
+    const out = details.output.length > EXPANDED_STDOUT_CHARS
+      ? `${details.output.slice(0, EXPANDED_STDOUT_CHARS)}…`
+      : details.output;
     container.addChild(new Text(out, 0, 0));
   }
 
@@ -476,7 +459,7 @@ function renderReplExpanded(details: ReplDetails, theme: Theme): Container {
   // Stderr
   if (details.stderr) {
     container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("error", details.stderr.slice(0, 500)), 0, 0));
+    container.addChild(new Text(theme.fg("error", details.stderr.slice(0, EXPANDED_STDERR_CHARS)), 0, 0));
   }
 
   // Sub-call tree

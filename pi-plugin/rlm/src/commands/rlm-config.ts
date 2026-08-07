@@ -11,15 +11,15 @@ export async function runRlmConfig(controller: RlmController, ctx: ExtensionCont
   const models = ctx.modelRegistry.getAvailable();
 
   const worker = await selectModel(ctx, "Worker model (sub-LLM / llm_query)", models, controller.workerModel, controller.config.subSampling.reasoning);
-  if (worker === null) {
-    controller.workerModel = undefined;
-    controller.config.subSampling.reasoning = undefined;
-  } else if (worker) {
-    controller.workerModel = worker.model;
-    controller.config.subSampling.reasoning = worker.thinkingLevel;
+  if (worker !== undefined) {
+    controller.workerModel = worker?.model;
+    controller.setConfig(Object.freeze({
+      ...controller.config,
+      subSampling: Object.freeze({ ...controller.config.subSampling, reasoning: worker?.thinkingLevel }),
+    }));
   }
 
-  await showConfigPanel(ctx, controller.config);
+  controller.setConfig(await showConfigPanel(ctx, controller.config));
 
   if (worker === null) {
     controller.savedWorkerRef = undefined;
@@ -29,7 +29,7 @@ export async function runRlmConfig(controller: RlmController, ctx: ExtensionCont
   }
   const persisted = await controller.persist();
   if (!persisted) ctx.ui.notify("RLM: failed to save settings to ~/.pi/agent/rlm.json", "error");
-  setRlmModeStatus(ctx.ui, controller);
+  setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
 
   const w = controller.workerModel;
   ctx.ui.notify(

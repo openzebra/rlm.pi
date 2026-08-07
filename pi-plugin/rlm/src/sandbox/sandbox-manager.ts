@@ -81,17 +81,17 @@ export class SandboxManager {
   }
 
   /**
-   * Execute code in the sandbox. Serializes concurrent calls via a promise queue
-   * (second call waits for first to complete, no interleaving). On failure,
-   * nullifies the sandbox so the next call recreates it (death-recreate).
+   * Execute code in the sandbox with no per-invocation setup. Serializes concurrent calls via
+   * a promise queue (second call waits for the first, no interleaving). On failure the sandbox
+   * is nullified so the next call recreates it (death-recreate).
    */
   async exec(code: string): Promise<ReplResult> {
     return this.execQueued(code);
   }
 
   /**
-   * Execute code after running setup inside the serialized execution slot.
-   * Use this for per-invocation handler state that must match the active REPL run.
+   * Execute code after running `setup` inside the serialized execution slot, so per-invocation
+   * handler state (emitter, limits, depth) always matches the active REPL run.
    */
   async execWithSetup(code: string, setup: () => void): Promise<ReplResult> {
     return this.execQueued(code, setup);
