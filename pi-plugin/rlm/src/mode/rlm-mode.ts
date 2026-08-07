@@ -11,6 +11,7 @@ import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-
 import { DEFAULT_RUN_DIR } from "../config/defaults.ts";
 import { modelRef, resolveModelId, saveSettings } from "../config/settings.ts";
 import { createEngine } from "../core/engine.ts";
+import { limitsFromConfig } from "../core/limits.ts";
 import type { InteractiveDeps, RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
 import type { ReconstructResult } from "../state/resume.ts";
 import { packRepository, serializeForSandbox } from "../context/repomix-context.ts";
@@ -44,8 +45,13 @@ export class RlmController {
     return this.config.enabled;
   }
 
+  /** Replace the config wholesale — `RlmConfig` is immutable, so edits produce a new object. */
+  setConfig(config: RlmConfig): void {
+    this.config = config;
+  }
+
   setEnabled(enabled: boolean): void {
-    this.config.enabled = enabled;
+    this.config = Object.freeze({ ...this.config, enabled });
     void this.persist();
   }
 
@@ -54,10 +60,6 @@ export class RlmController {
     this.setEnabled(next);
     if (!next) this.abort();   // turning the mode OFF also stops an in-flight run
     return next;
-  }
-
-  hasSavedModels(): boolean {
-    return Boolean(this.savedWorkerRef || this.workerModel);
   }
 
   async persist(): Promise<boolean> {
@@ -132,12 +134,7 @@ export class RlmController {
         runState,
         onAskUserQuestion: interactive?.onAskUserQuestion,
         onTodo: interactive?.onTodo,
-        limits: {
-          maxBudgetUsd: this.config.maxBudgetUsd,
-          maxTimeoutMs: this.config.maxTimeoutMs,
-          maxTokens: this.config.maxTokens,
-          maxErrors: this.config.maxErrors,
-        },
+        limits: limitsFromConfig(this.config),
       });
       return await engine(engineInput);
     })().finally(() => {

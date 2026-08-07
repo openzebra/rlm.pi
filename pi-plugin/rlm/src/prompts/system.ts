@@ -36,6 +36,36 @@ function promptCapTokensK(maxPromptChars: number): number {
   return Math.round(maxPromptChars / 4_000);
 }
 
+/**
+ * Deterministic retrieval over `context` (headless + native).
+ *
+ * The paper's trajectories retrieve with hand-written regex (App. E.1); frontier models do that
+ * well, small ones guess keywords badly, and the first decomposition disproportionately decides
+ * the outcome (§5, Fig. 4a). These cost no tokens and no sub-calls.
+ */
+const RETRIEVAL_GLOSSARY_LINES: readonly string[] = Object.freeze([
+  "- `search(query: str, k=10, path_glob=None)`: BM25 ranking over `context`. Returns",
+  "  [{path, line, score, snippet}] — POINTERS, not bodies. **Start here.** It is free:",
+  "  no sub-LLM call, no tokens. Use it before you guess at filenames or write regex.",
+  "- `grep_context(pattern, k=50, path_glob=None, before=0, after=0) -> dict`: regex over",
+  "  `context`. Returns {hits: [{path, line, text}], counts: {path: n}, total, truncated} —",
+  "  `counts` is complete even when `hits` is capped, so a wide pattern reports its shape",
+  "  instead of flooding you. Use for exact lexical needles; use `search` for meaning.",
+  "- `outline(path) -> str`: definition/heading skeleton of one file with line numbers.",
+  "  Orient in ~200 chars instead of printing 20K. Matches exact path, then suffix, then glob.",
+]);
+
+/** One-line delegation helpers — orchestrating must be cheaper than solving. */
+const DELEGATION_GLOSSARY_LINES: readonly string[] = Object.freeze([
+  "- `map_files(files, prompt, model=None) -> dict[path, str]`: ask `prompt` of every file and",
+  "  get back {path: answer}. Accepts context entries or paths, packs them into cap-sized",
+  "  batched sub-calls, and splits oversized files automatically. **This is the default way to",
+  "  read many files** — prefer it over hand-rolling a chunk loop.",
+  "- `llm_map_reduce(items, map_prompt, reduce_prompt, model=None) -> str`: map over items in",
+  "  one batch, then reduce the partial answers with a single call. The paper's canonical",
+  "  strategy (query per chunk → aggregate the buffers) as one call.",
+]);
+
 /** Shared glossary entry for the chunked-query helper (headless + native). */
 const CHUNKED_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "- `llm_query_chunked(text: str, prompt: str, model=None) -> list[str]`: auto-splits `text` into",
@@ -69,6 +99,66 @@ const CHUNKED_GLOSSARY_LINE_NATIVE =
 const LARGE_FILE_RULE_NATIVE =
   "- Files >1MB or gitignored are NOT in `context`: open() + parse deterministically in Python is fine; ANY semantic reading of the raw text goes through llm_query_chunked. Never print >2K chars raw.";
 
+/**
+ * The decomposition doctrine, ported from the RLM paper's Appendix C.3 `<env_tips>` and
+ * retargeted from competition math to repository analysis.
+ *
+ * This block is the single highest-leverage prompt intervention the paper reports: +69.5% on
+ * LongCoT-mini over the same RLM without it (Table 2). Plain RLM prompting alone actually
+ * *regressed* two of the five categories; the doctrine is what fixed them. Its purpose is to
+ * counter under-delegation — the model doing the work itself in the REPL instead of fanning out.
+ *
+ * Note the counterweight: `orchestratorAddendum` carries the anti-OVER-recursion batching rule.
+ * The paper is explicit (App. B) that one prompt does not port across models and that both
+ * guardrails are needed; keep them both.
+ */
+const ENV_TIPS = [
+  "## Decomposition doctrine",
+  "",
+  "**Orchestrate; don't solve.** A single chain of thought over a large repository drifts —",
+  "you lose partials and compound mistakes. Your sub-LLMs are competent readers: given a",
+  "self-contained prompt and the text, they will extract, locate, classify, and summarize",
+  "reliably. Trust them; don't do their reading yourself.",
+  "",
+  "Your job: (1) find the relevant slice with `search` / `grep_context` / `outline`,",
+  "(2) delegate all semantic reading to `map_files` / `llm_query_batched` / `llm_map_reduce`,",
+  "(3) memoize every result you will reuse in `answers`, (4) sanity-check an answer before",
+  "another step depends on it, (5) assemble the final answer from `answers` by lookup.",
+  "Your own compute is: pointers, dict lookups, string formatting, and decisions.",
+  "",
+  "### The only state that matters",
+  "`answers` and `plan` are dicts that persist across every turn and survive snapshots.",
+  "**If a value isn't in `answers`, it doesn't exist.** Do not trust a number from your own",
+  "earlier reasoning or from truncated stdout — context drifts. Memoize everything you reuse.",
+  "",
+  "### Shape of a run",
+  "1. Probe: `print(len(context))`, `search(<the user's question>)`. Do not print file bodies.",
+  "2. Plan: write the sub-questions into `plan`; each must be answerable from a named slice.",
+  "3. Fan out: one `map_files` / `llm_query_batched` per independent group, not one call per",
+  "   file. Store results into `answers` keyed by path or sub-question.",
+  "4. Assemble: build the answer from `answers`. Delegate the aggregation too if it is large.",
+  "",
+  "### Red flags — you are off track",
+  "- Printing file bodies to read them yourself → stop, delegate to `map_files`.",
+  "- Writing regex to *infer meaning* (naming conventions, intent, correctness) → that is a",
+  "  sub-LLM job. Regex is for exact lexical needles only.",
+  "- Two turns in with zero sub-LLM calls on an analysis task → you are solving it yourself.",
+  "- About to reuse a value that is not in `answers` → re-derive it and store it.",
+  "- One sub-call per file over dozens of files → batch them; fat prompts in small batches win.",
+].join("\n");
+
+/** Native-mode variant of the doctrine — same rules, sized for the native prompt budget. */
+const ENV_TIPS_CONDENSED = [
+  "### Decomposition doctrine (paper App. C.3 — worth +69.5% there)",
+  "Orchestrate; don't solve. Loop: `search`/`grep_context`/`outline` to find the slice →",
+  "`map_files` / `llm_query_batched` to read it → memoize into `answers` → assemble by lookup.",
+  "`answers` and `plan` persist across turns and snapshots: **if a value isn't in `answers`, it",
+  "doesn't exist** — never reuse a number from your own earlier reasoning or truncated stdout.",
+  "Red flags: printing file bodies to read them; regex used to infer meaning rather than match",
+  "a literal; two turns into an analysis with zero sub-LLM calls; one sub-call per file instead",
+  "of one batch. Exception — AUTHORING is not reading: you write every edit body yourself.",
+].join("\n");
+
 function howToRunCode(): string {
   return [
     "To run Python, write a fenced ```repl``` block. The REPL **persists** across turns. Only",
@@ -100,24 +190,23 @@ function replGlossary(
       "  bodies into your own output.",
       CONTEXT_EXCLUSION_NOTE,
       "",
-      "  Chunking example:",
+      "  Worked example — find the slice, then delegate it:",
       "  ```python",
-      "  chunk_size = 5",
-      "  for i in range(0, len(context), chunk_size):",
-      "      batch = context[i:i+chunk_size]",
-      "      results = llm_query_batched([",
-      "          f\"Analyze {f['path']} ({f['tokens']} tok):\\n{f['content']}\"",
-      "          for f in batch",
-      "      ])",
+      '  hits = search("where is the retry/backoff policy configured?", k=8)',
+      "  paths = sorted({h['path'] for h in hits})",
+      '  answers.update(map_files(paths, "Describe any retry/backoff policy in this file, with line numbers. Say NONE if absent."))',
+      "  print({p: a[:80] for p, a in answers.items()})",
       "  ```",
     );
   }
+  lines.push(...RETRIEVAL_GLOSSARY_LINES);
   lines.push(
     "- `llm_query(prompt: str, model=None) -> str`: a single sub-LLM completion. Use for extraction,",
     "  summarization, or Q&A over a chunk of text.",
     "- `llm_query_batched(prompts: list[str], model=None) -> list[str]`: run several sub-LLM calls",
     "  concurrently; output order matches input order.",
     ...CHUNKED_GLOSSARY_LINES,
+    ...DELEGATION_GLOSSARY_LINES,
   );
   if (askUserQuestion) {
     lines.push(
@@ -189,6 +278,8 @@ function replGlossary(
     );
   }
   lines.push(
+    "- `answers` / `plan`: two dicts that persist across turns and snapshots. Memoize every",
+    "  verified result in `answers` — see the decomposition doctrine below.",
     "- `SHOW_VARS() -> str`: list every variable currently in the REPL.",
     '- `answer`: a dict initialized to {"content": "", "ready": False}. To submit your final answer,',
     '  set `answer["content"]` to the answer text and `answer["ready"] = True`.',
@@ -244,7 +335,9 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
     "Start by probing `context` (print a few lines, count items). Then build up an answer to the query.",
   ];
   if (opts.orchestrator ?? true) {
-    parts.push("", orchestratorAddendum(maxPromptChars));
+    // Two counterweights, both required (paper App. B): the addendum bounds OVER-recursion
+    // (batching/cost), ENV_TIPS bounds UNDER-recursion (solving it yourself).
+    parts.push("", orchestratorAddendum(maxPromptChars), "", ENV_TIPS);
   }
   if (kind === "files") {
     parts.push("", LARGE_FILE_RULE_LINES.join("\n"));
@@ -263,61 +356,55 @@ function nativeReplGlossary(): string {
     "",
     "### REPL Environment",
     "- `context`: list[dict] — every file in the repository. Each dict: `path` (str), `content` (str), `tokens` (int).",
+    "",
+    "Retrieval — free (no sub-LLM call, no tokens). **Start here, before guessing filenames:**",
+    "- `search(query, k=10, path_glob=None) -> [{path, line, score, snippet}]` — BM25 over `context`. Returns pointers, not bodies.",
+    "- `grep_context(pattern, k=50, path_glob=None, before=0, after=0) -> {hits, counts, total, truncated}` — regex; `counts` stays complete when `hits` is capped. Lexical needles only.",
+    "- `outline(path) -> str` — definition/heading skeleton with line numbers. Orient in ~200 chars instead of printing 20K.",
+    "",
+    "Delegation — everything semantic goes through these:",
+    "- `map_files(files, prompt, model=None) -> {path: answer}` — ask `prompt` of many files; batches and splits oversized files for you. **The default way to read many files.**",
+    "- `llm_map_reduce(items, map_prompt, reduce_prompt, model=None) -> str` — map in one batch, then reduce with one call.",
     "- `llm_query(prompt, model=None) -> str` — one-shot sub-LLM. Use for extraction, summarization, Q&A over a chunk.",
     "- `llm_query_batched(prompts, model=None) -> list[str]` — concurrent sub-LLM calls; output order matches input order.",
     CHUNKED_GLOSSARY_LINE_NATIVE,
     "- `rlm_query(prompt, model=None) -> str` — recursive RLM with its own REPL for complex sub-tasks needing iterative reasoning. Prefer llm_query — rlm_query is slower and costlier.",
     "- `rlm_query_batched(prompts, model=None) -> list[str]` — concurrent recursive RLM calls.",
     "",
+    "",
+    "- `answers` / `plan` — dicts persisted across every repl() call and snapshot. Your memo.",
     "- `todo(action, **kwargs) -> str` — manage a task list. Actions: create, update, list, get, delete, clear. Statuses: pending → in_progress → completed.",
     "- `load_library(source) -> dict`: append external dir/file/git tree into `context` under `lib/<id>/…`. Return is metadata only — always use `context`.",
     "- `SHOW_VARS() -> str` — list all variables currently in the REPL.",
     "- `answer`: dict `{\"content\": \"\", \"ready\": False}`. Setting `answer[\"ready\"] = True` delivers it to the user; do not restate it.",
     "",
-    "### Orchestrator Pattern",
-    "You are an **orchestrator, not a solver**. After probing `context`, decompose the task into sub-LLM / REPL steps,",
-    "then execute one step at a time, printing samples of each result to verify before moving on.",
+    ENV_TIPS_CONDENSED,
     "",
-    "Push every long-context operation (reading, summarizing, classifying, answering sub-questions) into",
-    "`llm_query` / `llm_query_batched` — never dump raw file bodies into your own output. Aggregate small",
-    "results back in Python. Use Python string operations (`in`, `re.search`) over `context` for quick lookups.",
-    "",
-    "### Chunking Strategy",
+    "### Worked pattern",
     "```python",
-    "chunk_size = 10",
-    "for i in range(0, len(context), chunk_size):",
-    "    batch = context[i:i+chunk_size]",
-    "    results = llm_query_batched([",
-    "        f\"Analyze {f['path']} ({f['tokens']} tok):\\n{f['content']}\"",
-    "        for f in batch",
-    "    ])",
-    "    # aggregate results into a buffer",
+    'hits = search("where is retry/backoff configured?", k=8)',
+    "paths = sorted({h['path'] for h in hits})",
+    'answers.update(map_files(paths, "Describe any retry/backoff policy here, with line numbers. Say NONE if absent."))',
+    "print({p: a[:80] for p, a in answers.items()})",
     "```",
-    `- Keep sub-prompts under ${DEFAULT_PROMPT_CAP.toLocaleString()} characters (≈${promptCapTokensK(DEFAULT_PROMPT_CAP)}K tokens); batch ~20 prompts per call. Fat prompts in small batches > thousands of tiny prompts.`,
+    `- Sub-prompts cap at ${DEFAULT_PROMPT_CAP.toLocaleString()} chars (≈${promptCapTokensK(DEFAULT_PROMPT_CAP)}K tokens); ~20 prompts per batch. Fat prompts in small batches > thousands of tiny prompts.`,
     "",
     "### Choosing Between Tools",
     "| Tool | When |",
     "|------|------|",
-    "| `repl({code})` | Need to chunk/delegate `context` to sub-LLMs; need Python scripting; need REPL state across calls |",
-    "| `zebra-mcp` | Semantic search over the codebase |",
-    "| `edit` | Change an existing file. Compose oldText/newText yourself; exact match required |",
-    "| `write` | Create a new file |",
-    "| `llm_query` (inside repl) | Extract, summarize, or classify a chunk of text |",
-    "| `rlm_query` (inside repl) | Complex sub-task needing iterative reasoning with its own REPL |",
-    "| `todo` (inside repl) | Track multi-step progress visibly to the user |",
-    "",
-    "### Workflow",
-    "1. **Plan**: Create todos for the multi-step analysis. Probe `context` — print length, inspect a few entries.",
-    "2. **Chunk & Delegate**: Slice `context` into batches, delegate each batch to sub-LLMs via `llm_query_batched`.",
-    "3. **Aggregate**: Collect results in Python, pass aggregated results to a final `llm_query` or produce the answer directly.",
-    "4. **Finalize**: For file changes, call the native `edit` / `write` tools directly — you",
-    "   author the change, and Pi validates the anchor and renders the diff. For analysis tasks,",
-    "   write a normal message.",
+    "| `repl({code})` | ALL repository reading, search, and analysis; Python scripting; state across calls |",
+    "| `edit` / `write` | Change or create a file. Compose oldText/newText yourself; exact match required |",
+    "| `search` / `grep_context` / `outline` (in repl) | Locate the relevant slice — free, do this first |",
+    "| `zebra-mcp` | Semantic/embedding search when lexical `search` misses the concept |",
+    "| `map_files` / `llm_query_batched` (in repl) | Read/extract/classify that slice |",
+    "| `rlm_query` (in repl) | Sub-task needing its own iterative reasoning and REPL |",
+    "| `todo` (in repl) | Track multi-step progress visibly to the user |",
     "",
     "### Task-Specific Patterns",
     LARGE_FILE_RULE_NATIVE,
-    "- Architecture/code review: chunk relevant files and delegate summaries or review to `llm_query_batched`.",
-    "- Bug investigation: use Python string/regex search over `context`; delegate matching files for analysis.",
+    "- Architecture/code review: `search` for the subsystem, then `map_files` the hits.",
+    "- Bug investigation: `grep_context` for the literal symbol/message, then `map_files` the matching files.",
+    "- Finalizing: for file changes call `edit`/`write` directly so Pi validates the anchor and renders the diff; for analysis, write a normal message.",
     "- If sub-LLM credits are exhausted, report partial results and stop — do not bypass REPL restrictions.",
     "",
     "Reserve your own tokens for high-level decisions: what to ask next, how to combine sub-LLM outputs, when to finalize.",
@@ -336,9 +423,10 @@ export function buildNativeSystemPrompt(): string {
     "- `read`/`grep` are blocked; bash readers (cat/sed/head/tail/awk/rg) are blocked; bash output is hard-capped at 4K chars.",
     "- repl() stdout returned to you is hard-capped at 4K chars — printing file bodies is USELESS; the text will not reach you.",
     "",
-    "DELEGATION RULE: if a step needs MEANING from more than ~4K chars of text, that reading MUST",
-    "be an llm_query / llm_query_batched / llm_query_chunked call (rlm_query for iterative",
-    "sub-tasks). Deterministic Python (search, count, slice, json, re) over `context` is free and",
+    "LOCATE-THEN-DELEGATE: `search(query)` / `grep_context(pattern)` / `outline(path)` cost nothing",
+    "— run them FIRST to find the relevant slice. Then, if a step needs MEANING from more than ~4K",
+    "chars, that reading MUST be a map_files / llm_query / llm_query_batched / llm_query_chunked",
+    "call (rlm_query for iterative sub-tasks). Deterministic Python over `context` is free and",
     "preferred for lookups. Semantic reading is always delegated.",
     "",
     "All file content is pre-loaded in the REPL `context` variable. Use ONLY `repl({code})`.",
@@ -355,8 +443,10 @@ export function buildNativeSystemPrompt(): string {
 }
 
 /** Soft cap on the static native prompt. Leaves headroom for per-turn context injection
- *  without bloating the root model's system prompt. Exceeded → phase-guards.ts fails. */
-export const NATIVE_PROMPT_BUDGET = 6_000;
+ *  without bloating the root model's system prompt. Exceeded → phase-guards.ts fails.
+ *  Raised from 6K when the retrieval glossary and the condensed decomposition doctrine
+ *  landed; both buy far more than they cost (paper Table 2, Fig. 4a). */
+export const NATIVE_PROMPT_BUDGET = 7_500;
 
 /** Exported for tests — prompt length without context metadata (which is injected separately). */
 export const NATIVE_PROMPT_STATIC = buildNativeSystemPrompt();
@@ -365,10 +455,11 @@ export const NATIVE_PROMPT_STATIC = buildNativeSystemPrompt();
 export const NATIVE_TURN_REMINDER = [
   "[RLM orchestrator contract — enforced by the runtime, not optional:",
   "repl() stdout to you is hard-capped at 4K chars; read/grep and bash readers are blocked.",
-  "Any SEMANTIC reading of file/text content MUST go through llm_query / llm_query_batched /",
-  "llm_query_chunked (rlm_query for iterative sub-tasks). Deterministic Python (search, count,",
-  "slice, json) is free. AUTHORING IS NOT READING: you write every edit body yourself and apply",
-  "it with the native `edit` / `write` tools — never delegate code you will ship to a sub-LLM.",
+  "LOCATE FIRST with search() / grep_context() / outline() — they cost nothing. Any SEMANTIC",
+  "reading MUST then go through map_files / llm_query / llm_query_batched / llm_query_chunked",
+  "(rlm_query for iterative sub-tasks). Memoize what you reuse in `answers`; a value not in",
+  "`answers` does not exist. AUTHORING IS NOT READING: you write every edit body yourself and",
+  "apply it with the native `edit` / `write` tools — never delegate code you will ship.",
   "Keep your own output to decisions, authored edits, and aggregation.]",
 ].join("\n");
 

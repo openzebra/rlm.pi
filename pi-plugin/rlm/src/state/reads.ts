@@ -12,8 +12,12 @@ import { runsDir, runDir, trailPath, contextPath } from "./paths.ts";
 import { isHeader, isRow, type RunHeader, type Row } from "./rows.ts";
 import { errorMessage, failSoft, listDirectoriesSorted, pathExists, warn } from "./internal.ts";
 
-/** Every well-formed row, in trail order. Malformed line → one warn, skipped. */
-export async function readRows(cwd: string, dir: string, runId: string): Promise<Row[]> {
+/**
+ * Raw JSONL lines of a run's trail, in order. Missing or unreadable file → [].
+ * Shared by the fail-soft reader here and the hole-detecting reader in resume.ts, which
+ * differ only in how they treat a bad line.
+ */
+export async function readTrailLines(cwd: string, dir: string, runId: string): Promise<string[]> {
   const path = trailPath(cwd, dir, runId);
   if (!await pathExists(path)) return [];
   const content = await failSoft(
@@ -21,10 +25,14 @@ export async function readRows(cwd: string, dir: string, runId: string): Promise
     undefined as string | undefined,
   );
   const trimmed = content?.trim();
-  if (!trimmed) return [];
+  return trimmed ? trimmed.split("\n") : [];
+}
 
+/** Every well-formed row, in trail order. Malformed line → one warn, skipped. */
+export async function readRows(cwd: string, dir: string, runId: string): Promise<Row[]> {
+  const lines = await readTrailLines(cwd, dir, runId);
   const rows: Row[] = [];
-  for (const line of trimmed.split("\n")) {
+  for (const line of lines) {
     try {
       const row = JSON.parse(line) as unknown;
       if (isRow(row)) rows.push(row);

@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Result } from "../util/errors.ts";
+import { errorMessage } from "../util/errors.ts";
 
 export const ARTIFACTS_DIR = ".rlm/artifacts";
 
@@ -59,7 +60,7 @@ export function captureGoal(cwd: string, brief: string): GoalCaptureResult {
     writeFileSync(join(cwd, baselinePath), JSON.stringify({ paths }, null, 2), "utf-8");
     return { ok: true, value: { goalPath, baselinePath } };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { ok: false, error: message };
   }
 }
@@ -72,7 +73,7 @@ export function saveArtifact(cwd: string, dir: string, slug: string, content: st
     writeFileSync(join(cwd, rel), content, "utf-8");
     return { ok: true, path: rel };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { ok: false, error: message };
   }
 }
@@ -82,7 +83,7 @@ export function readArtifact(cwd: string, relPath: string): Result<string, strin
   try {
     return { ok: true, value: readFileSync(join(cwd, relPath), "utf-8") };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { ok: false, error: `could not read artifact ${relPath}: ${message}` };
   }
 }

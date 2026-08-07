@@ -44,13 +44,3 @@ export interface RlmDetails {
   readonly warnings?: readonly string[];
 }
 
-export interface SubcallInit {
-  readonly parentId?: string;
-  readonly kind: SubcallKind;
-  readonly label: string;
-  readonly model?: string;
-  readonly detail?: string;
-  readonly args?: string;
-  /** Recursion depth. Required — all call sites pass this. */
-  readonly depth: number;
-}

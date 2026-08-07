@@ -7,6 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-01
+
+### Added
+
+#### Deterministic retrieval inside the REPL
+
+The paper's trajectories retrieve by having the root model hand-write regex (App. E.1).
+Frontier models do that well; small/fast worker models guess keywords badly, and the first
+decomposition attempt disproportionately decides the outcome (§5, Fig. 4a). These primitives
+cost **no tokens and no sub-calls** — they return pointers, and the model chooses what to delegate.
+
+- **`search(query, k=10, path_glob=None)`** — pure-Python Okapi BM25 over 40-line windows of
+  `context`. Returns `[{path, line, score, snippet}]`. The index is built lazily on first use and
+  rebuilt when `context` is replaced or resized (so `load_library` is picked up automatically).
+  The tokenizer splits `snake_case` **and** `camelCase`, so `"resolve model id"` matches
+  `resolveModelId`.
+- **`grep_context(pattern, k=50, path_glob=None, before=0, after=0)`** — regex over `context`.
+  Returns `{hits, counts, total, truncated}`; `counts` stays **complete even when `hits` is
+  capped**, so a wide pattern reports its shape instead of flooding stdout. Bad regexes come back
+  as `"bad regex: …"`, never as an exception.
+- **`outline(path)`** — definition/heading skeleton with line numbers. Matches exact path, then
+  suffix, then glob. Orient in ~200 chars instead of printing 20K.
+
+#### One-line delegation
+
+Structural pressure toward orchestrating: delegating is now cheaper to write than solving.
+
+- **`map_files(files, prompt, model=None) -> {path: answer}`** — accepts context entries or
+  paths, packs them into cap-sized **batched** sub-calls, and splits oversized files
+  automatically. Replaces the hand-rolled chunk loop the prompt used to teach.
+- **`llm_map_reduce(items, map_prompt, reduce_prompt, model=None)`** — the paper's canonical
+  strategy (query per chunk → aggregate the buffers) as a single call.
+- **`answers` / `plan`** — two dicts seeded by the scaffold but **owned by the model**: they
+  persist across every turn, appear in `SHOW_VARS()`, and are captured by snapshots, so a memoized
+  result survives a resume.
+
+#### Decomposition doctrine in the system prompt
+
+Port of the paper's Appendix C.3 `<env_tips>`, retargeted from competition math to repository
+analysis — the single highest-leverage prompt intervention it reports (+69.5% on LongCoT-mini,
+Table 2). Full version headless, condensed in native mode, including the red-flag list
+("printing file bodies to read them", "regex used to infer meaning", "two turns into an analysis
+with zero sub-LLM calls"). The existing anti-**over**-recursion batching rule stays as its
+counterweight: the paper is explicit (App. B) that both guardrails are needed and that one prompt
+does not port across models.
+
+#### Other
+
+- `--rlm` CLI flag; `/rlm-resume <TAB>` completes real run ids.
+- Live context usage (`ctx NN%`) in the footer status line, refreshed each turn.
+- `promptSnippet` / `promptGuidelines` on the `repl` tool.
+- `compactionThresholdPct` and `requestTimeoutMs` are now editable in `/rlm-config` (both were
+  validated and defaulted but had no UI).
+- `test/phase-retrieval.ts` — 28 assertions over the new primitives against a real sandbox.
+
+### Changed
+
+- **Sub-LLM and recursion bridges are now a single implementation (breaking, internal).**
+  `bridge/llm-query.ts` and `bridge/rlm-query.ts` take accessor-shaped options
+  (`workerModel()`, `config()`, `emitter()`, `parentId()`, `depth()`, `remainingBudget()`), so the
+  headless engine (binds once per run) and the native `repl` tool (swaps per invocation) share
+  them. The drifted second copies inside `repl-tool.ts` are gone (−166 lines), taking the
+  credits-hint divergence with them.
+- **`RlmConfig` is fully `readonly` (breaking, internal).** `applySetting` is pure and returns a
+  new frozen config; `RlmController.setConfig` replaces the reference. Removes `MutableSampling`
+  and a latent throw when a frozen `DEFAULT_CONFIG.subSampling` was mutated in place.
+  `ReplToolDeps.config` became `getConfig()` so `/rlm-config` edits take effect without a restart.
+- **`core/engine.ts` split** 801 → 600 lines. Pipeline state (phase, per-phase latest save, ask
+  rounds, pending history reset) moved into a `PipelineController` in `core/pipeline-handlers.ts`;
+  validate-phase finalize routing now returns a `reject | loop-back | halt | accept` union instead
+  of inlining 70 lines in the turn loop.
+- `NATIVE_PROMPT_BUDGET` 6,000 → 7,500. The native prompt grew only 745 chars net (5,825 → 6,570)
+  because the doctrine superseded the old Orchestrator Pattern / Workflow / chunk-loop sections.
+- Markdown rendering derives its theme from the **injected** `Theme` (`ui/theme-adapter.ts`)
+  instead of pi's module-global `getMarkdownTheme()`, which can be uninitialized inside a
+  jiti-loaded extension.
+- The tool-card expand hint uses the user's real keybinding instead of a hardcoded `Ctrl+O`.
+- The `/rlm-resume` progress widget is a component factory, not the `string[]` form — the latter is
+  hard-capped at 10 lines, which the live sub-call tree exceeds as soon as a run fans out.
+
+### Removed
+
+- `mode/input-router.ts` and its suite, plus the no-op `input` handler. The module was
+  production-dead while `ui/intro.ts` advertised the routing to users; the intro text now
+  describes what RLM mode actually does.
+- Zero-caller exports: `statusGlyph`, `kindLabel`, `subcallRunningGlyph`, `hasReplBlock`,
+  `SubcallInit`, `AskUserQuestionReply`, `clearCache`, `refreshWatchdog`, `hasSavedModels`,
+  `RlmHandlers.childRun`, `WorkerResponse.skipped` / `.restored`, and the unused `index` /
+  `phaseGuidanceText` parameters.
+
+### Fixed
+
+- **`ThinkingLevel` from a hand-edited `rlm.json` is validated**, not cast. `"off"` and `"max"`
+  are not `ThinkingLevel`s and were previously forwarded straight to the provider. The guard is
+  keyed by the union, so a level added upstream is a compile error rather than a silent rejection.
+- Sandbox stderr keeps a bounded tail instead of rebuilding and re-slicing the whole buffer on
+  every chunk.
+- Sub-call duration is suppressed only when timestamps are absent, not when they are `0`.
+- `repl` tool registration no longer swallows genuine construction failures — only the expected
+  already-registered case is ignored.
+- `advancePhase` validates the target with the existing `isPhase()` guard instead of casting first.
+- The repomix config literal is bound to repomix's own parameter type (`satisfies`), so an
+  upstream API change is a compile error — this class of breakage shipped as 0.1.3.
+
+### Internal
+
+- DRY: one token estimator, one trail-line reader, one `previewText`, one `errorMessage`, one
+  `limitsFromConfig`, one `displayModelRef`, and one shared tool-card renderer
+  (`cardHeader` / `cardStatsLine` / `renderCollapsedCard`).
+- `as` casts 93 → 28; still zero `any` and zero non-null assertions.
+
 ## [0.1.9] - 2026-07-31
 
 ### Changed
@@ -241,7 +352,8 @@ for the Pi coding agent.
   budget ceiling, max consecutive errors, per-REPL-block timeout, max concurrent sub-calls,
   trajectory compaction, and toggles for `ask_user_question` and `todo`.
 
-[Unreleased]: https://github.com/openzebra/rlm.pi/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/openzebra/rlm.pi/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/openzebra/rlm.pi/releases/tag/v0.2.0
 [0.1.9]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.9
 [0.1.8]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.8
 [0.1.7]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.7

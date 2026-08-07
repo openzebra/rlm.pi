@@ -33,9 +33,9 @@ async function main() {
   console.log(`\nworker model: ${worker.provider}/${worker.id}`);
   let totalCost = 0;
   const bridge = createLlmBridge({
-    workerModel: worker,
+    workerModel: () => worker,
     registry,
-    sampling: { maxTokens: 32 },
+    config: () => ({ maxPromptChars: 400_000, maxConcurrentSubcalls: 4, subSampling: { maxTokens: 32 } }),
     onUsage: (u) => {
       totalCost += u.cost.total;
     },

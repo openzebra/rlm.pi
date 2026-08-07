@@ -15,7 +15,7 @@
 import { check, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
 import { packRepository, formatForLLM, serializeForSandbox } from "../src/context/repomix-context.ts";
-import { buildNativeSystemPrompt, buildRlmSystemPrompt } from "../src/prompts/system.ts";
+import { buildNativeSystemPrompt, buildRlmSystemPrompt, NATIVE_PROMPT_BUDGET } from "../src/prompts/system.ts";
 import type { ContextBundle } from "../src/context/repomix-context.ts";
 import { contextLength, contextTypeLabel } from "../src/text/tokens.ts";
 
@@ -167,10 +167,11 @@ check("SandboxManager — disposed", !mgr.isAlive);
 // ── 8. Native prompt sanity ──
 
 const nativeOnly = buildNativeSystemPrompt();
-check("native prompt — under 6K chars standalone", nativeOnly.length < 6000,
-      ` (${nativeOnly.length.toLocaleString()} chars)`);
+check("native prompt — within budget", nativeOnly.length < NATIVE_PROMPT_BUDGET,
+      ` (${nativeOnly.length.toLocaleString()} / ${NATIVE_PROMPT_BUDGET.toLocaleString()} chars)`);
 check("native prompt — includes REPL glossary", nativeOnly.includes("REPL Environment"));
-check("native prompt — includes workflow steps", nativeOnly.includes("Workflow"));
+check("native prompt — includes the decomposition doctrine", nativeOnly.includes("Decomposition doctrine"));
+check("native prompt — includes worked pattern", nativeOnly.includes("Worked pattern"));
 check("native prompt — includes tool table", nativeOnly.includes("Choosing Between Tools"));
 check("native prompt — guides native edit/write", nativeOnly.includes("edit") && nativeOnly.includes("write"));
 

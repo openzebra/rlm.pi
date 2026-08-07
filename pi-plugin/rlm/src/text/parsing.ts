@@ -19,12 +19,6 @@ export function findReplBlocks(text: string): string[] {
   return blocks;
 }
 
-/** True if the response contains at least one runnable ```repl``` block. */
-export function hasReplBlock(text: string): boolean {
-  FENCE.lastIndex = 0;
-  return FENCE.test(text);
-}
-
 /** Truncate REPL stdout for the model's context window (head + tail, with an elision note). */
 export function truncateOutput(text: string, limit = 20_000): string {
   if (text.length <= limit) return text;

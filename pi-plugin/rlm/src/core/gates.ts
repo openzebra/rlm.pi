@@ -135,7 +135,7 @@ export function sectionHasNonEmptyBody(content: string, heading: string): boolea
   const headingRe = new RegExp(`^##\\s+${escapeRegExp(heading)}\\s*$`);
   let inSection = false;
   let seen = false; // first match wins — do not re-enter on a later duplicate heading
-  let body = "";
+  let hasBody = false; // only emptiness matters — never accumulate the body itself
   forEachLineOutsideFences(content, (line) => {
     if (/^##\s+/.test(line)) {
       if (inSection) {
@@ -148,9 +148,9 @@ export function sectionHasNonEmptyBody(content: string, heading: string): boolea
       }
       return;
     }
-    if (inSection) body += `${line}\n`;
+    if (inSection && line.trim().length > 0) hasBody = true;
   });
-  return body.trim().length > 0;
+  return hasBody;
 }
 
 function escapeRegExp(s: string): string {

@@ -10,8 +10,6 @@ export interface Sampling {
   readonly reasoning?: ThinkingLevel;
 }
 
-type MutableSampling = { -readonly [Key in keyof Sampling]?: Sampling[Key] };
-
 export interface RunLogConfig {
   /** Default: true — always-on, opt-out. */
   readonly enabled?: boolean;
@@ -25,59 +23,59 @@ export interface RunLogConfig {
 
 export interface RlmConfig {
   /** Persistent editor-routing mode; when enabled, plain interactive prompts use RLM. */
-  enabled: boolean;
+  readonly enabled: boolean;
   /** Max recursion depth. depth >= maxDepth ⇒ rlm_query falls back to a plain llm_query. */
-  maxDepth: number;
+  readonly maxDepth: number;
   /** Max turns before the engine must finalize. */
-  maxIterations: number;
+  readonly maxIterations: number;
   /** Per-`repl`-block wall-clock timeout inside the worker (seconds). */
-  execTimeoutS: number;
+  readonly execTimeoutS: number;
   /** Parent-side watchdog per sandbox request (ms). */
-  requestTimeoutMs: number;
+  readonly requestTimeoutMs: number;
   /** Concurrency pool for *_batched sub-calls. */
-  maxConcurrentSubcalls: number;
+  readonly maxConcurrentSubcalls: number;
   /** Reject sub-LLM prompts larger than this many chars. */
-  maxPromptChars: number;
+  readonly maxPromptChars: number;
   /** Max USD spend across the whole tree before the engine stops (undefined = no cap). */
-  maxBudgetUsd?: number;
+  readonly maxBudgetUsd?: number;
   /** Max wall-clock ms across the whole tree before the engine stops (undefined = no cap). */
-  maxTimeoutMs?: number;
+  readonly maxTimeoutMs?: number;
   /** Max total input+output tokens across the whole tree before the engine stops (undefined = no cap). */
-  maxTokens?: number;
+  readonly maxTokens?: number;
   /** Max consecutive error turns before the engine stops (undefined = no cap). */
-  maxErrors?: number;
+  readonly maxErrors?: number;
   /** Append the orchestrator addendum to the system prompt. */
-  orchestrator: boolean;
+  readonly orchestrator: boolean;
   /** Enable the phase pipeline (advance_phase + stall nags) at depth 0. */
-  pipeline: boolean;
+  readonly pipeline: boolean;
   /** Max validate→blueprint corrective re-entries when validation reports blockers (default 2). */
-  maxBackwardJumps: number;
+  readonly maxBackwardJumps: number;
   /** Summarize the trajectory when it grows past the threshold (keeps the root window small). */
-  compaction: boolean;
+  readonly compaction: boolean;
   /** Compact when estimated history tokens reach this fraction of the model's context window. */
-  compactionThresholdPct: number;
+  readonly compactionThresholdPct: number;
   /** Python executable used to launch the sandbox worker. */
-  python: string;
+  readonly python: string;
   /** Worker startup wait before treating sandbox init as failed (ms). */
-  sandboxInitTimeoutMs: number;
+  readonly sandboxInitTimeoutMs: number;
   /** Allow ask_user_question() calls from the root REPL. */
-  askUserQuestion: boolean;
+  readonly askUserQuestion: boolean;
   /** Allow todo() calls from the REPL. */
-  todo: boolean;
+  readonly todo: boolean;
   /** Enable the load_library() REPL scaffold (external dirs/files/git repos as extra context slots). */
-  libraryLoader: boolean;
+  readonly libraryLoader: boolean;
   /** ThinkingLevel for the root smart model (set via /rlm-config). */
-  smartReasoning?: ThinkingLevel;
+  readonly smartReasoning?: ThinkingLevel;
   /** Output token cap + temperature for the root smart model per turn.
    *  Keeps each turn short so the next turn's input stays manageable.
    *  `reasoning` is read from `smartReasoning` if omitted here. */
-  rootSampling?: Readonly<Sampling>;
+  readonly rootSampling?: Readonly<Sampling>;
   /** System prompt injected into every llm_query / llm_query_batched sub-call.
    *  Instructs the worker model to respond concisely.
    *  undefined = no system prompt (raw completion). */
-  subSystemPrompt?: string;
+  readonly subSystemPrompt?: string;
   /** Sampling for sub-LLM (worker) calls. */
-  subSampling: MutableSampling;
+  readonly subSampling: Readonly<Sampling>;
   /** Optional run-state persistence configuration. Enabled by default. */
   readonly runLog?: RunLogConfig;
 }

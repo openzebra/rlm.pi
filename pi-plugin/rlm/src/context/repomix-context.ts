@@ -10,9 +10,12 @@
 
 import { pack } from "repomix";
 import type { PackResult as RepomixPackResult } from "repomix";
+/** repomix's own config parameter type — `satisfies` keeps the literal checked against it. */
+type PackConfig = NonNullable<Parameters<typeof pack>[1]>;
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { errorMessage } from "../util/errors.ts";
+import { estimateTokens } from "../text/tokens.ts";
 
 // ── Public types ──
 
@@ -51,11 +54,6 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 const DEFAULT_CACHE_TTL_MS = 30_000;
 
-/** Exported for tests — empties the module-level cache. */
-export function clearCache(): void {
-  cache.clear();
-}
-
 function cacheKey(cwd: string): string {
   return resolve(cwd);
 }
@@ -75,8 +73,6 @@ function cacheSet(key: string, bundle: ContextBundle): void {
 }
 
 // ── Core functions ──
-
-const ESTIMATED_CHARS_PER_TOKEN = 4;
 
 export async function packRepository(
   cwd: string,
@@ -133,7 +129,7 @@ export async function packRepository(
         },
         security: { enableSecurityCheck: false },
         tokenCount: { encoding: "o200k_base" as const },
-      } as Parameters<typeof pack>[1]),
+      } satisfies PackConfig),
       new Promise<never>((_, reject) => {
         signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
       }),
@@ -147,8 +143,7 @@ export async function packRepository(
 
     for (let i = 0; i < processedFiles.length; i++) {
       const file = processedFiles[i];
-      const tokens = tokenCounts[file.path]
-        ?? Math.ceil(file.content.length / ESTIMATED_CHARS_PER_TOKEN);
+      const tokens = tokenCounts[file.path] ?? estimateTokens(file.content.length);
       files[i] = { path: file.path, content: file.content, tokens };
       totalTokens += tokens;
       totalChars += file.content.length;

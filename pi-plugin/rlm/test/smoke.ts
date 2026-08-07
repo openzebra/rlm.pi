@@ -16,10 +16,10 @@ const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 /** Suites run in sequence as child processes. */
 const SUITES: readonly string[] = Object.freeze([
   "phase1.ts", "phase2.ts", "phase3.ts", "phase3-render.ts", "phase4.ts",
-  "phase6.ts", "phase8-state.ts", "phase8-snapshot.ts", "phase8-resume.ts",
+  "phase8-state.ts", "phase8-snapshot.ts", "phase8-resume.ts",
   "phase9-prune.ts", "phase9-engine-persistence.ts", "phase-chunked.ts",
   "phase-gates.ts", "phase-guards.ts", "phase-library.ts", "phase-pipeline.ts",
-  "phase-state.ts", "native-mode.ts", "native-smoke.ts",
+  "phase-retrieval.ts", "phase-state.ts", "native-mode.ts", "native-smoke.ts",
 ]);
 
 async function assertEditSurfaceRemoved(): Promise<void> {

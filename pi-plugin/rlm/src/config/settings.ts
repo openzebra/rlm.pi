@@ -30,6 +30,19 @@ function validateString(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v : undefined;
 }
 
+/**
+ * Every value pi-ai accepts for `reasoning`. Keyed by the union so a new level added upstream
+ * is a compile error here rather than a silently-rejected setting. Note `off` and `max` are
+ * NOT ThinkingLevels — a hand-edited rlm.json carrying one is dropped, not forwarded.
+ */
+const THINKING_LEVELS: Readonly<Record<ThinkingLevel, true>> = Object.freeze({
+  minimal: true, low: true, medium: true, high: true, xhigh: true,
+});
+
+function validateThinkingLevel(v: unknown): ThinkingLevel | undefined {
+  return typeof v === "string" && Object.hasOwn(THINKING_LEVELS, v) ? (v as ThinkingLevel) : undefined;
+}
+
 function validateRunLog(raw: unknown): Partial<RunLogConfig> | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const r = raw as Record<string, unknown>;
@@ -83,7 +96,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (compactionThresholdPct !== undefined && compactionThresholdPct <= 1) out.compactionThresholdPct = compactionThresholdPct;
   const python = validateString(r.python);
   if (python !== undefined) out.python = python;
-  if (typeof r.smartReasoning === "string") out.smartReasoning = r.smartReasoning as ThinkingLevel;
+  const smartReasoning = validateThinkingLevel(r.smartReasoning);
+  if (smartReasoning !== undefined) out.smartReasoning = smartReasoning;
   const subSystemPrompt = validateString(r.subSystemPrompt);
   if (subSystemPrompt !== undefined) out.subSystemPrompt = subSystemPrompt;
   const runLog = validateRunLog(r.runLog);
@@ -103,7 +117,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
     if (maxTokensValue !== undefined) sampling.maxTokens = maxTokensValue;
     const temperature = validateNumber(ss.temperature, 0);
     if (temperature !== undefined) sampling.temperature = temperature;
-    if (typeof ss.reasoning === "string") sampling.reasoning = ss.reasoning as ThinkingLevel;
+    const ssReasoning = validateThinkingLevel(ss.reasoning);
+    if (ssReasoning !== undefined) sampling.reasoning = ssReasoning;
     out.subSampling = sampling;
   }
   if (typeof r.rootSampling === "object" && r.rootSampling !== null) {
@@ -113,7 +128,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
     if (rsMaxTokens !== undefined) rootSampling.maxTokens = rsMaxTokens;
     const rsTemperature = validateNumber(rs.temperature, 0);
     if (rsTemperature !== undefined) rootSampling.temperature = rsTemperature;
-    if (typeof rs.reasoning === "string") rootSampling.reasoning = rs.reasoning as ThinkingLevel;
+    const rsReasoning = validateThinkingLevel(rs.reasoning);
+    if (rsReasoning !== undefined) rootSampling.reasoning = rsReasoning;
     out.rootSampling = Object.freeze(rootSampling);
   }
   return out;
@@ -165,4 +181,18 @@ export function resolveModelId(registry: ModelRegistry, ref?: string): Model<Api
 
 export function modelRef(model: Model<Api> | undefined): string | undefined {
   return model ? `${model.provider}/${model.id}` : undefined;
+}
+
+/**
+ * Human-readable "provider/id" for a sub-call node: the resolved override when one was
+ * supplied and resolves, otherwise the fallback model. Shared by the llm and rlm bridges
+ * so sub-call trees label their nodes identically.
+ */
+export function displayModelRef(
+  registry: ModelRegistry,
+  override: string | null,
+  fallback: Model<Api>,
+): string {
+  const resolved = override ? (resolveModelId(registry, override) ?? fallback) : fallback;
+  return modelRef(resolved) ?? fallback.id;
 }

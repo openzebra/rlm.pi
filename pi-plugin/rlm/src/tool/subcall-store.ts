@@ -7,7 +7,7 @@
  * subcall accumulation logic.
  */
 import type { RlmEmitter, SubcallCreatedEvent, SubcallUpdatedEvent } from "./rlm-events.ts";
-import type { RlmSubcall, SubcallStatus } from "./rlm-details.ts";
+import type { RlmSubcall } from "./rlm-details.ts";
 import { EmitterListener } from "./emitter-listener.ts";
 
 type MutableSubcall = {
@@ -74,7 +74,7 @@ export class SubcallStore extends EmitterListener {
 
   /** Snapshot subcall array. Allocates a new array from Map values. */
   getSubcalls(): RlmSubcall[] {
-    return Array.from(this.subcalls.values(), (subcall) => Object.freeze({ ...subcall, status: subcall.status as SubcallStatus }));
+    return Array.from(this.subcalls.values(), (subcall) => Object.freeze({ ...subcall }));
   }
 
   /** Snapshot running totals. O(1). */

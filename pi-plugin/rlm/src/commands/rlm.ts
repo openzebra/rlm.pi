@@ -1,6 +1,7 @@
 /** `/rlm` — toggle persistent Recursive Language Model mode. */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { createPiInteractiveDeps } from "../bridge/pi-interactive.ts";
 import type { RlmController, RunHandle } from "../mode/rlm-mode.ts";
 import { postRlmGuide } from "../ui/intro.ts";
@@ -13,13 +14,19 @@ import type { RunHeader } from "../state/rows.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { RlmEmitter } from "../tool/rlm-events.ts";
 import { RlmEventAggregator } from "../tool/rlm-aggregator.ts";
+import type { RlmDetails } from "../tool/rlm-details.ts";
+import { cardHeader, cardStatsLine, renderCollapsedSubcallTree } from "../tool/subcall-render.ts";
+import { errorMessage } from "../util/errors.ts";
+
+/** Run ids offered for `/rlm-resume <TAB>`. */
+const MAX_COMPLETIONS = 20;
 
 export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController): void {
   pi.registerCommand("rlm", {
     description: "Toggle persistent RLM mode (route plain prompts through the RLM engine).",
     handler: async (_args, ctx) => {
       const enabled = controller.toggle();
-      setRlmModeStatus(ctx.ui, controller);
+      setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
       ctx.ui.notify(`RLM mode ${enabled ? "ON" : "OFF"}`, "info");
     },
   });
@@ -45,6 +52,15 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
 
   pi.registerCommand("rlm-resume", {
     description: "Resume an interrupted RLM run (default @latest).",
+    getArgumentCompletions: async (prefix) => {
+      const dir = controller.config.runLog?.dir ?? DEFAULT_RUN_DIR;
+      const ids = await listRunIds(process.cwd(), dir);
+      const candidates = ["@latest", ...ids];
+      return candidates
+        .filter((value) => value.startsWith(prefix))
+        .slice(0, MAX_COMPLETIONS)
+        .map((value) => ({ value, label: value }));
+    },
     handler: async (args, ctx) => {
       if (controller.isBusy()) {
         ctx.ui.notify("RLM is busy (use /rlm-stop to cancel).", "warning");
@@ -69,7 +85,7 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
       let recon: ReconstructResult;
       try { recon = await reconstructRlmState(cwd, dir, runId, systemPrompt); }
       catch (e) {
-        ctx.ui.notify(`RLM resume failed: corrupt run state — ${e instanceof Error ? e.message : String(e)}`, "error");
+        ctx.ui.notify(`RLM resume failed: corrupt run state — ${errorMessage(e)}`, "error");
         return;
       }
       if (!recon.ok) { ctx.ui.notify(`Cannot resume ${runId}: ${recon.reason}.`, "error"); return; }
@@ -94,10 +110,27 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
     description: "Toggle RLM mode (off also stops a running query)",
     handler: async (ctx) => {
       const enabled = controller.toggle();
-      setRlmModeStatus(ctx.ui, controller);
+      setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
       ctx.ui.notify(`RLM mode ${enabled ? "ON" : "OFF"}`, "info");
     },
   });
+}
+
+/** Above-editor progress card for a `/rlm-resume` run: header + the live sub-call tree. */
+function renderResumeWidget(details: RlmDetails | undefined, theme: Theme): Component {
+  const container = new Container();
+  if (!details) return container;
+  const turns = details.turns;
+  const stats = cardStatsLine(
+    details.totals,
+    theme,
+    turns.max > 0 ? `turn ${turns.current}/${turns.max}` : undefined,
+  );
+  container.addChild(new Text(cardHeader("RLM resume", details.status, stats, theme), 0, 0));
+  if (details.subcalls.length > 0) {
+    container.addChild(new Text(renderCollapsedSubcallTree(details.subcalls, theme), 0, 0));
+  }
+  return container;
 }
 
 async function executeRlmRunWithResume(
@@ -113,13 +146,16 @@ async function executeRlmRunWithResume(
   let aggregator: RlmEventAggregator | undefined;
   try {
     emitter = new RlmEmitter();
+    // Component factory rather than the string[] form: the array form is hard-capped at 10
+    // lines by pi, which the live sub-call tree exceeds as soon as a run fans out. The factory
+    // also receives the live theme, so the widget follows /theme switches.
+    let latest: RlmDetails | undefined;
     aggregator = new RlmEventAggregator(emitter, (partial) => {
-      const d = partial.details;
-      if (!d) return;
-      const turn = d.turns.max > 0 ? ` · turn ${d.turns.current}/${d.turns.max}` : "";
-      const cost = d.totals.costUsd > 0 ? ` · $${d.totals.costUsd.toFixed(4)}` : "";
-      const glyph = d.status === "running" ? "⏳" : d.status === "done" ? "✓" : "✗";
-      ctx.ui.setWidget?.("rlm-status", [`${glyph} RLM resume${turn}${cost}`], { placement: "aboveEditor" });
+      latest = partial.details;
+      if (!latest) return;
+      ctx.ui.setWidget?.("rlm-status", (_tui, theme) => renderResumeWidget(latest, theme), {
+        placement: "aboveEditor",
+      });
     });
     emitter.emitRootPrompt(header.rootPrompt);
     const interactive = createPiInteractiveDeps(ctx);
@@ -131,7 +167,7 @@ async function executeRlmRunWithResume(
       onTodo: controller.config.todo ? interactive.onTodo : undefined,
     });
   } catch (e) {
-    ctx.ui.notify(`RLM resume failed: ${e instanceof Error ? e.message : String(e)}`, "error");
+    ctx.ui.notify(`RLM resume failed: ${errorMessage(e)}`, "error");
     return;
   }
   pi.sendMessage({ customType: "rlm-question", content: `[resume] ${header.rootPrompt}`, display: true });
@@ -140,7 +176,7 @@ async function executeRlmRunWithResume(
     const result = await done;
     pi.sendMessage({ customType: "rlm-answer", content: result.answer, display: true });
   } catch (e) {
-    ctx.ui.notify(`RLM resume failed: ${e instanceof Error ? e.message : String(e)}`, "error");
+    ctx.ui.notify(`RLM resume failed: ${errorMessage(e)}`, "error");
   } finally {
     clearRlmStatus(ctx.ui);
     ctx.ui.setWidget?.("rlm-status", undefined);

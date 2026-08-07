@@ -20,31 +20,21 @@ import { mergeLibraryIntoContext } from "../context/library-context.ts";
 import { createLlmBridge } from "../bridge/llm-query.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { createRlmHandlers } from "../bridge/rlm-query.ts";
-import { resolveModelId } from "../config/settings.ts";
+import { displayModelRef, resolveModelId } from "../config/settings.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
 import { phaseGuidance } from "../prompts/phases.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
 import { PythonSandbox } from "../sandbox/sandbox.ts";
 import {
-  advancePhase as validatePhaseTransition,
-  initialPhaseState,
-  isPhase,
   phaseGatePrompt,
-  PHASES,
-  reconcilePhase,
-  routeAfterValidate,
-  stageForArtifactKind,
-  STAGES,
-  type ArtifactRef,
   type Phase,
   type PhaseState,
-  type SavedArtifact,
   type StageGateData,
 } from "./pipeline.ts";
-import { critiqueArtifact, formatCritique } from "./critique.ts";
+import { PipelineController } from "./pipeline-handlers.ts";
 import type { ValidationGateData } from "./gates.ts";
-import { captureGoal, readArtifact, saveArtifact, type GoalCapture } from "./artifacts.ts";
+import { captureGoal, type GoalCapture } from "./artifacts.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
@@ -187,29 +177,26 @@ export function createEngine(deps: EngineDeps): RunRlm {
     });
 
     const llm = createLlmBridge({
-      workerModel: deps.workerModel,
+      workerModel: () => deps.workerModel,
       registry: deps.registry,
-      subSystem: deps.config.subSystemPrompt,
-      maxPromptChars: deps.config.maxPromptChars,
-      maxConcurrent: deps.config.maxConcurrentSubcalls,
-      sampling: deps.config.subSampling,
+      config: () => deps.config,
       signal: deps.signal,
       onUsage: (u) => {
         limits.addUsage(u);
         deps.onUsage?.(u, "sub");
       },
-      emitter,
-      parentId: selfReportId,
-      depth: input.depth,
+      emitter: () => emitter,
+      parentId: () => selfReportId,
+      depth: () => input.depth,
       remainingBudget,
     });
     const rlm = createRlmHandlers({
       run,
       llm,
-      emitter,
-      maxDepth: deps.config.maxDepth,
-      maxConcurrent: deps.config.maxConcurrentSubcalls,
-      parentNodeId: selfReportId,
+      config: () => deps.config,
+      modelLabel: (override) => displayModelRef(deps.registry, override, model),
+      emitter: () => emitter,
+      parentNodeId: () => selfReportId,
       remainingBudget,
       onChildUsage: (costUsd, inputTokens, outputTokens) => {
         limits.addRaw(costUsd, inputTokens, outputTokens);
@@ -220,18 +207,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let lastAnswer = "";
     let compactions = 0;
     let completedTurns = 0;
-    let phaseState: PhaseState | undefined;
-    /**
-     * Latest save per phase: path + optional gate memo (single record so they cannot desync).
-     * Invalidated by clearLastSaved on phase exit / loop-back.
-     */
-    let lastSaved: Partial<Record<Phase, SavedArtifact>> = {};
-    /** Advisory warnings accumulated from save_artifact critiques (TUI). */
-    let pipelineWarnings: string[] = [];
-    /** Serviced ask_user_question rounds in the current phase (session-only; reset on transition). */
-    let askRoundsThisPhase = 0;
-    let pendingHistoryReset: ChatMsg[] | undefined;
-    let goal: GoalCapture | undefined;
+    /** Owns all pipeline state (phase, per-phase latest save, ask rounds, pending reset). */
+    let pipeline: PipelineController | undefined;
     let nodeStatus: "done" | "error" = "done";
     let persistOn = persist;
     if (persist && deps.runState && !input.resume && runId) {
@@ -284,13 +261,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
       if (!ok) persistOn = false;
     };
 
-    /** Clear lastSaved so a re-entered stage cannot re-gate with a stale artifact. */
-    const clearLastSaved = (...phases: readonly Phase[]): void => {
-      const next: Partial<Record<Phase, SavedArtifact>> = { ...lastSaved };
-      for (const p of phases) delete next[p];
-      lastSaved = next;
-    };
-
     try {
       const pipelineOn = input.depth === 0 && deps.config.pipeline;
       const meta = {
@@ -309,111 +279,22 @@ export function createEngine(deps: EngineDeps): RunRlm {
         libraryLoader: deps.config.libraryLoader,
       });
 
-      const phaseHandlers = pipelineOn
-        ? {
-            saveArtifact: async (kind: string, content: string): Promise<string> => {
-              const stage = stageForArtifactKind(kind);
-              if (stage === undefined) {
-                return formatError(`unknown artifact kind '${kind}' (valid: clarification, research, plan, validation)`);
-              }
-              const current = phaseState?.current ?? PHASES[0];
-              if (stage.phase !== current) {
-                return formatError(
-                  `artifact kind '${kind}' belongs to phase '${stage.phase}', but the pipeline is in '${current}'`,
-                );
-              }
-              const saved = saveArtifact(runCwd, stage.artifactDir, kind, content);
-              if (!saved.ok) return formatError(saved.error);
-              // Preflight: run the SAME gate advance_phase will run, now instead of a turn later.
-              const critique = critiqueArtifact(stage, content, saved.path, runCwd);
-              // One assignment: path + optional gate memo (undefined when gate failed).
-              lastSaved = {
-                ...lastSaved,
-                [stage.phase]: Object.freeze({
-                  path: saved.path,
-                  gateData: critique.gateData,
-                }),
-              };
-              if (critique.warnings.length > 0) {
-                const next = new Array<string>(pipelineWarnings.length + critique.warnings.length);
-                for (let i = 0; i < pipelineWarnings.length; i++) next[i] = pipelineWarnings[i];
-                for (let i = 0; i < critique.warnings.length; i++) {
-                  next[pipelineWarnings.length + i] = critique.warnings[i];
-                }
-                pipelineWarnings = next;
-                emitter.emitWarnings(Object.freeze([...pipelineWarnings]));
-              }
-              return `ok — saved ${saved.path}.\n${formatCritique(critique)}`;
-            },
-            advancePhase: async (phase: string, summary: string | undefined): Promise<string> => {
-              const current = phaseState?.current ?? PHASES[0];
-              const outcome = validatePhaseTransition(current, phase);
-              if (!outcome.ok) return formatError(outcome.error);
-
-              // Clarify interview gate: engine counts serviced ask_user_question rounds
-              // (un-gameable — the model cannot advance without having actually asked).
-              if (current === "clarify" && askRoundsThisPhase === 0) {
-                return formatError(
-                  "clarify requires at least one ask_user_question round — interview the user before advancing",
-                );
-              }
-
-              // GATE: measure the CURRENT stage's latest save only (never fall back to
-              // phaseState.artifacts — those are completed-channel paths and may be stale
-              // across a corrective loop). Prefer the memo filled by save_artifact.
-              const stage = STAGES[current];
-              const savedEntry = lastSaved[current];
-              const artifactPath = savedEntry?.path;
-              if (stage.artifactDir !== "" && artifactPath === undefined) {
-                return formatError(
-                  `phase '${current}' has no saved artifact — call save_artifact("${stage.artifactKind}", content) first`,
-                );
-              }
-              let gateData: StageGateData | undefined;
-              if (stage.artifactDir !== "" && artifactPath !== undefined) {
-                if (savedEntry?.gateData !== undefined) {
-                  gateData = savedEntry.gateData;
-                } else {
-                  const content = readArtifact(runCwd, artifactPath);
-                  if (!content.ok) return formatError(content.error);
-                  const gate = stage.gate(content.value, artifactPath, runCwd);
-                  if (!gate.ok) return formatError(gate.error);
-                  gateData = gate.value;
-                  lastSaved = {
-                    ...lastSaved,
-                    [current]: Object.freeze({ path: artifactPath, gateData }),
-                  };
-                }
-              }
-
-              // Transition accepted: persist row, schedule root history reset (fresh session).
-              const prevArtifacts = phaseState?.artifacts ?? {};
-              const nextArtifacts: Partial<Record<Phase, ArtifactRef>> = { ...prevArtifacts };
-              if (artifactPath !== undefined) {
-                nextArtifacts[current] = Object.freeze({ path: artifactPath, status: "active" });
-              }
-              phaseState = {
-                current: outcome.phase,
-                advancedAt: completedTurns,
-                summary,
-                artifacts: nextArtifacts,
-                backwardJumps: phaseState?.backwardJumps ?? 0,
-              };
-              await persistPhaseRow(phaseState, artifactPath, artifactPath !== undefined ? current : undefined, gateData);
-              clearLastSaved(current);
-              askRoundsThisPhase = 0;
-              pendingHistoryReset = resetHistoryForPhase(system, phaseState, { goal });
-              return `ok — phase advanced to '${outcome.phase}' (was '${current}'${summary ? `, summary: ${summary.slice(0, 80)}` : ""})`;
-            },
-          }
-        : {};
+      pipeline = new PipelineController({
+        runCwd,
+        maxBackwardJumps: deps.config.maxBackwardJumps,
+        emitter,
+        completedTurns: () => completedTurns,
+        resetHistoryForPhase: (state, options) => resetHistoryForPhase(system, state, options),
+        persistPhaseRow,
+      });
+      const phaseHandlers = pipelineOn ? pipeline.handlers() : {};
       const baseAsk = deps.config.askUserQuestion ? deps.onAskUserQuestion : undefined;
       const interactiveHandlers = buildInteractiveHandlers({
         onAskUserQuestion: baseAsk
           ? async (questions) => {
               const answers = await baseAsk(questions);
               // Count only successfully serviced root-depth rounds (handler already rejects depth>0).
-              askRoundsThisPhase++;
+              pipeline?.noteAskRound();
               return answers;
             }
           : undefined,
@@ -484,43 +365,14 @@ export function createEngine(deps: EngineDeps): RunRlm {
         best = input.resume.best;
         compactions = input.resume.compactions;
         completedTurns = input.resume.completedTurns;
-        if (input.resume.phase) {
-          const resumePhase = input.resume.phase;
-          const artifacts: Partial<Record<Phase, ArtifactRef>> = {};
-          if (resumePhase.artifacts) {
-            for (const [k, v] of Object.entries(resumePhase.artifacts)) {
-              if (v !== undefined && isPhase(k)) {
-                artifacts[k] = Object.freeze({
-                  path: v.path,
-                  status: v.superseded ? "superseded" as const : "active" as const,
-                });
-              }
-            }
-          }
-          phaseState = {
-            current: reconcilePhase(resumePhase.current),
-            advancedAt: resumePhase.advancedAt,
-            summary: resumePhase.summary,
-            artifacts,
-            backwardJumps: resumePhase.backwardJumps ?? 0,
-          };
-          // lastSaved is session-only: never rehydrate from trail (would re-gate stale
-          // plan/validation after loop-back / mid-stage resume without a fresh save).
-          lastSaved = {};
-          // askRoundsThisPhase is session-only (like lastSaved): a resume mid-clarify
-          // restarts the interview count so the model must ask again in this process.
-          askRoundsThisPhase = 0;
-        }
+        if (input.resume.phase) pipeline.seedFromResume(input.resume.phase);
       } else if (pipelineOn) {
         // Goal capture (script, no LLM) + seed phase state + fresh history.
         const captured = captureGoal(runCwd, input.rootPrompt);
-        let goalNotice: string | undefined;
-        if (captured.ok) {
-          goal = captured.value;
-        } else {
-          // Fail-soft: fold into the first reset message (never console — corrupts TUI).
-          goalNotice = `Note: goal artifact could not be written (${captured.error}); the brief remains only in the system prompt.`;
-        }
+        // Fail-soft: fold the failure into the first reset message (never console — corrupts TUI).
+        const goalNotice = captured.ok
+          ? undefined
+          : `Note: goal artifact could not be written (${captured.error}); the brief remains only in the system prompt.`;
         // Clarify only when interviews are enabled AND the host wired a callback.
         // Config alone is not enough: without onAskUserQuestion every ask throws and
         // the run would burn maxIterations stuck at clarify (askRounds stays 0).
@@ -528,8 +380,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           deps.config.askUserQuestion && deps.onAskUserQuestion !== undefined
             ? "clarify"
             : "research";
-        phaseState = initialPhaseState(0, startPhase);
-        history = resetHistoryForPhase(system, phaseState, { goal, notice: goalNotice });
+        history = pipeline.seedFresh(startPhase, captured.ok ? captured.value : undefined, goalNotice);
       }
 
       // Context: serialize ContextBundle to sandbox-ready JSON array, pass raw strings through.
@@ -550,9 +401,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
         else emitter.emitTurn(i + 1, deps.config.maxIterations);
 
         // Apply deferred history reset from a prior advance_phase (fresh session policy).
-        if (pendingHistoryReset !== undefined) {
-          history = pendingHistoryReset;
-          pendingHistoryReset = undefined;
+        const scheduledReset = pipeline.takePendingReset();
+        if (scheduledReset !== undefined) {
+          history = scheduledReset;
           pendingReplOutputs = undefined;
         }
 
@@ -588,7 +439,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           pendingReplOutputs = undefined;
         }
 
-        const gateMsg = deps.config.pipeline ? phaseGatePrompt(phaseState, completedTurns) : undefined;
+        const gateMsg = deps.config.pipeline ? phaseGatePrompt(pipeline.phase, completedTurns) : undefined;
         const gateUserMsg = gateMsg ? `[${new Date().toISOString()}] ${gateMsg}` : undefined;
         // Phase guidance lives only in resetHistoryForPhase (fresh session) — do not re-inject
         // into every turn prompt (avoids duplication on turn 1 and dead post-transition flags).
@@ -625,79 +476,27 @@ export function createEngine(deps: EngineDeps): RunRlm {
         completedTurns = i + 1;
         const final = finalAnswerOf(turn.results);
         if (final != null) {
-          // Validate-phase finalize: measure THIS turn's validation save only (lastSaved),
-          // never fall back to phaseState.artifacts (stale after a prior loop).
-          if (pipelineOn && phaseState?.current === "validate") {
-            const vPath = lastSaved.validate?.path;
-            if (vPath === undefined) {
-              // Reject finalize — push error into next turn.
+          // Validate-phase finalize is gated: the controller measures THIS turn's validation
+          // save only, never phase.artifacts (stale after a prior corrective loop).
+          if (pipelineOn && pipeline.phase?.current === "validate") {
+            const outcome = await pipeline.finalizeInValidate(final);
+            if (outcome.kind === "reject") {
               history.push({ role: "assistant", content: turn.response });
-              pendingReplOutputs = formatError(
-                "finalize rejected — save the validation artifact first via save_artifact(\"validation\", content) with status: ready, blockers_count, and verdict",
-              );
+              pendingReplOutputs = outcome.error;
               continue;
             }
-            const content = readArtifact(runCwd, vPath);
-            if (!content.ok) {
-              history.push({ role: "assistant", content: turn.response });
-              pendingReplOutputs = formatError(content.error);
-              continue;
-            }
-            const gate = STAGES.validate.gate(content.value, vPath, runCwd);
-            if (!gate.ok) {
-              history.push({ role: "assistant", content: turn.response });
-              pendingReplOutputs = formatError(gate.error);
-              continue;
-            }
-            if (gate.value.kind !== "validation") {
-              history.push({ role: "assistant", content: turn.response });
-              pendingReplOutputs = formatError("internal: validate gate did not return validation data");
-              continue;
-            }
-            const validation = gate.value.validation;
-            const route = routeAfterValidate(
-              validation,
-              phaseState.backwardJumps,
-              deps.config.maxBackwardJumps,
-            );
-            if (route.kind === "loop-back") {
-              // Keep all prior artifacts; mark blueprint as superseded by this validation.
-              // lastSaved is still cleared so the gate must see a genuinely FRESH plan.
-              const prior = phaseState.artifacts.blueprint;
-              const nextArtifacts: Partial<Record<Phase, ArtifactRef>> = {
-                ...phaseState.artifacts,
-                validate: Object.freeze({ path: vPath, status: "active" }),
-              };
-              if (prior !== undefined) {
-                nextArtifacts.blueprint = Object.freeze({
-                  path: prior.path,
-                  status: "superseded",
-                  supersededBy: vPath,
-                });
-              }
-              phaseState = {
-                current: "blueprint",
-                advancedAt: completedTurns,
-                summary: `loop-back: ${validation.blockersCount} blocker(s)`,
-                artifacts: nextArtifacts,
-                backwardJumps: phaseState.backwardJumps + 1,
-              };
-              await persistPhaseRow(phaseState, vPath, "validate", gate.value, prior?.path);
-              clearLastSaved("blueprint", "validate");
-              askRoundsThisPhase = 0;
-              history = resetHistoryForPhase(system, phaseState, { goal, validation });
+            if (outcome.kind === "loop-back") {
+              history = outcome.history;
               pendingReplOutputs = undefined;
-              pendingHistoryReset = undefined;
               continue;
             }
-            if (route.kind === "halt") {
-              const report = `${route.reason}\n\n${final}`;
-              const halted = result(report, i + 1, limits);
+            if (outcome.kind === "halt") {
+              const halted = result(outcome.report, i + 1, limits);
               await recordTerminal("completed", halted);
               lastAnswer = halted.answer;
               return halted;
             }
-            // route.kind === "done" — accept final answer
+            // outcome.kind === "accept" — take the model's final answer
           }
           const done = result(final, i + 1, limits);
           await recordTerminal("completed", done);
@@ -709,9 +508,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
         // Always capture this turn's REPL outputs for the JSONL trail (fidelity).
         const turnReplOutputs = formatReplOutputs(turn.results, turn.skippedBlocks);
         // If advance_phase scheduled a history reset, apply it now (do not pollute fresh history).
-        if (pendingHistoryReset !== undefined) {
-          history = pendingHistoryReset;
-          pendingHistoryReset = undefined;
+        const nextReset = pipeline.takePendingReset();
+        if (nextReset !== undefined) {
+          history = nextReset;
           // Fanout/advance result is already embedded in the reset user message — do not
           // also append raw REPL stdout as a next-turn user message.
           pendingReplOutputs = undefined;

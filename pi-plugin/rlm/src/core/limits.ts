@@ -13,6 +13,24 @@ export interface Limits {
   readonly maxErrors?: number;
 }
 
+/** Pick the limit caps out of a config (`RlmConfig` satisfies this structurally). */
+export function limitsFromConfig(config: Limits): Limits {
+  return {
+    maxBudgetUsd: config.maxBudgetUsd,
+    maxTimeoutMs: config.maxTimeoutMs,
+    maxTokens: config.maxTokens,
+    maxErrors: config.maxErrors,
+  };
+}
+
+/** Point-in-time totals for a run. */
+export interface UsageSnapshot {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly costUsd: number;
+  readonly durationMs: number;
+}
+
 export class LimitError extends Error {
   constructor(
     public readonly kind: "timeout" | "tokens" | "budget" | "errors",
@@ -71,7 +89,7 @@ export class LimitGuard {
     }
   }
 
-  usage() {
+  usage(): UsageSnapshot {
     return {
       inputTokens: this.inputTokens,
       outputTokens: this.outputTokens,

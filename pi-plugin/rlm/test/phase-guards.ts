@@ -115,7 +115,7 @@ async function main() {
   check(
     "native prompt states repl cap + delegation rule",
     NATIVE_PROMPT_STATIC.includes("hard-capped at 4K chars")
-      && NATIVE_PROMPT_STATIC.includes("DELEGATION RULE"),
+      && NATIVE_PROMPT_STATIC.includes("LOCATE-THEN-DELEGATE"),
   );
   check("per-turn reminder mentions the contract", NATIVE_TURN_REMINDER.includes("llm_query_chunked"));
 

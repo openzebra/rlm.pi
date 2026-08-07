@@ -5,118 +5,104 @@
  * depth cap it degrades to a plain `llm_query` (ported from rlm/core/rlm.py `_subcall`). The
  * concurrency pool bounds parallel children for `rlm_query_batched`.
  *
- * `childRun` is the single spawn path shared by `rlmQuery` / `rlmQueryBatched`.
+ * As with the llm bridge, everything that can change between calls is an accessor, so the
+ * headless engine (which binds them once per run) and the native `repl` tool (which swaps them
+ * per invocation) share one implementation.
  */
 
 import type { RlmResult, RunRlm } from "../core/types.ts";
 import type { LlmBridge } from "./llm-query.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
-import { checkResourceLimits } from "../core/resource-limits.ts";
-import { formatError } from "../util/errors.ts";
+import { checkResourceLimits, type RemainingResources } from "../core/resource-limits.ts";
+import { errorMessage, formatError } from "../util/errors.ts";
 import { mapPool } from "../util/concurrency.ts";
+import { previewText } from "../text/preview.ts";
 
-export interface ChildRunInput {
-  readonly rootPrompt: string;
-  readonly context: unknown;
-  readonly depth: number;
-  readonly label?: string;
-  readonly model?: string | null;
+/** The config slice this bridge reads; structurally satisfied by `RlmConfig`. */
+export interface RlmBridgeConfig {
+  readonly maxDepth: number;
+  readonly maxConcurrentSubcalls: number;
 }
 
 export interface RlmHandlers {
   rlmQuery(prompt: string, model: string | null, depth: number): Promise<string>;
-  rlmQueryBatched(prompts: string[], model: string | null, depth: number): Promise<string[]>;
-  /** Full child-run result (answer + usage) for recursive spawns. */
-  childRun(input: ChildRunInput): Promise<RlmResult>;
+  rlmQueryBatched(prompts: readonly string[], model: string | null, depth: number): Promise<string[]>;
 }
 
 export interface RlmBridgeOptions {
+  /**
+   * Spawns one child run. The engine passes its own `run` (self-recursion); the native tool
+   * passes a closure that builds a child engine bound to the current invocation's emitter.
+   */
   readonly run: RunRlm;
   readonly llm: LlmBridge;
-  /** Live RlmDetails reporting via onUpdate. Required — replaces SubcallObserver for recursive subcalls. */
-  readonly emitter: RlmEmitter;
-  readonly maxDepth: number;
-  readonly maxConcurrent: number;
-  /** Parent subcall ID that this run is attached under. */
-  readonly parentNodeId?: string;
+  readonly config: () => RlmBridgeConfig;
+  /** "provider/id" shown on the sub-call node; see `displayModelRef` in config/settings.ts. */
+  readonly modelLabel?: (override: string | null) => string;
+  /** Live RlmDetails reporting target, resolved per call. */
+  readonly emitter: () => RlmEmitter | undefined;
+  /** Parent subcall ID that this run is attached under, resolved per call. */
+  readonly parentNodeId?: () => string | undefined;
   /** Returns the parent's remaining budget/timeout for seeding child runs. */
-  readonly remainingBudget?: () => { readonly budgetUsd?: number; readonly timeoutMs?: number };
+  readonly remainingBudget?: () => RemainingResources | undefined;
   /** Called with a child run's total cost/tokens so the parent LimitGuard debits it. */
   readonly onChildUsage?: (costUsd: number, inputTokens: number, outputTokens: number) => void;
 }
 
-function emptyResult(answer: string): RlmResult {
-  return {
-    answer,
-    iterations: 0,
-    costUsd: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    durationMs: 0,
-  };
-}
-
 export function createRlmHandlers(opts: RlmBridgeOptions): RlmHandlers {
-  async function childRun(input: ChildRunInput): Promise<RlmResult> {
-    const childDepth = input.depth;
+  /**
+   * One child spawn. `childDepth` is the absolute depth the child will run at.
+   * Never throws: failures come back as "Error: ..." strings, matching the sandbox contract.
+   */
+  async function child(prompt: string, model: string | null, childDepth: number): Promise<string> {
     // At the cap, a child RLM would just be an LM — short-circuit to a one-shot llm_query.
-    // (Callers pass the absolute child depth; rlmQuery wraps with depth+1.)
-    if (childDepth >= opts.maxDepth) {
-      const answer = await opts.llm.llmQuery(
-        input.rootPrompt || String(input.context),
-        input.model ?? null,
-        childDepth - 1,
-      );
-      return emptyResult(answer);
+    if (childDepth >= opts.config().maxDepth) {
+      return opts.llm.llmQuery(prompt, model, childDepth - 1);
     }
-    let subId: string | undefined;
-    try {
-      const rem = opts.remainingBudget?.() ?? {};
+
+    const rem = opts.remainingBudget?.();
+    if (rem !== undefined) {
       // Pre-spawn guard: refuse if the parent's budget or timeout is already exhausted
       // (reference: _subcall checks remaining_budget/timeout before spawning).
       const limitError = checkResourceLimits(rem);
-      if (limitError) return emptyResult(limitError);
-      const label = input.label ?? "rlm_query";
-      const detailSource = input.rootPrompt || String(input.context);
-      subId = opts.emitter.emitSubcallCreated({
-        kind: "rlm", parentId: opts.parentNodeId, label,
-        model: input.model ?? undefined, detail: detailSource.slice(0, 60),
-        depth: childDepth,
-      });
-      const res = await opts.run({
-        rootPrompt: input.rootPrompt,
-        context: input.context,
+      if (limitError !== undefined) return limitError;
+    }
+
+    const emitter = opts.emitter();
+    const subId = emitter?.emitSubcallCreated({
+      kind: "rlm", parentId: opts.parentNodeId?.(), label: "rlm_query",
+      model: opts.modelLabel?.(model) ?? model ?? undefined,
+      detail: prompt.slice(0, 60),
+      depth: childDepth,
+    });
+
+    try {
+      const res: RlmResult = await opts.run({
+        rootPrompt: "",
+        context: prompt,
         depth: childDepth,
         parentNodeId: subId,
-        modelOverride: input.model ?? undefined,
-        remainingBudgetUsd: rem.budgetUsd,
-        remainingTimeoutMs: rem.timeoutMs,
+        modelOverride: model ?? undefined,
+        remainingBudgetUsd: rem?.budgetUsd,
+        remainingTimeoutMs: rem?.timeoutMs,
       });
       opts.onChildUsage?.(res.costUsd, res.inputTokens, res.outputTokens);
-      opts.emitter.emitSubcallUpdated({ id: subId,
-        status: "done", resultPreview: res.answer.slice(0, 200),
-      });
-      return res;
+      // The child emits live cost/token deltas on the shared emitter as it runs, so the node
+      // must NOT also receive a final aggregate — that would double-count.
+      if (emitter && subId !== undefined) {
+        emitter.emitSubcallUpdated({ id: subId, status: "done", resultPreview: previewText(res.answer) });
+      }
+      return res.answer;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (subId) opts.emitter.emitSubcallUpdated({ id: subId, status: "error", detail: msg });
-      return emptyResult(formatError(`child RLM failed - ${msg}`));
+      const msg = errorMessage(err);
+      if (emitter && subId !== undefined) emitter.emitSubcallUpdated({ id: subId, status: "error", detail: msg });
+      return formatError(`child RLM failed - ${msg}`);
     }
   }
 
-  async function child(prompt: string, model: string | null, depth: number): Promise<string> {
-    const res = await childRun({
-      rootPrompt: "",
-      context: prompt,
-      depth: depth + 1,
-      model,
-    });
-    return res.answer;
-  }
-
   return {
-    rlmQuery: (prompt, model, depth) => child(prompt, model, depth),
-    rlmQueryBatched: (prompts, model, depth) => mapPool(prompts, opts.maxConcurrent, (p) => child(p, model, depth)),
-    childRun,
+    rlmQuery: (prompt, model, depth) => child(prompt, model, depth + 1),
+    rlmQueryBatched: (prompts, model, depth) =>
+      mapPool(prompts, opts.config().maxConcurrentSubcalls, (p) => child(p, model, depth + 1)),
   };
 }
