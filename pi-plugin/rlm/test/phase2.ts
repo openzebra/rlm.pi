@@ -6,7 +6,12 @@
  */
 
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { createLlmBridge } from "../src/bridge/llm-query.ts";
+import {
+  createSubcallHandlers,
+  limitsFromRemaining,
+} from "../src/bridge/subcall-handlers.ts";
+import { createSubcallGates } from "../src/util/concurrency.ts";
+import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 
 async function main() {
@@ -32,9 +37,18 @@ async function main() {
   }
   console.log(`\nworker model: ${worker.provider}/${worker.id}`);
   let totalCost = 0;
-  const bridge = createLlmBridge({
-    workerModel: worker,
+  const invocation = {
+    emitter: new RlmEmitter(),
+    parentId: undefined,
+    depth: 0,
+    limits: limitsFromRemaining(),
+  };
+  const bridge = createSubcallHandlers({
+    resolve: () => invocation,
+    gates: createSubcallGates(4),
     registry,
+    getWorkerModel: () => worker,
+    maxPromptChars: 400_000,
     sampling: { maxTokens: 32 },
     onUsage: (u) => {
       totalCost += u.cost.total;

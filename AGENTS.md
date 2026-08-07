@@ -13,7 +13,7 @@ This is a **Recursive Language Model (RLM) plugin** for the Pi coding agent. The
 ```
 pi-plugin/rlm/src/
 ├── core/          Headless RLM loop, limits, compaction, phase pipeline
-├── bridge/        LLM completion + sub-LLM/rlm/interactive handlers
+├── bridge/        Sub-LLM/rlm/interactive handlers (subcall-handlers.ts is the single impl)
 ├── sandbox/       Python subprocess, JSONL protocol, sandbox manager
 ├── tool/          repl() and rlm() Pi tool registrations + event emitter
 ├── state/         JSONL audit trail (write/read/resume), fail-soft I/O
@@ -38,17 +38,25 @@ pi-plugin/rlm/src/
 
 ## DRY Rules — DO NOT Duplicate
 
-These patterns have already been duplicated; do NOT add a third copy:
+Rules 1–5 below were a standing duplication between the headless engine and the repl() tool.
+They are now **resolved**: `bridge/subcall-handlers.ts` (`createSubcallHandlers`) is the single
+implementation of `llm_query` / `llm_query_batched` / `rlm_query` / `rlm_query_batched`, and
+`bridge/llm-query.ts` + `bridge/rlm-query.ts` have been deleted. Keep it that way:
 
-1. **LLM completion logic** — `bridge/llm-query.ts` (`createLlmBridge`) and `tool/repl-tool.ts` (`NativeBridgeState.buildLlmHandlers`) both implement `complete1`, `llmQuery`, `llmQueryBatched`. Only one should exist. If you need LLM handlers, use `createLlmBridge` from `llm-query.ts` or extract a shared utility — do NOT inline another `complete1`.
+1. **LLM completion logic** — `complete1` exists once, inside `createSubcallHandlers`. Never inline another one; if you need LLM handlers, call `createSubcallHandlers`.
 
-2. **RLM recursion logic** — `bridge/rlm-query.ts` (`createRlmHandlers`) and `tool/repl-tool.ts` (`NativeBridgeState.buildRlmHandlers`) both implement rlm_query child spawning (depth cap check → resource limits → createEngine → run → debit parent). One shared implementation.
+2. **RLM recursion logic** — `childRun` (depth cap → resource guard → spawn engine → debit parent) exists once, in the same file. Callers supply `runChild` and `degrade`, not their own copy of the sequence.
 
-3. **Display model resolution** — `llm-query.ts:39` and `repl-tool.ts:64` both have identical `displayModel()` lambdas. Use `modelRef` + `resolveModelId` from `config/settings.ts`.
+3. **Display model resolution** — one private `displayModel()` in `subcall-handlers.ts`, built on `modelRef` + `resolveModelId` from `config/settings.ts`.
 
-4. **Batch error summary** — Both `llm-query.ts` and `repl-tool.ts` aggregate `isErrorText` counts the same way. Extract to a shared helper.
+4. **Batch error summary** — `summarizeBatch()`, exported from `subcall-handlers.ts`.
 
-5. **The subcall emit pattern** (create → execute → update status/cost/tokens) appears in `llm-query.ts`, `repl-tool.ts`, `interactive.ts`, and `rlm-query.ts`. If adding a new subcall handler, follow the existing pattern — don't invent a new one.
+5. **The subcall emit pattern** (create → execute → update status/cost/tokens) — the `emitting()` helper in `subcall-handlers.ts` for leaf sub-calls; `childRun` emits its own node for recursive ones (never wrap it, or the node is reported twice). `interactive.ts` follows the same shape by hand. Adding a new subcall handler? Reuse these — don't invent a new pattern.
+
+**Callers differ only in `resolve`.** The engine binds one `Invocation` for a whole run; the
+repl() tool swaps one per turn and routes `spawn()`ed (detached) work to the session-scoped
+`BackgroundTasks` registry. If you find yourself adding a second construction path, add a
+field to `SubcallHandlerDeps` instead.
 
 ## Type Safety Standards
 
@@ -67,13 +75,14 @@ These patterns have already been duplicated; do NOT add a third copy:
 |---------|---------|
 | Single model completion entry point | `bridge/model.ts` — the only file that calls pi-ai's `completeSimple` |
 | Error formatting | `formatError(msg)` returns `"Error: msg"`, `isErrorText()` detects it — never throw strings |
-| Concurrency pool | `util/concurrency.ts` `mapPool(items, limit, fn)` — pre-allocates arrays, fixed fan-out |
+| Concurrency pool | `util/concurrency.ts` `SubcallGates` — one session-wide `Semaphore` for leaf completions, per-depth `DepthGates` for child engines (a single shared gate would deadlock on recursion) |
 | REPL block extraction | `text/parsing.ts` `findReplBlocks(text)` — regex over fenced code blocks |
 | Sandbox lifecycle | `SandboxManager.getOrCreate()` → `exec(code)` → serialized queue, death-recreate on failure |
 | Event emission | `RlmEmitter` (typed EventEmitter) → `SubcallStore` (accumulator) → `RlmEventAggregator` (snapshot) |
 | Config validation | `settings.ts` `validateNumber(v, min)`, `validateBoolean(v)`, `validateString(v)` — all accept `unknown` |
 | Pre-allocated arrays | `new Array<R>(items.length)` before loops, never `.push()` in a loop |
 | JSONL protocol | `sandbox/protocol.ts` — newline-delimited JSON, parent→worker requests, worker→parent interrupts |
+| Async sub-calls | `worker.py` posts a request and parks the reply by rid (`_post` / `park_reply` / `_drain_until`); `spawn()` returns a `Task`, `rlm_await` / `rlm_await_all` collect it, possibly in a later exec |
 | Resume fold | `state/resume.ts` `reconstructRlmState()` — replays JSONL trail through engine's own prompt builders |
 
 ## Adding a New Bridge Handler

@@ -22,6 +22,8 @@ export interface ReplDetails {
   readonly totals: { readonly costUsd: number; readonly tokens: number };
   /** Final answer submitted through answer["ready"] without echoing it to the model. */
   readonly finalAnswer?: string;
+  /** Detached spawn() sub-calls still running when this call returned. Absent when none. */
+  readonly backgroundPending?: number;
   /** Advisory diagnostics — surfaced to the user, never a failure. */
   readonly warnings?: readonly string[];
 }

@@ -76,18 +76,26 @@ export interface RootPromptEvent {
 /**
  * Typed wrapper around a Node.js EventEmitter for RLM lifecycle events.
  *
- * Auto-generates monotonic subcall IDs (`s1`, `s2`, …) via `emitSubcallCreated()`.
+ * Auto-generates monotonic subcall IDs (`s1`, `s2`, …) via `emitSubcallCreated()`, with a
+ * configurable prefix so a second emitter's IDs cannot collide with the default ones.
  * Provides typed `on*` methods that return unsubscribe functions.
  */
 export class RlmEmitter {
   private readonly ee = new EventEmitter();
   private seq = 0;
 
+  /**
+   * `idPrefix` namespaces generated IDs. The counter is per-instance, so two emitters
+   * would both start at `s1`; a distinct prefix is what lets one emitter's subcalls be
+   * merged into another's tree without colliding IDs or corrupting parentId links.
+   */
+  constructor(private readonly idPrefix = "s") {}
+
   // ── Emit ──
 
   /** Create a new sub-call entry. Returns the auto-generated ID. */
   emitSubcallCreated(init: Omit<SubcallCreatedEvent, "id">): string {
-    const id = `s${++this.seq}`;
+    const id = `${this.idPrefix}${++this.seq}`;
     const event: SubcallCreatedEvent = { id, ...init };
     this.ee.emit("subcall:created", event);
     return id;

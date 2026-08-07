@@ -1,0 +1,327 @@
+/**
+ * The single implementation of the sub-LLM handler set (llm_query, llm_query_batched,
+ * rlm_query, rlm_query_batched).
+ *
+ * Resolves AGENTS.md DRY #1–#5, which previously lived twice: once in `createLlmBridge` /
+ * `createRlmHandlers` for the headless engine, once in `NativeBridgeState` for the repl()
+ * tool. The two callers only ever differed in how they answer one question — "which emitter,
+ * limits and parent node does THIS interrupt belong to?" — so that is the only thing they
+ * still supply, as `resolve`. The engine binds one Invocation for a whole run; the repl()
+ * tool swaps one per turn and routes `spawn()`ed work to its session registry.
+ *
+ * Concurrency: every leaf completion passes through `gates.leaf`, every child engine through
+ * `gates.rlm.at(depth)`, so a sandbox that puts 25 batches on the wire at once is still
+ * bounded session-wide. See util/concurrency.ts for why the rlm gate is per-depth.
+ */
+
+import type { Api, Model, Usage } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { modelRef, resolveModelId } from "../config/settings.ts";
+import { type ChatMsg, modelComplete } from "./model.ts";
+import { previewText } from "../text/preview.ts";
+import { checkResourceLimits } from "../core/resource-limits.ts";
+import type { RlmInput, RlmResult, Sampling } from "../core/types.ts";
+import type { SubcallGates } from "../util/concurrency.ts";
+import type { SubcallOpts, SubLlmHandlers } from "../sandbox/sandbox.ts";
+import type { RlmEmitter } from "../tool/rlm-events.ts";
+import { errorMessage, formatError, isErrorText } from "../util/errors.ts";
+
+/**
+ * The slice of LimitGuard these handlers need. Narrow on purpose: the headless bridge is
+ * constructed from a `remainingBudget()` callback rather than owning a guard, and both
+ * shapes satisfy this.
+ */
+export interface InvocationLimits {
+  remainingBudgetUsd(): number | undefined;
+  remainingTimeoutMs(): number | undefined;
+  addUsage(usage: Usage): void;
+  addRaw(costUsd: number, inputTokens: number, outputTokens: number): void;
+}
+
+/**
+ * Adapt a "how much is left?" callback to InvocationLimits.
+ *
+ * The headless engine owns the real LimitGuard and folds usage in through `onUsage` /
+ * `onChildUsage`, so the accounting methods here are deliberately inert.
+ */
+export function limitsFromRemaining(
+  remaining?: () => { readonly budgetUsd?: number; readonly timeoutMs?: number },
+): InvocationLimits {
+  return {
+    remainingBudgetUsd: () => remaining?.().budgetUsd,
+    remainingTimeoutMs: () => remaining?.().timeoutMs,
+    addUsage: () => {},
+    addRaw: () => {},
+  };
+}
+
+/**
+ * Where one interrupt's reporting and accounting go.
+ *
+ * Captured at interrupt entry and threaded down, never re-read: once handlers can outlive
+ * their exec, re-reading mutable tool state after an await would attribute a sub-call to
+ * whichever turn happens to be current when it resumes.
+ */
+export interface Invocation {
+  readonly emitter: RlmEmitter;
+  readonly parentId: string | undefined;
+  readonly depth: number;
+  readonly limits: InvocationLimits;
+}
+
+export interface SubcallHandlerDeps {
+  /**
+   * Pick the Invocation for this interrupt. `null` ⇒ the bridge is not wired yet.
+   *
+   * `depth` is the depth the sandbox reported. The headless engine trusts it (its handlers
+   * serve one sandbox per depth); the repl() tool overrides it with its own turn depth.
+   */
+  readonly resolve: (opts: SubcallOpts, depth: number) => Invocation | null;
+  /** Session-wide admission control. Required — a per-caller default would silently unbound it. */
+  readonly gates: SubcallGates;
+  readonly registry: ModelRegistry;
+  readonly getWorkerModel: () => Model<Api>;
+  readonly maxPromptChars: number;
+  readonly sampling?: Sampling;
+  readonly subSystem?: string;
+  readonly signal?: AbortSignal;
+  readonly onUsage?: (usage: Usage, role: "sub") => void;
+
+  // ── recursion (omit all three to get llm-only handlers) ──
+  /**
+   * Spawns a child RLM for rlm_query.
+   *
+   * Receives the parent's Invocation so the child can report on the same emitter its
+   * parent subcall node lives on — a child of detached work must not emit to a turn
+   * emitter that will be shut down before it finishes, and keeping parent and child on
+   * one emitter is what lets the session registry drain the subtree intact.
+   */
+  readonly runChild?: (input: RlmInput, inv: Invocation) => Promise<RlmResult>;
+  readonly getModel?: () => Model<Api>;
+  readonly maxDepth?: number;
+  /**
+   * What rlm_query degrades to at the depth cap. A child RLM there would just be an LM, so
+   * both callers hand in their own one-shot path rather than re-deriving one here.
+   */
+  readonly degrade?: (prompt: string, model: string | null, depth: number) => Promise<string>;
+  /** Called with a child run's totals so a caller-side guard can debit them too. */
+  readonly onChildUsage?: (costUsd: number, inputTokens: number, outputTokens: number) => void;
+  /** Wraps detached work so a session registry can count what is still in flight. */
+  readonly trackDetached?: <T>(run: () => Promise<T>) => Promise<T>;
+}
+
+/** DRY #4 — the batch failure summary, previously written out in both copies. */
+export function summarizeBatch(out: readonly string[]): { readonly failed: number; readonly error?: string } {
+  let failed = 0;
+  for (const item of out) if (isErrorText(item)) failed += 1;
+  if (failed === 0) return { failed: 0 };
+  const error = failed === out.length
+    ? `all ${out.length} sub-calls failed — reduce batch size or try llm_query individually`
+    : `${failed}/${out.length} sub-calls failed`;
+  return { failed, error };
+}
+
+export type SubcallHandlers = Pick<
+  SubLlmHandlers,
+  "llmQuery" | "llmQueryBatched" | "rlmQuery" | "rlmQueryBatched"
+>;
+
+const UNWIRED = formatError("RLM bridge not wired for this invocation");
+
+function emptyResult(answer: string): RlmResult {
+  return { answer, iterations: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 0 };
+}
+
+export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers {
+  /** DRY #3 — the one display-model resolution. */
+  const displayModel = (model: string | null): string => {
+    const worker = deps.getWorkerModel();
+    const resolved = model ? (resolveModelId(deps.registry, model) ?? worker) : worker;
+    return modelRef(resolved) ?? worker.id;
+  };
+
+  /** Detached work is counted by the session registry; attached work runs as-is. */
+  const detachable = <T>(opts: SubcallOpts, run: () => Promise<T>): Promise<T> =>
+    opts.detached && deps.trackDetached !== undefined ? deps.trackDetached(run) : run();
+
+  /** One leaf completion. Reports cost/tokens via `track`; never throws. */
+  async function complete1(
+    inv: Invocation,
+    prompt: string,
+    model: string | null,
+    track: (usage: Usage) => void,
+  ): Promise<string> {
+    const limitError = checkResourceLimits({
+      budgetUsd: inv.limits.remainingBudgetUsd(),
+      timeoutMs: inv.limits.remainingTimeoutMs(),
+    });
+    if (limitError !== undefined) return limitError;
+    if (prompt.length > deps.maxPromptChars) {
+      return formatError(
+        `sub-LLM prompt exceeded the size limit (${prompt.length.toLocaleString()} chars > ` +
+        `${deps.maxPromptChars.toLocaleString()}). Shorten or chunk the prompt before calling llm_query.`,
+      );
+    }
+    const resolved = model ? resolveModelId(deps.registry, model) : undefined;
+    if (model && !resolved) return formatError(`unknown model override '${model}'`);
+    try {
+      const messages: ChatMsg[] = [{ role: "user", content: prompt }];
+      const res = await deps.gates.leaf.run(() => modelComplete(messages, {
+        model: resolved ?? deps.getWorkerModel(),
+        registry: deps.registry,
+        system: deps.subSystem,
+        maxTokens: deps.sampling?.maxTokens,
+        temperature: deps.sampling?.temperature,
+        reasoning: deps.sampling?.reasoning,
+        signal: deps.signal,
+      }));
+      inv.limits.addUsage(res.usage);
+      deps.onUsage?.(res.usage, "sub");
+      track(res.usage);
+      return res.text;
+    } catch (err) {
+      const msg = errorMessage(err);
+      const hint = /credit|402|payment|quota|rate.limit/i.test(msg)
+        ? " — try smaller batches or individual llm_query calls"
+        : "";
+      return formatError(`${msg}${hint}`);
+    }
+  }
+
+  /**
+   * DRY #5 — the create → execute → update emit pattern for leaf sub-calls, in one place.
+   * rlm_query does NOT use this: its node is created inside `childRun`, and a wrapper here
+   * would double-report it.
+   */
+  async function emitting<T>(
+    opts: SubcallOpts,
+    depth: number,
+    init: { kind: "llm" | "batch"; label: string; model: string | null; args: string },
+    run: (inv: Invocation, track: (usage: Usage) => void) => Promise<T>,
+    summarize: (out: T) => {
+      readonly preview: string;
+      readonly error?: string;
+      readonly failed?: number;
+      readonly total?: number;
+    },
+    unwired: () => T,
+  ): Promise<T> {
+    const inv = deps.resolve(opts, depth);
+    if (inv === null) return unwired();
+    const id = inv.emitter.emitSubcallCreated({
+      kind: init.kind, parentId: inv.parentId, label: init.label,
+      model: displayModel(init.model), args: init.args, depth: inv.depth,
+    });
+    let costUsd = 0;
+    let tokens = 0;
+    const track = (usage: Usage): void => { costUsd += usage.cost.total; tokens += usage.totalTokens; };
+    const out = await detachable(opts, () => run(inv, track));
+    const summary = summarize(out);
+    inv.emitter.emitSubcallUpdated({
+      id,
+      status: summary.error !== undefined ? "error" : "done",
+      costUsd, tokens,
+      resultPreview: summary.preview,
+      detail: summary.error,
+      failedCount: summary.failed,
+      totalCount: summary.total,
+    });
+    return out;
+  }
+
+  /**
+   * One child RLM run: depth cap → resource guard → spawn engine → debit parent.
+   * Emits its own subcall node, so callers must not wrap it in another.
+   */
+  async function childRun(inv: Invocation, prompt: string, model: string | null): Promise<RlmResult> {
+    const childDepth = inv.depth + 1;
+    const run = deps.runChild;
+    const maxDepth = deps.maxDepth ?? 0;
+
+    // At the cap a child RLM would just be an LM — short-circuit to the caller's one-shot path.
+    if (run === undefined || childDepth >= maxDepth) {
+      const degrade = deps.degrade;
+      const answer = degrade !== undefined
+        ? await degrade(prompt, model, inv.depth)
+        : await complete1(inv, prompt, model, () => {});
+      return emptyResult(answer);
+    }
+
+    const remBudget = inv.limits.remainingBudgetUsd();
+    const remTimeout = inv.limits.remainingTimeoutMs();
+    const limitError = checkResourceLimits({ budgetUsd: remBudget, timeoutMs: remTimeout });
+    if (limitError) return emptyResult(limitError);
+
+    const rootModel = deps.getModel?.();
+    const resolvedOverride = model ? resolveModelId(deps.registry, model) : undefined;
+    const modelLabel = model
+      ? (modelRef(resolvedOverride) ?? `unknown/${model}`)
+      : (rootModel === undefined ? undefined : (modelRef(rootModel) ?? rootModel.id));
+    const subId = inv.emitter.emitSubcallCreated({
+      kind: "rlm", parentId: inv.parentId, label: "rlm_query",
+      model: modelLabel, detail: prompt.slice(0, 60), depth: childDepth,
+    });
+    try {
+      const res = await deps.gates.rlm.at(childDepth).run(() => run({
+        rootPrompt: "",
+        context: prompt,
+        depth: childDepth,
+        parentNodeId: subId,
+        modelOverride: model ?? undefined,
+        remainingBudgetUsd: remBudget,
+        remainingTimeoutMs: remTimeout,
+      }, inv));
+      inv.limits.addRaw(res.costUsd, res.inputTokens, res.outputTokens);
+      deps.onChildUsage?.(res.costUsd, res.inputTokens, res.outputTokens);
+      // The child emits live usage deltas on the shared emitter, so no aggregate cost here
+      // — adding it would double-count against SubcallStore's running totals.
+      inv.emitter.emitSubcallUpdated({ id: subId, status: "done", resultPreview: res.answer.slice(0, 200) });
+      return res;
+    } catch (err) {
+      const msg = errorMessage(err);
+      inv.emitter.emitSubcallUpdated({ id: subId, status: "error", detail: msg });
+      return emptyResult(formatError(`child RLM failed - ${msg}`));
+    }
+  }
+
+  return {
+    llmQuery: (prompt, model, depth, opts) => emitting(
+      opts, depth,
+      { kind: "llm", label: "llm_query", model, args: `prompt: ${previewText(prompt)}` },
+      (inv, track) => complete1(inv, prompt, model, track),
+      (out) => ({ preview: previewText(out), error: isErrorText(out) ? out : undefined }),
+      () => UNWIRED,
+    ),
+
+    llmQueryBatched: (prompts, model, depth, opts) => emitting(
+      opts, depth,
+      { kind: "batch", label: `llm_query ×${prompts.length}`, model, args: `prompt: ${previewText(prompts[0] ?? "")}` },
+      (inv, track) => deps.gates.leaf.map(prompts, (p) => complete1(inv, p, model, track)),
+      (out) => {
+        const { failed, error } = summarizeBatch(out);
+        const first = previewText(out[0] ?? "");
+        return {
+          preview: out.length > 1 ? `${first}  (+${out.length - 1} more)` : first,
+          error, failed, total: out.length,
+        };
+      },
+      () => prompts.map(() => UNWIRED),
+    ),
+
+    async rlmQuery(prompt, model, depth, opts) {
+      const inv = deps.resolve(opts, depth);
+      if (inv === null) return UNWIRED;
+      return detachable(opts, async () => (await childRun(inv, prompt, model)).answer);
+    },
+
+    async rlmQueryBatched(prompts, model, depth, opts) {
+      const inv = deps.resolve(opts, depth);
+      if (inv === null) return prompts.map(() => UNWIRED);
+      // Bounded by the per-depth rlm gate inside childRun, not by an outer pool.
+      return detachable(opts, async () => {
+        const results = await Promise.all(prompts.map((p) => childRun(inv, p, model)));
+        return results.map((r) => r.answer);
+      });
+    },
+  };
+}

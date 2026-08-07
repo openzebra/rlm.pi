@@ -12,6 +12,12 @@ Protocol (worker -> parent):  {"id","ok",...result}            # response to a r
 When sandbox code calls llm_query/rlm_query/advance_phase/save_artifact/ask_user_question/todo, the worker writes a request line
 and BLOCKS reading stdin until the matching {"type":"llm_reply","rid",...} arrives. The parent
 services the request in-process (it holds API keys).
+
+Requests and replies are decoupled: `_post` writes a request and returns its rid without
+waiting, and replies are parked in `_inbox` keyed by rid until something asks for them. That
+is what makes `spawn()` / `rlm_await()` / `rlm_await_all()` possible — many requests can be
+in flight at once (the parent already services interrupts concurrently), and a task may be
+awaited in a LATER exec than the one that started it.
 """
 
 from __future__ import annotations
@@ -102,6 +108,7 @@ RESERVED = frozenset(
     {
         "llm_query", "llm_query_batched", "llm_query_chunked",
         "rlm_query", "rlm_query_batched",
+        "spawn", "rlm_await", "rlm_await_all",
         "advance_phase", "save_artifact",
         "ask_user_question", "todo",
         "load_library",
@@ -154,6 +161,101 @@ def _send(obj: dict[str, Any]) -> None:
     _REAL_STDOUT.flush()
 
 
+@contextmanager
+def _paused_alarm(exec_timeout_s: float):
+    """Stop the per-cell wall-clock alarm across a blocking wait on the parent.
+
+    Sub-LLM latency is network time, not the cell's compute time, so it must not
+    count against the ```repl``` block's timeout.
+    """
+    pause = exec_timeout_s > 0 and hasattr(signal, "SIGALRM")
+    remaining = signal.getitimer(signal.ITIMER_REAL)[0] if pause else 0.0
+    if pause:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+    try:
+        yield
+    finally:
+        if pause and remaining > 0:
+            signal.setitimer(signal.ITIMER_REAL, remaining)
+
+
+# ---- reply reducers: raw parent replies -> the value the scaffold fn returns ----------------
+# One reducer per result shape, shared by the sync helpers and their spawned equivalents.
+
+
+def _reduce_one(replies: list[dict[str, Any]]) -> str:
+    r = replies[0]
+    return f"Error: {r['error']}" if r.get("error") else r.get("response", "")
+
+
+def _reduce_batch(n: int):
+    """Reducer for a single *_query_batched reply of n prompts."""
+    def reduce(replies: list[dict[str, Any]]) -> list[str]:
+        r = replies[0]
+        if r.get("error"):
+            return [f"Error: {r['error']}"] * n
+        out = r.get("responses")
+        if not isinstance(out, list) or len(out) != n:
+            return ["Error: malformed batched response"] * n
+        return [s if isinstance(s, str) else f"Error: {s}" for s in out]
+    return reduce
+
+
+def _reduce_chunked(sizes: list[int]):
+    """Concatenate several llm_query_batched replies back into one flat chunk list."""
+    per = [_reduce_batch(n) for n in sizes]
+
+    def reduce(replies: list[dict[str, Any]]) -> list[str]:
+        out: list[str] = []
+        for red, rep in zip(per, replies):
+            out.extend(red([rep]))
+        return out
+    return reduce
+
+
+def _spawnable(name: str):
+    """Tag a sync scaffold fn with the request kind spawn() should route it to."""
+    def mark(fn):
+        fn._rlm_name = name
+        return fn
+    return mark
+
+
+class Task:
+    """Handle for parent-side work in flight, returned by spawn().
+
+    Opaque to model code apart from `done` and repr. A Task may be awaited in a later
+    ```repl``` block than the one that created it.
+    """
+
+    __slots__ = ("kind", "label", "_worker", "_rids", "_reduce", "_value", "_settled")
+
+    def __init__(self, worker: "Worker", kind: str, rids, reduce, label: str = ""):
+        self.kind = kind
+        self.label = label
+        self._worker = worker
+        self._rids = tuple(rids)
+        self._reduce = reduce
+        self._value: Any = None
+        self._settled = False
+
+    @staticmethod
+    def resolved(worker: "Worker", kind: str, value: Any, label: str = "") -> "Task":
+        """A Task that never hit the wire — validation errors and empty inputs."""
+        task = Task(worker, kind, (), lambda _replies: value, label)
+        task._value = value
+        task._settled = True
+        return task
+
+    @property
+    def done(self) -> bool:
+        """True once every reply has landed — awaiting will not block."""
+        return self._settled or all(r in self._worker.inbox for r in self._rids)
+
+    def __repr__(self) -> str:
+        return f"<Task {self.kind} {'done' if self.done else 'running'} {self.label}>"
+
+
 class Worker:
     def __init__(self, depth: int, exec_timeout_s: float, max_prompt_chars: int, read_only: bool = False):
         self.depth = depth
@@ -162,6 +264,16 @@ class Worker:
         self.read_only = read_only
         self._rid = 0
         self._final_answer: str | None = None
+        # Replies parked by rid until something awaits them. Unbounded by design: a task
+        # the model spawns and never awaits keeps its entry for the life of the process.
+        # Bounded in practice by session length; evicting would silently hang a later
+        # rlm_await, which is strictly worse than the memory.
+        self.inbox: dict[str, dict[str, Any]] = {}
+        self._inflight: set[str] = set()
+        # Requests (exec/snapshot/shutdown) that arrived mid-exec; main() replays them.
+        self._deferred: list[Any] = []
+        # True only while spawn() runs a builder — marks requests that may outlive this exec.
+        self._detached = False
         self.ns: dict[str, Any] = {}
         self._setup()
 
@@ -187,6 +299,9 @@ class Worker:
         ns["llm_query_chunked"] = self._llm_query_chunked
         ns["rlm_query"] = self._rlm_query
         ns["rlm_query_batched"] = self._rlm_query_batched
+        ns["spawn"] = self._spawn
+        ns["rlm_await"] = self._await_task
+        ns["rlm_await_all"] = self._await_all
         ns["advance_phase"] = self._advance_phase
         ns["save_artifact"] = self._save_artifact
         ns["ask_user_question"] = self._ask_user_question
@@ -231,54 +346,104 @@ class Worker:
 
     # ---- sub-LLM bridge over stdio --------------------------------------------------------
 
-    def _rpc(self, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _post(self, kind: str, payload: dict[str, Any]) -> str:
+        """Write one parent request and return its rid WITHOUT waiting for the reply."""
         self._rid += 1
         rid = f"q{self._rid}"
-        _send({"type": kind, "rid": rid, "depth": self.depth, **payload})
-        # The per-cell SIGALRM is wall-clock; it must not count time blocked here waiting for
-        # a sub-LLM reply (network/LLM latency, not local CPU). Pause it across the readline.
-        pause = self.exec_timeout_s > 0 and hasattr(signal, "SIGALRM")
-        if pause:
-            remaining = signal.getitimer(signal.ITIMER_REAL)[0]
-            signal.setitimer(signal.ITIMER_REAL, 0)
+        # Register only after the write succeeds — a broken pipe must not leave an
+        # _inflight entry that nothing will ever settle.
+        _send({"type": kind, "rid": rid, "depth": self.depth,
+               "detached": self._detached, **payload})
+        self._inflight.add(rid)
+        return rid
+
+    def park_reply(self, msg: Any) -> bool:
+        """File an llm_reply against its rid. True when the frame was a reply.
+
+        Public because main() needs it too: a spawned task can settle while the worker
+        sits idle between execs, and that reply must not fall through to "unknown type".
+        """
+        if not isinstance(msg, dict) or msg.get("type") != "llm_reply":
+            return False
+        rid = msg.get("rid")
+        if isinstance(rid, str) and rid in self._inflight:
+            self._inflight.discard(rid)
+            self.inbox[rid] = msg
+        else:
+            # Late reply to an abandoned rid (e.g. a request from a discarded sandbox).
+            print(f"[rlm-sandbox] dropping reply for unknown rid: {rid!r}", file=_REAL_STDERR)
+        return True
+
+    def take_deferred(self) -> Any | None:
+        """Pop a request that arrived mid-exec, for main() to replay. None when empty."""
+        return self._deferred.pop(0) if self._deferred else None
+
+    def _pump(self) -> bool:
+        """Read one frame from the parent into the inbox. False when the pipe closed."""
+        line = _REAL_STDIN.readline()
+        if not line:
+            return False
         try:
-            while True:
-                line = _REAL_STDIN.readline()
-                if not line:
+            msg = json.loads(line)
+        except ValueError:
+            print(f"[rlm-sandbox] skipping non-JSON parent frame: {line[:200]}", file=_REAL_STDERR)
+            return True
+        if self.park_reply(msg):
+            return True
+        # A request (exec/snapshot/shutdown) arriving mid-exec: main() replays it.
+        self._deferred.append(msg)
+        return True
+
+    def _drain_until(self, rids) -> None:
+        """Block until every rid in `rids` has its reply parked in the inbox."""
+        if all(r in self.inbox for r in rids):
+            return
+        with _paused_alarm(self.exec_timeout_s):
+            while not all(r in self.inbox for r in rids):
+                if not self._pump():
                     raise RuntimeError("parent closed the pipe during a sub-LLM request")
-                msg = json.loads(line)
-                if msg.get("type") == "llm_reply" and msg.get("rid") == rid:
-                    return msg
-                # Stray/late message (e.g. a reply to an earlier timed-out request): skip it.
-                print(
-                    f"[rlm-sandbox] ignoring unexpected message during sub-LLM request: {str(msg)[:200]}",
-                    file=_REAL_STDERR,
-                )
-        finally:
-            if pause and remaining > 0:
-                signal.setitimer(signal.ITIMER_REAL, remaining)
 
-    def _llm_query(self, prompt: str, model: str | None = None) -> str:
-        r = self._rpc("llm_query", {"prompt": str(prompt), "model": model})
-        return f"Error: {r['error']}" if r.get("error") else r.get("response", "")
+    def _take(self, rids) -> list[dict[str, Any]]:
+        return [self.inbox.pop(r) for r in rids]
 
-    def _llm_query_batched(self, prompts, model: str | None = None) -> list[str]:
+    def _rpc(self, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Post one request and block for its reply — the synchronous single-shot path."""
+        rid = self._post(kind, payload)
+        self._drain_until((rid,))
+        return self._take((rid,))[0]
+
+    # ---- spawn / await ---------------------------------------------------------------------
+
+    def _start_prompt(self, kind: str, prompt, model) -> Task:
+        rid = self._post(kind, {"prompt": str(prompt), "model": model})
+        return Task(self, kind, (rid,), _reduce_one, str(prompt)[:40])
+
+    def _start_prompts(self, kind: str, prompts, model) -> Task:
         prompts = [str(p) for p in prompts]
         if not prompts:
-            return []
-        r = self._rpc("llm_query_batched", {"prompts": prompts, "model": model})
-        if r.get("error"):
-            return [f"Error: {r['error']}"] * len(prompts)
-        out = r.get("responses")
-        if not isinstance(out, list) or len(out) != len(prompts):
-            return ["Error: malformed batched response"] * len(prompts)
-        return [s if isinstance(s, str) else f"Error: {s}" for s in out]
+            return Task.resolved(self, kind, [])
+        rid = self._post(kind, {"prompts": prompts, "model": model})
+        return Task(self, kind, (rid,), _reduce_batch(len(prompts)), f"×{len(prompts)}")
 
-    def _llm_query_chunked(self, text, prompt: str, model: str | None = None) -> list[str]:
-        """Split oversized text into cap-sized chunks and fan out via llm_query_batched.
+    def _start_llm_query(self, prompt, model: str | None = None) -> Task:
+        return self._start_prompt("llm_query", prompt, model)
 
-        Returns one answer per chunk, order preserved. No exceptions escape: errors come
-        back as "Error: ..." strings per chunk (same contract as llm_query_batched).
+    def _start_rlm_query(self, prompt, model: str | None = None) -> Task:
+        return self._start_prompt("rlm_query", prompt, model)
+
+    def _start_llm_query_batched(self, prompts, model: str | None = None) -> Task:
+        return self._start_prompts("llm_query_batched", prompts, model)
+
+    def _start_rlm_query_batched(self, prompts, model: str | None = None) -> Task:
+        return self._start_prompts("rlm_query_batched", prompts, model)
+
+    def _start_llm_query_chunked(self, text, prompt: str, model: str | None = None) -> Task:
+        """Split oversized text into cap-sized chunks and post EVERY batch at once.
+
+        One answer per chunk, order preserved. No exceptions escape: errors come back as
+        "Error: ..." strings per chunk (same contract as llm_query_batched). Because all
+        batches go on the wire together, a large input costs one round-trip of latency
+        rather than one per 20 chunks.
 
         NOTE: budget uses Python code-point length (len) while the parent-side cap check counts
         UTF-16 units (JS string.length); astral/emoji-heavy text may be marginally larger on the
@@ -286,26 +451,105 @@ class Worker:
         """
         text, prompt = str(text), str(prompt)
         if not text:
-            return []
+            return Task.resolved(self, "llm_query_chunked", [])
         budget = self.max_prompt_chars - len(prompt) - _CHUNK_HEADER_OVERHEAD
         if budget < 1_000:
-            return [f"Error: prompt leaves under 1,000 chars per chunk (cap {self.max_prompt_chars:,}) — shorten the instruction"]
+            return Task.resolved(self, "llm_query_chunked", [
+                f"Error: prompt leaves under 1,000 chars per chunk (cap {self.max_prompt_chars:,}) — shorten the instruction"
+            ])
         chunks = _chunk_text(text, budget)
         total = len(chunks)
         if total > _MAX_CHUNKS:
-            return [f"Error: {total} chunks would be needed — filter/slice the text in Python first"]
-        results: list[str] = []
+            return Task.resolved(self, "llm_query_chunked", [
+                f"Error: {total} chunks would be needed — filter/slice the text in Python first"
+            ])
+        rids: list[str] = []
+        sizes: list[int] = []
         for i in range(0, total, _MAX_CHUNK_BATCH):
             batch = [
                 f"{prompt}\n\n[chunk {i + j + 1}/{total} of the input]\n{c}"
                 for j, c in enumerate(chunks[i:i + _MAX_CHUNK_BATCH])
             ]
-            results.extend(self._llm_query_batched(batch, model))
-        return results
+            rids.append(self._post("llm_query_batched", {"prompts": batch, "model": model}))
+            sizes.append(len(batch))
+        return Task(self, "llm_query_chunked", tuple(rids), _reduce_chunked(sizes), f"{total} chunks")
 
+    def _builder_for(self, name: str):
+        return {
+            "llm_query": self._start_llm_query,
+            "llm_query_batched": self._start_llm_query_batched,
+            "llm_query_chunked": self._start_llm_query_chunked,
+            "rlm_query": self._start_rlm_query,
+            "rlm_query_batched": self._start_rlm_query_batched,
+        }.get(name)
+
+    def _spawn(self, fn, *args, **kwargs) -> Task:
+        """Start a sub-call without waiting for it. `fn` is the scaffold function itself.
+
+        Returns a Task for rlm_await / rlm_await_all, possibly in a later ```repl``` block.
+        Misuse returns an already-resolved error Task rather than raising, matching the
+        "Error: ..." contract of the synchronous helpers.
+        """
+        name = getattr(fn, "_rlm_name", None)
+        builder = self._builder_for(name) if isinstance(name, str) else None
+        if builder is None:
+            return Task.resolved(self, "spawn",
+                "Error: spawn() takes llm_query, llm_query_batched, llm_query_chunked, "
+                "rlm_query or rlm_query_batched")
+        # Mark every request this builder posts as detached: the parent routes them to its
+        # session-scoped registry, since they may outlive the exec that started them.
+        self._detached = True
+        try:
+            return builder(*args, **kwargs)
+        except TypeError as e:
+            return Task.resolved(self, "spawn", f"Error: bad spawn arguments — {e}")
+        finally:
+            self._detached = False
+
+    def _await_task(self, task) -> Any:
+        """Block until `task` has its result. Idempotent — the value is memoized."""
+        if not isinstance(task, Task):
+            return f"Error: rlm_await expects a Task from spawn(), got {type(task).__name__}"
+        if not task._settled:
+            self._drain_until(task._rids)
+            task._value = task._reduce(self._take(task._rids))
+            task._settled = True
+        return task._value
+
+    def _await_all(self, tasks) -> list:
+        """Block until every task has its result. Order matches the input."""
+        tasks = list(tasks)
+        # One union drain so the tasks overlap instead of settling one after another.
+        union: list[str] = []
+        seen: set[str] = set()
+        for t in tasks:
+            if not isinstance(t, Task) or t._settled:
+                continue
+            for rid in t._rids:
+                if rid not in seen:
+                    seen.add(rid)
+                    union.append(rid)
+        if union:
+            self._drain_until(union)
+        return [self._await_task(t) for t in tasks]
+
+    # ---- sync helpers: await(start(...)), so there is exactly one code path -----------------
+
+    @_spawnable("llm_query")
+    def _llm_query(self, prompt: str, model: str | None = None) -> str:
+        return self._await_task(self._start_llm_query(prompt, model))
+
+    @_spawnable("llm_query_batched")
+    def _llm_query_batched(self, prompts, model: str | None = None) -> list[str]:
+        return self._await_task(self._start_llm_query_batched(prompts, model))
+
+    @_spawnable("llm_query_chunked")
+    def _llm_query_chunked(self, text, prompt: str, model: str | None = None) -> list[str]:
+        return self._await_task(self._start_llm_query_chunked(text, prompt, model))
+
+    @_spawnable("rlm_query")
     def _rlm_query(self, prompt: str, model: str | None = None) -> str:
-        r = self._rpc("rlm_query", {"prompt": str(prompt), "model": model})
-        return f"Error: {r['error']}" if r.get("error") else r.get("response", "")
+        return self._await_task(self._start_rlm_query(prompt, model))
 
     def _ask_user_question(self, questions: list[dict]) -> list[dict]:
         """Present structured questions to the user; blocks until answered.
@@ -512,17 +756,9 @@ class Worker:
             return response
         return response if isinstance(response, str) else "ok"
 
+    @_spawnable("rlm_query_batched")
     def _rlm_query_batched(self, prompts, model: str | None = None) -> list[str]:
-        prompts = [str(p) for p in prompts]
-        if not prompts:
-            return []
-        r = self._rpc("rlm_query_batched", {"prompts": prompts, "model": model})
-        if r.get("error"):
-            return [f"Error: {r['error']}"] * len(prompts)
-        out = r.get("responses")
-        if not isinstance(out, list) or len(out) != len(prompts):
-            return ["Error: malformed batched response"] * len(prompts)
-        return [s if isinstance(s, str) else f"Error: {s}" for s in out]
+        return self._await_task(self._start_rlm_query_batched(prompts, model))
 
     # ---- context + execution --------------------------------------------------------------
 
@@ -643,6 +879,13 @@ class Worker:
         for k, v in self.ns.items():
             if k.startswith("_") or _CONTEXT_NAME.match(k) or k in RESERVED or k == "__builtins__":
                 continue
+            # A Task holds a back-reference to this Worker, so dill would happily pickle the
+            # whole process. Top-level guard only: a Task nested inside a list/dict still
+            # falls to the generic `except` below and skips the variable — which is why this
+            # guard is explicit rather than left to that fallback.
+            if isinstance(v, Task):
+                skipped.append(k)
+                continue
             try:
                 blob = s.dumps(v)
                 if len(blob) > MAX_VAR_BYTES:
@@ -691,14 +934,28 @@ def main() -> None:
                     max_prompt_chars=args.max_prompt_chars, read_only=args.read_only)
     _send({"id": "_init", "ok": True})
 
-    for raw in _REAL_STDIN:
-        raw = raw.strip()
-        if not raw:
+    while True:
+        # Requests that arrived mid-exec were parked by _pump; replay them before reading.
+        req = worker.take_deferred()
+        if req is None:
+            line = _REAL_STDIN.readline()
+            if not line:
+                return
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                req = json.loads(raw)
+            except json.JSONDecodeError as e:
+                _send({"id": "?", "ok": False, "error": f"bad json: {e}"})
+                continue
+        # A task spawned in an earlier exec settling while the worker is idle. Park it for
+        # a later rlm_await; without this it would fall through to "unknown type" and the
+        # result would be lost.
+        if worker.park_reply(req):
             continue
-        try:
-            req = json.loads(raw)
-        except json.JSONDecodeError as e:
-            _send({"id": "?", "ok": False, "error": f"bad json: {e}"})
+        if not isinstance(req, dict):
+            _send({"id": "?", "ok": False, "error": f"expected an object, got {type(req).__name__}"})
             continue
         rid, kind = req.get("id", "?"), req.get("type")
         try:

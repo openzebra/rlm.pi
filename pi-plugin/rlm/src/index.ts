@@ -12,12 +12,16 @@ import { RlmController, cheapestModel } from "./mode/rlm-mode.ts";
 import { postRlmGuide } from "./ui/intro.ts";
 import { setRlmModeStatus } from "./ui/status.ts";
 import { SandboxManager } from "./sandbox/sandbox-manager.ts";
+import { createSubcallGates } from "./util/concurrency.ts";
+import { BackgroundTasks } from "./tool/background-tasks.ts";
 import { packRepository, formatForLLM, serializeForSandbox } from "./context/repomix-context.ts";
 import { buildNativeSystemPrompt, NATIVE_TURN_REMINDER } from "./prompts/system.ts";
 import { bashCommandFromInput, isFileReadingCommand, capToolResultText, BASH_BLOCK_REASON } from "./mode/native-guards.ts";
 import { errorMessage } from "./util/errors.ts";
 
 const BLOCKED_NATIVE_TOOLS = Object.freeze(new Set(["read", "grep"]));
+/** How often to keep the parent sandbox's request watchdog alive during detached work. */
+const WATCHDOG_HEARTBEAT_MS = 30_000;
 const CAPPED_RESULT_TOOLS = Object.freeze(new Set(["bash", "find", "ls"]));
 
 export default function rlmExtension(pi: ExtensionAPI): void {
@@ -33,6 +37,23 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     maxPromptChars: config.maxPromptChars,
     onSandboxDiscarded: () => { onSandboxDiscardExtra?.(); },
   });
+  // One admission gate for the whole session: spawn() lets the sandbox put many requests on
+  // the wire at once, so nothing smaller than session scope actually bounds fan-out.
+  const gates = createSubcallGates(config.maxConcurrentSubcalls);
+  const background = new BackgroundTasks({
+    maxBudgetUsd: config.maxBudgetUsd,
+    maxTimeoutMs: config.maxTimeoutMs,
+    maxTokens: config.maxTokens,
+    maxErrors: config.maxErrors,
+  });
+  // A detached child works in its OWN sandbox, so this one sees no frames and its request
+  // watchdog would fire mid-await and SIGKILL a healthy worker, taking the REPL namespace
+  // with it. Keep it alive while detached work is genuinely in flight.
+  const watchdogHeartbeat = setInterval(() => {
+    if (background.pending > 0) sandboxManager.refreshWatchdog();
+  }, WATCHDOG_HEARTBEAT_MS);
+  watchdogHeartbeat.unref();
+
   let packedContextText: string | undefined;
   let contextPackPromise: Promise<string | undefined> | undefined;
   const ensureRepositoryContext = async (cwd: string): Promise<string | undefined> => {
@@ -103,6 +124,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           getWorkerModel: () => controller.resolveModels(ctx)?.worker,
           registry: ctx.modelRegistry,
           config: controller.config,
+          gates,
+          background,
           registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
           ensureContext: async () => {
             const contextText = await ensureRepositoryContext(ctx.cwd ?? process.cwd());
@@ -206,6 +229,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // ── Session shutdown: cleanup ──
   pi.on("session_shutdown", async () => {
     controller.abort();
+    clearInterval(watchdogHeartbeat);
+    background.dispose();
     await sandboxManager.dispose();
     contextInjected = false;
     packedContextText = undefined;

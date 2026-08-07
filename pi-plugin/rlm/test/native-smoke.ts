@@ -15,7 +15,7 @@
 import { check, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
 import { packRepository, formatForLLM, serializeForSandbox } from "../src/context/repomix-context.ts";
-import { buildNativeSystemPrompt, buildRlmSystemPrompt } from "../src/prompts/system.ts";
+import { buildNativeSystemPrompt, buildRlmSystemPrompt, NATIVE_PROMPT_BUDGET } from "../src/prompts/system.ts";
 import type { ContextBundle } from "../src/context/repomix-context.ts";
 import { contextLength, contextTypeLabel } from "../src/text/tokens.ts";
 
@@ -167,7 +167,7 @@ check("SandboxManager — disposed", !mgr.isAlive);
 // ── 8. Native prompt sanity ──
 
 const nativeOnly = buildNativeSystemPrompt();
-check("native prompt — under 6K chars standalone", nativeOnly.length < 6000,
+check("native prompt — within the documented budget", nativeOnly.length < NATIVE_PROMPT_BUDGET,
       ` (${nativeOnly.length.toLocaleString()} chars)`);
 check("native prompt — includes REPL glossary", nativeOnly.includes("REPL Environment"));
 check("native prompt — includes workflow steps", nativeOnly.includes("Workflow"));

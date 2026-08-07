@@ -95,6 +95,12 @@ export interface AskUserQuestionReply {
 interface InterruptBase {
   readonly rid: string;
   readonly depth: number;
+  /**
+   * Started via `spawn()`: the request may outlive the `exec` that issued it, so the host
+   * must not attach it to that invocation's emitter or LimitGuard. Absent on the
+   * synchronous path.
+   */
+  readonly detached?: boolean;
 }
 
 interface PromptInterrupt extends InterruptBase {

@@ -14,6 +14,12 @@ type MutableSubcall = {
   -readonly [Key in keyof RlmSubcall]: RlmSubcall[Key];
 };
 
+/** Accumulated cost/tokens, shared by getTotals() and takeSettledSubtrees(). */
+export interface SubcallTotals {
+  readonly costUsd: number;
+  readonly tokens: number;
+}
+
 export class SubcallStore extends EmitterListener {
   private readonly subcalls = new Map<string, MutableSubcall>();
 
@@ -80,6 +86,56 @@ export class SubcallStore extends EmitterListener {
   /** Snapshot running totals. O(1). */
   getTotals(): { readonly costUsd: number; readonly tokens: number } {
     return { costUsd: this.totalCostUsd, tokens: this.totalTokens };
+  }
+
+  /**
+   * Remove and return every fully-settled root subtree, with its cost/tokens subtracted
+   * from the running totals so the caller can add them without double-counting.
+   *
+   * A root whose subtree still has a running node stays put. That matters because
+   * `renderCollapsedSubcallTree` walks down from `parentId === undefined`: a subcall handed
+   * over without its parent has no path from a root and is silently dropped from the tree.
+   * Handing over whole subtrees is what keeps adopted nodes renderable.
+   */
+  takeSettledSubtrees(): { readonly subcalls: readonly RlmSubcall[]; readonly totals: SubcallTotals } {
+    const children = new Map<string | undefined, MutableSubcall[]>();
+    for (const sc of this.subcalls.values()) {
+      const siblings = children.get(sc.parentId);
+      if (siblings === undefined) children.set(sc.parentId, [sc]);
+      else siblings.push(sc);
+    }
+
+    // Collect a root's subtree, or undefined when any node in it is still running.
+    const settledSubtree = (root: MutableSubcall): MutableSubcall[] | undefined => {
+      const collected: MutableSubcall[] = [];
+      const stack: MutableSubcall[] = [root];
+      while (stack.length > 0) {
+        const node = stack.pop();
+        if (node === undefined) continue;
+        if (node.status === "running") return undefined;
+        collected.push(node);
+        const kids = children.get(node.id);
+        if (kids !== undefined) stack.push(...kids);
+      }
+      return collected;
+    };
+
+    const taken: RlmSubcall[] = [];
+    let costUsd = 0;
+    let tokens = 0;
+    for (const root of children.get(undefined) ?? []) {
+      const subtree = settledSubtree(root);
+      if (subtree === undefined) continue;
+      for (const node of subtree) {
+        costUsd += node.costUsd;
+        tokens += node.tokens;
+        taken.push(Object.freeze({ ...node, status: node.status as SubcallStatus }));
+        this.subcalls.delete(node.id);
+      }
+    }
+    this.totalCostUsd -= costUsd;
+    this.totalTokens -= tokens;
+    return { subcalls: taken, totals: { costUsd, tokens } };
   }
 
   // ── Root usage (delegated from RlmEventAggregator) ──

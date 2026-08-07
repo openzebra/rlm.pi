@@ -17,9 +17,11 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { buildInteractiveHandlers } from "../bridge/interactive.ts";
 import { buildLibraryHandler } from "../bridge/library.ts";
 import { mergeLibraryIntoContext } from "../context/library-context.ts";
-import { createLlmBridge } from "../bridge/llm-query.ts";
+import {
+  createSubcallHandlers,
+  type Invocation,
+} from "../bridge/subcall-handlers.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
-import { createRlmHandlers } from "../bridge/rlm-query.ts";
 import { resolveModelId } from "../config/settings.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
@@ -67,6 +69,14 @@ import { STATE_SCHEMA_VERSION } from "../state/rows.ts";
 import type { PhaseRow, RunHeader } from "../state/rows.ts";
 import { serializeForSandbox, type ContextBundle } from "../context/repomix-context.ts";
 import { formatError } from "../util/errors.ts";
+import { createSubcallGates, type SubcallGates } from "../util/concurrency.ts";
+
+/**
+ * Grace period for detached sub-calls to settle before the run disposes its sandbox.
+ * Past it the abort signal (or process exit) is what stops them; waiting longer would
+ * hold a finished run open on work whose result nobody can receive.
+ */
+const DETACHED_SETTLE_MS = 5_000;
 
 
 export interface EngineDeps extends InteractiveDeps {
@@ -75,6 +85,8 @@ export interface EngineDeps extends InteractiveDeps {
   readonly registry: ModelRegistry;
   readonly config: RlmConfig;
   readonly limits?: Limits;
+  /** Session-wide sub-call admission, shared with the repl() tool. Private one if omitted. */
+  readonly gates?: SubcallGates;
   readonly signal?: AbortSignal;
   /** Live RlmDetails reporting via onUpdate. Required — replaces SubcallObserver. */
   readonly emitter: RlmEmitter;
@@ -181,40 +193,61 @@ export function createEngine(deps: EngineDeps): RunRlm {
       maxErrors: deps.limits?.maxErrors,
       maxTokens: deps.limits?.maxTokens,
     }, input.resume?.usageSeed.durationMs ?? 0);
-    const remainingBudget = (): { readonly budgetUsd?: number; readonly timeoutMs?: number } => ({
-      budgetUsd: limits.remainingBudgetUsd(),
-      timeoutMs: limits.remainingTimeoutMs(),
-    });
 
-    const llm = createLlmBridge({
-      workerModel: deps.workerModel,
-      registry: deps.registry,
-      subSystem: deps.config.subSystemPrompt,
-      maxPromptChars: deps.config.maxPromptChars,
-      maxConcurrent: deps.config.maxConcurrentSubcalls,
-      sampling: deps.config.subSampling,
-      signal: deps.signal,
-      onUsage: (u) => {
-        limits.addUsage(u);
-        deps.onUsage?.(u, "sub");
-      },
+    // One Invocation for the whole run: this engine owns exactly one sandbox at one depth,
+    // and its emitter and LimitGuard outlive every sub-call it services — including
+    // detached ones, which is why the headless path needs no session registry.
+    const invocation: Invocation = {
       emitter,
       parentId: selfReportId,
       depth: input.depth,
-      remainingBudget,
-    });
-    const rlm = createRlmHandlers({
-      run,
-      llm,
-      emitter,
+      limits: {
+        remainingBudgetUsd: () => limits.remainingBudgetUsd(),
+        remainingTimeoutMs: () => limits.remainingTimeoutMs(),
+        addUsage: (u) => {
+          limits.addUsage(u);
+          deps.onUsage?.(u, "sub");
+        },
+        addRaw: (costUsd, inputTokens, outputTokens) => {
+          limits.addRaw(costUsd, inputTokens, outputTokens);
+        },
+      },
+    };
+    // Detached work must not outlive the sandbox we dispose in `finally`: track it so the
+    // run can settle or abort it first (a child engine left running would keep spending).
+    let detachedInFlight = 0;
+    let detachedIdle: (() => void) | undefined;
+    const subcalls = createSubcallHandlers({
+      resolve: () => invocation,
+      gates: deps.gates ?? createSubcallGates(deps.config.maxConcurrentSubcalls),
+      registry: deps.registry,
+      getWorkerModel: () => deps.workerModel,
+      getModel: () => model,
+      maxPromptChars: deps.config.maxPromptChars,
+      sampling: deps.config.subSampling,
+      subSystem: deps.config.subSystemPrompt,
+      signal: deps.signal,
+      runChild: run,
       maxDepth: deps.config.maxDepth,
-      maxConcurrent: deps.config.maxConcurrentSubcalls,
-      parentNodeId: selfReportId,
-      remainingBudget,
-      onChildUsage: (costUsd, inputTokens, outputTokens) => {
-        limits.addRaw(costUsd, inputTokens, outputTokens);
+      trackDetached: async (task) => {
+        detachedInFlight += 1;
+        try {
+          return await task();
+        } finally {
+          detachedInFlight -= 1;
+          if (detachedInFlight === 0) detachedIdle?.();
+        }
       },
     });
+    /** Wait (bounded) for detached work before the sandbox goes away. */
+    const settleDetached = async (): Promise<void> => {
+      if (detachedInFlight === 0) return;
+      await new Promise<void>((resolve) => {
+        detachedIdle = resolve;
+        setTimeout(resolve, DETACHED_SETTLE_MS).unref?.();
+      });
+      detachedIdle = undefined;
+    };
     let sandbox: PythonSandbox | undefined;
     let best = "";
     let lastAnswer = "";
@@ -473,7 +506,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         maxPromptChars: deps.config.maxPromptChars,
         // Pipeline at depth 0 is read-only: guard open() write modes in the worker.
         readOnly: pipelineOn,
-        handlers: { ...llm, ...rlm, ...phaseHandlers, ...interactiveHandlers, ...libraryHandlers },
+        handlers: { ...subcalls, ...phaseHandlers, ...interactiveHandlers, ...libraryHandlers },
       });
 
       let history: ChatMsg[] = input.resume ? input.resume.history : [{ role: "system", content: system }];
@@ -774,6 +807,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         if (nodeStatus !== "error" && lastAnswer) emitter.emitAnswer(previewText(lastAnswer));
         emitter.emitStatus(nodeStatus === "error" ? "error" : "done");
       }
+      await settleDetached();
       await sandbox?.dispose();
     }
   };

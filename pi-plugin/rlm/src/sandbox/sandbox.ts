@@ -38,12 +38,23 @@ export interface LibraryLoadResult {
   readonly alreadyLoaded?: boolean;
 }
 
+/**
+ * Per-interrupt routing context for the sub-LLM handlers.
+ *
+ * Only the four sub-call kinds can be spawned, so only they carry it; the interactive and
+ * pipeline handlers are always synchronous within one exec.
+ */
+export interface SubcallOpts {
+  /** Started via `spawn()` — route to session-scoped state, not the current invocation. */
+  readonly detached: boolean;
+}
+
 /** Handlers the bridge installs to service sub-LLM interrupts. Return the reply payload. */
 export interface SubLlmHandlers {
-  llmQuery(prompt: string, model: string | null, depth: number): Promise<string>;
-  llmQueryBatched(prompts: readonly string[], model: string | null, depth: number): Promise<string[]>;
-  rlmQuery(prompt: string, model: string | null, depth: number): Promise<string>;
-  rlmQueryBatched(prompts: readonly string[], model: string | null, depth: number): Promise<string[]>;
+  llmQuery(prompt: string, model: string | null, depth: number, opts: SubcallOpts): Promise<string>;
+  llmQueryBatched(prompts: readonly string[], model: string | null, depth: number, opts: SubcallOpts): Promise<string[]>;
+  rlmQuery(prompt: string, model: string | null, depth: number, opts: SubcallOpts): Promise<string>;
+  rlmQueryBatched(prompts: readonly string[], model: string | null, depth: number, opts: SubcallOpts): Promise<string[]>;
   advancePhase(phase: string, summary: string | undefined, depth: number): Promise<string>;
   saveArtifact(kind: string, content: string, depth: number): Promise<string>;
   askUserQuestion(questions: readonly AskQuestion[], depth: number): Promise<AskAnswer[]>;
@@ -362,18 +373,19 @@ export class PythonSandbox {
   private async serviceInterrupt(msg: WorkerInterrupt): Promise<void> {
     const h = this.handlers;
     const d = msg.depth;
+    const opts: SubcallOpts = { detached: msg.detached === true };
     try {
       if (msg.type === "llm_query") {
-        const response = await h.llmQuery(msg.prompt ?? "", msg.model ?? null, d);
+        const response = await h.llmQuery(msg.prompt ?? "", msg.model ?? null, d, opts);
         this.reply(msg.rid, { response });
       } else if (msg.type === "rlm_query") {
-        const response = await h.rlmQuery(msg.prompt ?? "", msg.model ?? null, d);
+        const response = await h.rlmQuery(msg.prompt ?? "", msg.model ?? null, d, opts);
         this.reply(msg.rid, { response });
       } else if (msg.type === "llm_query_batched") {
-        const responses = await h.llmQueryBatched(msg.prompts ?? [], msg.model ?? null, d);
+        const responses = await h.llmQueryBatched(msg.prompts ?? [], msg.model ?? null, d, opts);
         this.reply(msg.rid, { responses });
       } else if (msg.type === "rlm_query_batched") {
-        const responses = await h.rlmQueryBatched(msg.prompts ?? [], msg.model ?? null, d);
+        const responses = await h.rlmQueryBatched(msg.prompts ?? [], msg.model ?? null, d, opts);
         this.reply(msg.rid, { responses });
       } else if (msg.type === "advance_phase") {
         const response = await h.advancePhase(msg.phase ?? "", msg.summary, d);

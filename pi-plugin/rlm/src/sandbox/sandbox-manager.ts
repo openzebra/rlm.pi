@@ -128,6 +128,17 @@ export class SandboxManager {
     }
   }
 
+  /**
+   * Keep the live sandbox's request watchdog from firing while it is legitimately idle.
+   *
+   * The watchdog only refreshes on frames arriving at THIS sandbox, but a detached
+   * rlm_query child does its work in its own sandbox — so without a heartbeat a healthy
+   * long-running child would trip death-recreate and destroy the REPL namespace.
+   */
+  refreshWatchdog(): void {
+    this.sandbox?.refreshWatchdog();
+  }
+
   /** True if the sandbox is alive and not disposed. */
   get isAlive(): boolean {
     return this.sandbox !== null && !this.disposed;

@@ -44,6 +44,22 @@ const CHUNKED_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "  you open()ed, an oversized sub-result, or several concatenated context files.",
 ]);
 
+/** Non-blocking fan-out: spawn now, collect later (headless glossary). */
+const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
+  "- `spawn(fn, *args) -> Task`: start `llm_query`, `llm_query_batched`, `llm_query_chunked`,",
+  "  `rlm_query` or `rlm_query_batched` WITHOUT waiting. Returns immediately.",
+  "- `rlm_await(task)` / `rlm_await_all(tasks) -> list`: collect results; order matches input.",
+  "  Tasks survive across turns, so spawn the slow work first, keep doing useful things, and",
+  "  await only when you actually need the results. `task.done` tells you if it has landed.",
+  "",
+  "  ```python",
+  "  # start the slow sub-agents, then keep working while they run",
+  "  tasks = [spawn(rlm_query, f\"Audit {area} end to end\") for area in areas]",
+  "  hits = [f for f in context if \"TODO\" in f[\"content\"]]   # overlaps with the sub-agents",
+  "  reports = rlm_await_all(tasks)",
+  "  ```",
+]);
+
 /** Why a file the user mentioned may be missing from `context`. */
 const CONTEXT_EXCLUSION_NOTE =
   "  NOTE: files larger than 1MB and gitignored files are NOT in `context` — they exist only on disk.";
@@ -118,6 +134,7 @@ function replGlossary(
     "- `llm_query_batched(prompts: list[str], model=None) -> list[str]`: run several sub-LLM calls",
     "  concurrently; output order matches input order.",
     ...CHUNKED_GLOSSARY_LINES,
+    ...SPAWN_GLOSSARY_LINES,
   );
   if (askUserQuestion) {
     lines.push(
@@ -268,6 +285,7 @@ function nativeReplGlossary(): string {
     CHUNKED_GLOSSARY_LINE_NATIVE,
     "- `rlm_query(prompt, model=None) -> str` — recursive RLM with its own REPL for complex sub-tasks needing iterative reasoning. Prefer llm_query — rlm_query is slower and costlier.",
     "- `rlm_query_batched(prompts, model=None) -> list[str]` — concurrent recursive RLM calls.",
+    "- `spawn(fn, *args) -> Task` / `rlm_await(t)` / `rlm_await_all(ts)` — start any query fn above without waiting; collect later, order preserved. Tasks outlive the repl() call, so spawn slow work early and await when you need it.",
     "",
     "- `todo(action, **kwargs) -> str` — manage a task list. Actions: create, update, list, get, delete, clear. Statuses: pending → in_progress → completed.",
     "- `load_library(source) -> dict`: append external dir/file/git tree into `context` under `lib/<id>/…`. Return is metadata only — always use `context`.",
@@ -355,8 +373,10 @@ export function buildNativeSystemPrompt(): string {
 }
 
 /** Soft cap on the static native prompt. Leaves headroom for per-turn context injection
- *  without bloating the root model's system prompt. Exceeded → phase-guards.ts fails. */
-export const NATIVE_PROMPT_BUDGET = 6_000;
+ *  without bloating the root model's system prompt. Exceeded → phase-guards.ts fails.
+ *  Raised from 6,000 when spawn/rlm_await joined the glossary: the async fan-out API is
+ *  part of the model-visible contract, and ~50 tokens is worth the model actually using it. */
+export const NATIVE_PROMPT_BUDGET = 6_200;
 
 /** Exported for tests — prompt length without context metadata (which is injected separately). */
 export const NATIVE_PROMPT_STATIC = buildNativeSystemPrompt();

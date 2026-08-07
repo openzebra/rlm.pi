@@ -11,10 +11,49 @@ import { AuthStorage, type ModelRegistry, ModelRegistry as MR } from "@earendil-
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { createEngine } from "../src/core/engine.ts";
-import { createLlmBridge, type LlmBridge } from "../src/bridge/llm-query.ts";
-import { createRlmHandlers } from "../src/bridge/rlm-query.ts";
+import {
+  createSubcallHandlers,
+  limitsFromRemaining,
+  type SubcallHandlers,
+} from "../src/bridge/subcall-handlers.ts";
+import { createSubcallGates } from "../src/util/concurrency.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import type { RunRlm } from "../src/core/types.ts";
+import type { SubcallOpts } from "../src/sandbox/sandbox.ts";
+
+/** Every sub-call in these token-free tests is synchronous, never spawn()ed. */
+const ATTACHED: SubcallOpts = { detached: false };
+
+/** One-shot fallback used at the depth cap, standing in for a real llm_query. */
+type Degrade = (prompt: string, model: string | null, depth: number) => Promise<string>;
+
+/**
+ * Recursion-only handlers: no registry or worker model is reachable on these paths,
+ * because `degrade` covers the depth cap and leaf completions never occur.
+ */
+function rlmOnlyHandlers(opts: {
+  run: RunRlm;
+  degrade: Degrade;
+  maxDepth: number;
+  remaining?: () => { readonly budgetUsd?: number; readonly timeoutMs?: number };
+  onChildUsage?: (costUsd: number, inputTokens: number, outputTokens: number) => void;
+}): SubcallHandlers {
+  const emitter = new RlmEmitter();
+  const limits = limitsFromRemaining(opts.remaining);
+  return createSubcallHandlers({
+    resolve: (_o, depth) => ({ emitter, parentId: undefined, depth, limits }),
+    gates: createSubcallGates(2),
+    registry: MR.create(AuthStorage.create()),
+    getWorkerModel: () => {
+      throw new Error("leaf completion must not be reached in the recursion tests");
+    },
+    maxPromptChars: Number.MAX_SAFE_INTEGER,
+    runChild: opts.run,
+    maxDepth: opts.maxDepth,
+    degrade: opts.degrade,
+    onChildUsage: opts.onChildUsage,
+  });
+}
 import { cheapestModel } from "../src/mode/rlm-mode.ts";
 
 /** Deterministic, token-free check of the recursion depth-cap + ordering logic. */
@@ -30,20 +69,19 @@ async function testRecursionBridge(): Promise<boolean> {
     calls.push(`run@${input.depth}`);
     return { answer: `child(${String(input.context).slice(0, 8)})`, iterations: 1, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 0 };
   };
-  const llm: LlmBridge = {
-    llmQuery: async (p) => `llm(${p.slice(0, 8)})`,
-    llmQueryBatched: async (ps) => ps.map((p) => `llm(${p.slice(0, 8)})`),
-  };
-  const handlers = createRlmHandlers({
-    emitter: new RlmEmitter(), run, llm, maxDepth: 2, maxConcurrent: 2 });
+  const handlers = rlmOnlyHandlers({
+    run,
+    degrade: async (p) => `llm(${p.slice(0, 8)})`,
+    maxDepth: 2,
+  });
 
   // depth 0 -> child depth 1 < 2 -> recurse into engine
-  log("rlm_query at depth 0 recurses", (await handlers.rlmQuery("alpha", null, 0)).startsWith("child("));
+  log("rlm_query at depth 0 recurses", (await handlers.rlmQuery("alpha", null, 0, ATTACHED)).startsWith("child("));
   // depth 1 -> child depth 2 >= maxDepth -> fall back to llm_query
-  const atCap = await handlers.rlmQuery("beta", null, 1);
+  const atCap = await handlers.rlmQuery("beta", null, 1, ATTACHED);
   log("rlm_query at depth cap falls back to llm_query", atCap.startsWith("llm("));
   // batched preserves order
-  const batched = await handlers.rlmQueryBatched(["one", "two", "three"], null, 0);
+  const batched = await handlers.rlmQueryBatched(["one", "two", "three"], null, 0, ATTACHED);
   const firstBatch = batched[0];
   const thirdBatch = batched[2];
   log("rlm_query_batched preserves order", batched.length === 3 && firstBatch !== undefined && thirdBatch !== undefined && firstBatch.includes("one") && thirdBatch.includes("three"));
@@ -71,16 +109,10 @@ async function testChildBudgetPropagation(): Promise<boolean> {
       durationMs: 0,
     };
   };
-  const llm: LlmBridge = {
-    llmQuery: async () => "",
-    llmQueryBatched: async (ps) => ps.map(() => ""),
-  };
-  const handlers = createRlmHandlers({
-    emitter: new RlmEmitter(),
+  const handlers = rlmOnlyHandlers({
     run,
-    llm,
+    degrade: async () => "",
     maxDepth: 3,
-    maxConcurrent: 2,
     onChildUsage: (costUsd, inputTokens, outputTokens) => {
       debitedCost += costUsd;
       debitedTokens += inputTokens + outputTokens;
@@ -88,8 +120,8 @@ async function testChildBudgetPropagation(): Promise<boolean> {
   });
 
   // Run two sequential rlm_query children; both should debit.
-  await handlers.rlmQuery("alpha", null, 0);
-  await handlers.rlmQuery("beta", null, 0);
+  await handlers.rlmQuery("alpha", null, 0, ATTACHED);
+  await handlers.rlmQuery("beta", null, 0, ATTACHED);
 
   log(
     "R1b: child cost debited from parent after each rlm_query",
@@ -118,38 +150,31 @@ async function testPreSpawnGuard(): Promise<boolean> {
     spawnCount++;
     return { answer: "ok", iterations: 1, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 0 };
   };
-  const llm: LlmBridge = {
-    llmQuery: async () => "",
-    llmQueryBatched: async (ps) => ps.map(() => ""),
-  };
+  const degrade: Degrade = async () => "";
 
   // Budget exhausted — should NOT spawn.
   spawnCount = 0;
-  const h0 = createRlmHandlers({
-    emitter: new RlmEmitter(), run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ budgetUsd: 0 }) });
-  const r0 = await h0.rlmQuery("x", null, 0);
+  const h0 = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ budgetUsd: 0 }) });
+  const r0 = await h0.rlmQuery("x", null, 0, ATTACHED);
   log("F-spawn: budget=0 refuses child spawn", r0 === "Error: budget exhausted", r0);
   log("F-spawn: no run() called when budget exhausted", spawnCount === 0, `spawned ${spawnCount}`);
 
   // Budget negative — should NOT spawn.
-  const hNeg = createRlmHandlers({
-    emitter: new RlmEmitter(), run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ budgetUsd: -0.5 }) });
-  const rNeg = await hNeg.rlmQuery("x", null, 0);
+  const hNeg = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ budgetUsd: -0.5 }) });
+  const rNeg = await hNeg.rlmQuery("x", null, 0, ATTACHED);
   log("F-spawn: budget<0 refuses child spawn", rNeg === "Error: budget exhausted", rNeg);
 
   // Timeout exhausted — should NOT spawn.
   spawnCount = 0;
-  const hT = createRlmHandlers({
-    emitter: new RlmEmitter(), run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ timeoutMs: 0 }) });
-  const rT = await hT.rlmQuery("x", null, 0);
+  const hT = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ timeoutMs: 0 }) });
+  const rT = await hT.rlmQuery("x", null, 0, ATTACHED);
   log("F-spawn: timeout=0 refuses child spawn", rT === "Error: timeout exhausted", rT);
   log("F-spawn: no run() called when timeout exhausted", spawnCount === 0, `spawned ${spawnCount}`);
 
   // Budget available — SHOULD spawn normally.
   spawnCount = 0;
-  const hOk = createRlmHandlers({
-    emitter: new RlmEmitter(), run, llm, maxDepth: 3, maxConcurrent: 2, remainingBudget: () => ({ budgetUsd: 1.0 }) });
-  const rOk = await hOk.rlmQuery("x", null, 0);
+  const hOk = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ budgetUsd: 1.0 }) });
+  const rOk = await hOk.rlmQuery("x", null, 0, ATTACHED);
   log("F-spawn: budget>0 spawns child normally", rOk === "ok" && spawnCount === 1, `${rOk} spawned=${spawnCount}`);
 
   return pass;
@@ -174,12 +199,19 @@ async function main() {
   const available = registry.getAvailable();
   if (available.length > 0) {
     const fallbackModel = available[0];
-    const guardedLlm = createLlmBridge({
-      workerModel: fallbackModel,
+    const guardedLlm = createSubcallHandlers({
+      resolve: () => ({
+        emitter: new RlmEmitter(),
+        parentId: undefined,
+        depth: 0,
+        limits: limitsFromRemaining(() => ({ budgetUsd: 0 })),
+      }),
+      gates: createSubcallGates(2),
       registry,
-      remainingBudget: () => ({ budgetUsd: 0 }),
+      getWorkerModel: () => fallbackModel,
+      maxPromptChars: 400_000,
     });
-    const guardedOut = await guardedLlm.llmQuery("must not call provider", null, 0);
+    const guardedOut = await guardedLlm.llmQuery("must not call provider", null, 0, ATTACHED);
     const guardedOk = guardedOut === "Error: budget exhausted";
     console.log(`${guardedOk ? "✓" : "✗"} F4: llm_query refuses exhausted budget before completion`);
     if (!guardedOk) process.exit(1);
