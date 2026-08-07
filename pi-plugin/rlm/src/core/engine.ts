@@ -385,6 +385,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         signal: deps.signal,
         initTimeoutMs: deps.config.sandboxInitTimeoutMs,
         maxPromptChars: deps.config.maxPromptChars,
+        awaitTimeoutS: Math.round(deps.config.requestTimeoutMs / 1000),
         // Pipeline at depth 0 is read-only: guard open() write modes in the worker.
         readOnly: pipelineOn,
         handlers: { ...subcalls, ...phaseHandlers, ...interactiveHandlers, ...libraryHandlers },

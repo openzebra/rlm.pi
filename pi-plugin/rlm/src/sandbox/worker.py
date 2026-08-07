@@ -104,8 +104,36 @@ def _install_read_only_guards():
     return guarded_io_open
 
 
+# _builtin()'s getattr(..., None) fallback would silently inject None for a name this
+# interpreter lacks, surfacing much later as "'NoneType' object is not callable" inside model
+# code. Fail at startup instead. Note "None" is legitimately None, and the block-list below is
+# deliberate — which is why this check runs BEFORE it.
+_MISSING = sorted(name for name, value in _SAFE_BUILTINS.items() if value is None and name != "None")
+if _MISSING:
+    raise RuntimeError(f"unsupported Python interpreter: missing builtins {_MISSING}")
+
+def _blocked_builtin(name: str):
+    """Bind a disabled builtin to a callable that explains itself.
+
+    Binding these to None made `eval(...)` fail with a bare "'NoneType' object is not callable",
+    which reads as a broken sandbox rather than a deliberate block: an audit session spent six
+    execs on it and filed a phantom "namespace corruption" bug. Saying so at the point of failure
+    fixes it for every model without spending native-prompt budget on a rule most runs never hit.
+    """
+    def blocked(*_args, **_kwargs):
+        raise PermissionError(
+            f"{name}() is disabled in the RLM sandbox by design — it is not missing and the "
+            "namespace is not corrupt. Names are already bound, so reference them directly; "
+            "inspect `context` with search() / grep_context() / outline()."
+        )
+    blocked.__name__ = name
+    return blocked
+
+
+# Blocked on purpose (NOT missing) — see _blocked_builtin. The _MISSING check above runs first,
+# so a genuinely absent builtin is still a startup failure rather than a silent None.
 for _blocked in ("eval", "exec", "compile", "input", "globals", "locals"):
-    _SAFE_BUILTINS[_blocked] = None
+    _SAFE_BUILTINS[_blocked] = _blocked_builtin(_blocked)
 
 RESERVED = frozenset(
     {
@@ -308,22 +336,54 @@ def _send(obj: dict[str, Any]) -> None:
     _REAL_STDOUT.flush()
 
 
-@contextmanager
-def _paused_alarm(exec_timeout_s: float):
-    """Stop the per-cell wall-clock alarm across a blocking wait on the parent.
+class _StallTimeout(Exception):
+    """No frame from the host while a sub-call was pending."""
 
-    Sub-LLM latency is network time, not the cell's compute time, so it must not
-    count against the ```repl``` block's timeout.
+
+@contextmanager
+def _stall_alarm(exec_timeout_s: float, stall_timeout_s: float):
+    """Swap the per-cell alarm for a stall alarm while blocked on the parent.
+
+    Sub-LLM latency is network time, not cell compute time, so it must not count against the
+    ```repl``` block timeout — but an unbounded wait is exactly how a lost reply turns into a
+    dead session. The yielded `rearm()` restarts the stall clock on every frame, so a healthy
+    long-running child never trips it.
     """
-    pause = exec_timeout_s > 0 and hasattr(signal, "SIGALRM")
-    remaining = signal.getitimer(signal.ITIMER_REAL)[0] if pause else 0.0
-    if pause:
-        signal.setitimer(signal.ITIMER_REAL, 0)
+    use = hasattr(signal, "SIGALRM")
+    remaining = signal.getitimer(signal.ITIMER_REAL)[0] if (use and exec_timeout_s > 0) else 0.0
+
+    def _fire(signum, frame):  # noqa: ARG001
+        raise _StallTimeout(
+            f"sub-call stalled — no reply from the host for {stall_timeout_s:g}s "
+            "(the task may still be running; rlm_await it again in a later block)"
+        )
+
+    old = signal.signal(signal.SIGALRM, _fire) if use else None
+
+    def rearm() -> None:
+        if use and stall_timeout_s > 0:
+            signal.setitimer(signal.ITIMER_REAL, stall_timeout_s)
+
+    rearm()
     try:
-        yield
+        yield rearm
     finally:
-        if pause and remaining > 0:
-            signal.setitimer(signal.ITIMER_REAL, remaining)
+        if use:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            if old is not None:
+                signal.signal(signal.SIGALRM, old)
+            if remaining > 0:                      # restore the cell's remaining budget
+                signal.setitimer(signal.ITIMER_REAL, remaining)
+
+
+def _surfaced_error(message: str) -> str:
+    """The "Error: …" contract value, ALSO written to the cell's stderr.
+
+    A spawn/await misuse whose only trace is the returned value reads to the model as a random
+    string much later — which is exactly how `tasks.items()` blew up on a str.
+    """
+    print(f"[rlm] {message}", file=sys.stderr)
+    return f"Error: {message}"
 
 
 # ---- reply reducers: raw parent replies -> the value the scaffold fn returns ----------------
@@ -356,6 +416,26 @@ def _reduce_chunked(sizes: list[int]):
         out: list[str] = []
         for red, rep in zip(per, replies):
             out.extend(red([rep]))
+        return out
+    return reduce
+
+
+def _reduce_map_files(sizes: list[int], spans: list[tuple[str, int]]):
+    """Flatten the batch replies (same as chunked), then regroup them per path.
+
+    A file larger than the per-prompt budget contributed several requests; its answers rejoin
+    in order, which is what makes map_files a {path: answer} dict rather than a flat list.
+    """
+    flatten = _reduce_chunked(sizes)
+
+    def reduce(replies: list[dict[str, Any]]) -> dict[str, str]:
+        responses = flatten(replies)
+        out: dict[str, str] = {}
+        cursor = 0
+        for path, count in spans:
+            part = responses[cursor:cursor + count]
+            cursor += count
+            out[path] = part[0] if count == 1 and part else "\n\n".join(part)
         return out
     return reduce
 
@@ -404,11 +484,19 @@ class Task:
 
 
 class Worker:
-    def __init__(self, depth: int, exec_timeout_s: float, max_prompt_chars: int, read_only: bool = False):
+    def __init__(
+        self,
+        depth: int,
+        exec_timeout_s: float,
+        max_prompt_chars: int,
+        read_only: bool = False,
+        await_timeout_s: float = 600.0,
+    ):
         self.depth = depth
         self.exec_timeout_s = exec_timeout_s
         self.max_prompt_chars = max_prompt_chars
         self.read_only = read_only
+        self.await_timeout_s = await_timeout_s
         self._rid = 0
         self._final_answer: str | None = None
         # Replies parked by rid until something awaits them. Unbounded by design: a task
@@ -555,13 +643,18 @@ class Worker:
         return True
 
     def _drain_until(self, rids) -> None:
-        """Block until every rid in `rids` has its reply parked in the inbox."""
+        """Block until every rid in `rids` has its reply parked in the inbox.
+
+        Bounded: a host that goes silent raises inside the ```repl``` block instead of hanging
+        the session forever.
+        """
         if all(r in self.inbox for r in rids):
             return
-        with _paused_alarm(self.exec_timeout_s):
+        with _stall_alarm(self.exec_timeout_s, self.await_timeout_s) as rearm:
             while not all(r in self.inbox for r in rids):
                 if not self._pump():
                     raise RuntimeError("parent closed the pipe during a sub-LLM request")
+                rearm()
 
     def _take(self, rids) -> list[dict[str, Any]]:
         return [self.inbox.pop(r) for r in rids]
@@ -575,13 +668,24 @@ class Worker:
     # ---- spawn / await ---------------------------------------------------------------------
 
     def _start_prompt(self, kind: str, prompt, model) -> Task:
-        rid = self._post(kind, {"prompt": str(prompt), "model": model})
-        return Task(self, kind, (rid,), _reduce_one, str(prompt)[:40])
+        text = str(prompt)
+        # A sub-LLM asked nothing answers something: the confabulation then sits in `answers`
+        # looking exactly like data. Refuse instead of spending a call on it.
+        if not text.strip():
+            return Task.resolved(self, kind, _surfaced_error(
+                f"{kind}() got an empty prompt — a sub-LLM would confabulate an answer to nothing"))
+        rid = self._post(kind, {"prompt": text, "model": model})
+        return Task(self, kind, (rid,), _reduce_one, text[:40])
 
     def _start_prompts(self, kind: str, prompts, model) -> Task:
         prompts = [str(p) for p in prompts]
         if not prompts:
             return Task.resolved(self, kind, [])
+        # Only the all-blank case: one blank prompt among twenty is the caller's business.
+        if not any(p.strip() for p in prompts):
+            return Task.resolved(self, kind, [
+                _surfaced_error(f"{kind}() got only empty prompts")
+            ] * len(prompts))
         rid = self._post(kind, {"prompts": prompts, "model": model})
         return Task(self, kind, (rid,), _reduce_batch(len(prompts)), f"×{len(prompts)}")
 
@@ -635,10 +739,13 @@ class Worker:
         return Task(self, "llm_query_chunked", tuple(rids), _reduce_chunked(sizes), f"{total} chunks")
 
     def _builder_for(self, name: str):
+        # llm_map_reduce is deliberately absent: its reduce step is a SECOND sub-LLM call that
+        # depends on its own map results, so it cannot be one (rids, pure reduce) Task.
         return {
             "llm_query": self._start_llm_query,
             "llm_query_batched": self._start_llm_query_batched,
             "llm_query_chunked": self._start_llm_query_chunked,
+            "map_files": self._start_map_files,
             "rlm_query": self._start_rlm_query,
             "rlm_query_batched": self._start_rlm_query_batched,
         }.get(name)
@@ -653,23 +760,26 @@ class Worker:
         name = getattr(fn, "_rlm_name", None)
         builder = self._builder_for(name) if isinstance(name, str) else None
         if builder is None:
-            return Task.resolved(self, "spawn",
-                "Error: spawn() takes llm_query, llm_query_batched, llm_query_chunked, "
-                "rlm_query or rlm_query_batched")
+            return Task.resolved(self, "spawn", _surfaced_error(
+                "spawn() takes llm_query, llm_query_batched, llm_query_chunked, map_files, "
+                "rlm_query or rlm_query_batched — not llm_map_reduce, whose reduce step depends "
+                "on its own map results and so cannot be a single Task"))
         # Mark every request this builder posts as detached: the parent routes them to its
         # session-scoped registry, since they may outlive the exec that started them.
         self._detached = True
         try:
             return builder(*args, **kwargs)
         except TypeError as e:
-            return Task.resolved(self, "spawn", f"Error: bad spawn arguments — {e}")
+            return Task.resolved(self, "spawn", _surfaced_error(f"bad spawn arguments — {e}"))
         finally:
             self._detached = False
 
     def _await_task(self, task) -> Any:
         """Block until `task` has its result. Idempotent — the value is memoized."""
         if not isinstance(task, Task):
-            return f"Error: rlm_await expects a Task from spawn(), got {type(task).__name__}"
+            return _surfaced_error(
+                f"rlm_await expects a Task from spawn(), got {type(task).__name__}"
+            )
         if not task._settled:
             self._drain_until(task._rids)
             task._value = task._reduce(self._take(task._rids))
@@ -803,12 +913,11 @@ class Worker:
 
     # ---- one-line delegation (structural: orchestrating must be easier than solving) -------
 
-    def _map_files(self, files: Any, prompt: str, model: str | None = None) -> dict[str, str]:
-        """Ask `prompt` of every given file, batched, and return {path: answer}.
+    def _start_map_files(self, files: Any, prompt: str, model: str | None = None) -> Task:
+        """Post every batch map_files needs, WITHOUT waiting. Contract: see _map_files.
 
-        `files` accepts context entries (dicts), paths (strings), or a mix — the whole
-        chunk/batch/collect loop the system prompt used to spell out, as one call.
-        Oversized files are split and their per-chunk answers joined.
+        All batches go on the wire together, so a 100-file map costs one round-trip of latency
+        rather than one per 20 files.
         """
         prompt = str(prompt)
         by_path: list[tuple[str, str]] = []
@@ -825,12 +934,14 @@ class Worker:
                 else:
                     by_path.append((item, ""))
         if not by_path:
-            return {}
+            return Task.resolved(self, "map_files", {})
 
         # Per-file prompt budget; anything larger is chunked and its answers concatenated.
         budget = self.max_prompt_chars - len(prompt) - _CHUNK_HEADER_OVERHEAD - 256
         if budget < 1_000:
-            return {p: "Error: prompt too long to leave room for file content" for p, _ in by_path}
+            return Task.resolved(self, "map_files", {
+                p: "Error: prompt too long to leave room for file content" for p, _ in by_path
+            })
 
         requests: list[str] = []
         spans: list[tuple[str, int]] = []  # (path, number of chunks contributed)
@@ -841,17 +952,24 @@ class Worker:
                 header = f"[file {path}" + (f", part {j + 1}/{len(chunks)}]" if len(chunks) > 1 else "]")
                 requests.append(f"{prompt}\n\n{header}\n{chunk}")
 
-        responses: list[str] = []
+        rids: list[str] = []
+        sizes: list[int] = []
         for i in range(0, len(requests), _MAX_CHUNK_BATCH):
-            responses.extend(self._llm_query_batched(requests[i:i + _MAX_CHUNK_BATCH], model))
+            batch = requests[i:i + _MAX_CHUNK_BATCH]
+            rids.append(self._post("llm_query_batched", {"prompts": batch, "model": model}))
+            sizes.append(len(batch))
+        return Task(self, "map_files", tuple(rids),
+                    _reduce_map_files(sizes, spans), f"{len(by_path)} files")
 
-        out: dict[str, str] = {}
-        cursor = 0
-        for path, count in spans:
-            part = responses[cursor:cursor + count]
-            cursor += count
-            out[path] = part[0] if count == 1 and part else "\n\n".join(part)
-        return out
+    @_spawnable("map_files")
+    def _map_files(self, files: Any, prompt: str, model: str | None = None) -> dict[str, str]:
+        """Ask `prompt` of every given file, batched, and return {path: answer}.
+
+        `files` accepts context entries (dicts), paths (strings), or a mix — the whole
+        chunk/batch/collect loop the system prompt used to spell out, as one call.
+        Oversized files are split and their per-chunk answers joined.
+        """
+        return self._await_task(self._start_map_files(files, prompt, model))
 
     def _llm_map_reduce(
         self,
@@ -1277,6 +1395,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--depth", type=int, default=int(os.environ.get("RLM_DEPTH", "1")))
     ap.add_argument("--timeout", type=float, default=float(os.environ.get("RLM_EXEC_TIMEOUT_S", "600")))
+    ap.add_argument("--await-timeout", type=float,
+                    default=float(os.environ.get("RLM_AWAIT_TIMEOUT_S", "600")))
     ap.add_argument("--max-prompt-chars", type=int,
                     default=int(os.environ.get("RLM_MAX_PROMPT_CHARS", "400000")))
     ap.add_argument("--read-only", action="store_true",
@@ -1285,7 +1405,8 @@ def main() -> None:
     args = ap.parse_args()
 
     worker = Worker(depth=args.depth, exec_timeout_s=args.timeout,
-                    max_prompt_chars=args.max_prompt_chars, read_only=args.read_only)
+                    max_prompt_chars=args.max_prompt_chars, read_only=args.read_only,
+                    await_timeout_s=args.await_timeout)
     _send({"id": "_init", "ok": True})
 
     while True:

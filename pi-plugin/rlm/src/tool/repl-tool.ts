@@ -47,6 +47,7 @@ import {
 } from "./subcall-render.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 import { capReplResultText, replDelegationNudge } from "../mode/native-guards.ts";
+import { attachTracer, trace, traceEnabled } from "../util/trace.ts";
 
 /** Chars of code shown on the tool call line, and of stdout in the expanded view. */
 const CALL_PREVIEW_CHARS = 80;
@@ -59,6 +60,16 @@ export const ReplToolParams = Object.freeze(Type.Object({
   code: Type.String({ description: "Python code to execute in the persistent REPL sandbox" }),
 }));
 
+/** Last non-empty line of a Python traceback — the `TypeError: …` line, not the frames. */
+function lastLine(text: string): string {
+  const lines = text.trimEnd().split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim();
+    if (line) return line.slice(0, 200);
+  }
+  return "";
+}
+
 /** Model-visible text assembled from a repl() result. */
 export interface ReplResultText {
   readonly text: string;
@@ -70,25 +81,40 @@ export interface ReplResultText {
  *
  * The pending line is the model's only signal that `spawn()`ed work is outstanding — without
  * it a model that spawned and moved on has no way to know it should still collect.
+ *
+ * `varNames` covers the opposite failure: a block that stores its results in `answers` and
+ * prints nothing reads as a bare "(no output)", so the model concludes the block did nothing
+ * and re-runs it — paying twice for the same sub-calls. The headless engine already answers
+ * this with the same hint (core/answer.ts); native mode was the only path missing it.
  */
 export function buildReplResultText(
   stdout: string,
   finalAnswer: string | undefined,
   subcalls: readonly RlmSubcall[],
   backgroundPending = 0,
+  varNames: readonly string[] = [],
 ): ReplResultText {
   const answerSubmitted = finalAnswer !== undefined;
+  const noOutput = !answerSubmitted && !stdout;
+  const varsHint = noOutput && varNames.length > 0
+    ? ` — the block ran fine and these REPL vars are defined: ${varNames.join(", ")}. `
+      + "Do NOT re-run it; read them in the next block."
+    : "";
   const rawText = answerSubmitted
     ? `ANSWER_SUBMITTED (${finalAnswer.length} chars) — delivered to user. Do not restate it.`
-    : stdout || "(no output)";
+    : stdout || `(no output)${varsHint}`;
   // Model-visible text is capped; the caller keeps full stdout in `details` for the TUI.
   const cappedText = capReplResultText(rawText) ?? rawText;
   const delegated = subcalls.some((s) => s.kind === "llm" || s.kind === "batch" || s.kind === "rlm");
   const nudge = answerSubmitted ? undefined : replDelegationNudge(rawText.length, delegated);
-  const pending = backgroundPending > 0
+  const failedBg = subcalls.filter((s) => s.id.startsWith("bg") && s.status === "error").length;
+  const pendingLine = backgroundPending > 0
     ? `\n\n[rlm] ${backgroundPending} background task(s) still running — rlm_await_all(tasks) to collect.`
     : "";
-  return { text: cappedText + (nudge ?? "") + pending };
+  const failedLine = failedBg > 0
+    ? `\n[rlm] ${failedBg} background sub-call(s) FAILED — their rlm_await value is an "Error: …" string, not data.`
+    : "";
+  return { text: cappedText + (nudge ?? "") + pendingLine + failedLine };
 }
 
 /** Advisory diagnostics derived from a completed invocation's sub-calls. */
@@ -242,7 +268,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     ],
     parameters: ReplToolParams,
 
-    async execute(_toolCallId, rawParams, _execSignal, onUpdate, ctx) {
+    async execute(_toolCallId, rawParams, execSignal, onUpdate, ctx) {
       const validation = validateToolParams(ReplToolParams, rawParams, "REPL", (errors): ReplDetails => ({
         status: "error",
         output: "",
@@ -262,17 +288,29 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       const startedAt = Date.now();
       const limits = new LimitGuard(limitsFromConfig(getConfig()));
 
+      const detachTracers = traceEnabled
+        ? [attachTracer(emitter, "turn"), attachTracer(background.emitter, "background")]
+        : [];
+
       // ── Progressive rendering: spinner + live sub-call tree ──
       const progress = createProgressNotifier<ReplDetails>({
         onUpdate,
-        getDetails: () => ({
-          status: progressStatus,
-          output: capturedStdout,
-          stderr: capturedStderr,
-          executionTimeMs: Date.now() - startedAt,
-          subcalls: store.getSubcalls(),
-          totals: store.getTotals(),
-        }),
+        getDetails: () => {
+          // Detached spawn() nodes live on the SESSION emitter, so without this merge the card
+          // stays empty for the entire time background work is running.
+          const live = background.liveSubcalls();
+          const bg = background.liveTotals();
+          const own = store.getTotals();
+          return {
+            status: progressStatus,
+            output: capturedStdout,
+            stderr: capturedStderr,
+            executionTimeMs: Date.now() - startedAt,
+            subcalls: live.length > 0 ? [...store.getSubcalls(), ...live] : store.getSubcalls(),
+            totals: { costUsd: own.costUsd + bg.costUsd, tokens: own.tokens + bg.tokens },
+            backgroundPending: background.pending > 0 ? background.pending : undefined,
+          };
+        },
         isRunning: (details) => details.status === "running",
         renderText: (details) => details.output.slice(0, 500) || (details.status === "running" ? `${spinnerFrame()} Running…` : "(no output)"),
       });
@@ -319,21 +357,38 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           });
         }
 
+        if (traceEnabled) {
+          trace("repl.exec.start", { chars: params.code.length, code: params.code.slice(0, 400) });
+        }
+
         const start = Date.now();
         const result: ReplResult = await sandboxManager.execWithSetup(params.code, () => {
           // Wire per-invocation mutable state only after the serialized exec slot
           // is active. Swapping earlier would let queued repl() calls overwrite
           // emitter/limits for the currently running REPL execution.
           bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits }, interactive);
-        });
+        }, execSignal);
         const elapsed = Date.now() - start;
         capturedStdout = result.stdout;
         capturedStderr = result.stderr;
         progressStatus = "done";
 
+        if (traceEnabled) {
+          trace("repl.exec.end", {
+            ms: elapsed,
+            stdout: result.stdout.length,
+            raised: result.raised,
+            pending: background.pending,
+            // A block that raised delegated nothing; without the exception the trace shows a
+            // silent turn and the reason is only in the TUI card.
+            error: result.raised ? lastLine(result.stderr) : undefined,
+          });
+        }
+
         // Adopt every background subtree that has settled, whether or not this turn awaited
         // it — otherwise a spawn the model never collects would never reach the user's cost
         // totals. IDs are "bg"-prefixed, so they cannot collide with this turn's.
+        // (drain() removes what it hands over, so live view + accounted view never double-count.)
         const adopted = background.drain();
         const subcalls: readonly RlmSubcall[] = adopted.subcalls.length > 0
           ? [...store.getSubcalls(), ...adopted.subcalls]
@@ -356,6 +411,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           finalAnswer,
           subcalls,
           background.pending,
+          result.varNames,
         );
 
         const details: ReplDetails = {
@@ -400,6 +456,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         };
       } finally {
         progress.stop();
+        for (const off of detachTracers) off();
         store.dispose();
         emitter.shutdown();
       }
@@ -428,7 +485,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
 
 function replStats(details: ReplDetails, theme: Theme): string {
   const elapsed = details.executionTimeMs > 0 ? `${details.executionTimeMs}ms` : undefined;
-  return cardStatsLine(details.totals, theme, elapsed);
+  return cardStatsLine(details.totals, theme, elapsed, details.backgroundPending);
 }
 
 function renderReplCollapsed(details: ReplDetails, theme: Theme): Text {

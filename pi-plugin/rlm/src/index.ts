@@ -35,6 +35,9 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     python: config.python,
     sandboxInitTimeoutMs: config.sandboxInitTimeoutMs,
     maxPromptChars: config.maxPromptChars,
+    // Same wall budget as the parent request watchdog — a stalled sub-call should surface
+    // inside the cell rather than hang the session forever.
+    awaitTimeoutS: Math.round(config.requestTimeoutMs / 1000),
     onSandboxDiscarded: () => { onSandboxDiscardExtra?.(); },
   });
   // One admission gate for the whole session: spawn() lets the sandbox put many requests on

@@ -77,7 +77,8 @@ const CHUNKED_GLOSSARY_LINES: readonly string[] = Object.freeze([
 /** Non-blocking fan-out: spawn now, collect later (headless glossary). */
 const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "- `spawn(fn, *args) -> Task`: start `llm_query`, `llm_query_batched`, `llm_query_chunked`,",
-  "  `rlm_query` or `rlm_query_batched` WITHOUT waiting. Returns immediately.",
+  "  `map_files`, `rlm_query` or `rlm_query_batched` WITHOUT waiting. Returns immediately.",
+  "  (Not `llm_map_reduce` — its reduce step depends on its own map results.)",
   "- `rlm_await(task)` / `rlm_await_all(tasks) -> list`: collect results; order matches input.",
   "  Tasks survive across turns, so spawn the slow work first, keep doing useful things, and",
   "  await only when you actually need the results. `task.done` tells you if it has landed.",
@@ -387,7 +388,7 @@ function nativeReplGlossary(): string {
     CHUNKED_GLOSSARY_LINE_NATIVE,
     "- `rlm_query(prompt, model=None) -> str` — recursive RLM with its own REPL for complex sub-tasks needing iterative reasoning. Prefer llm_query — rlm_query is slower and costlier.",
     "- `rlm_query_batched(prompts, model=None) -> list[str]` — concurrent recursive RLM calls.",
-    "- `spawn(fn, *args) -> Task` / `rlm_await(t)` / `rlm_await_all(ts)` — start any query fn above without waiting; collect later, order preserved. Tasks outlive the repl() call, so spawn slow work early and await when you need it.",
+    "- `spawn(fn, *args) -> Task` / `rlm_await(t)` / `rlm_await_all(ts)` — start `llm_query`, `llm_query_batched`, `llm_query_chunked`, `map_files`, `rlm_query` or `rlm_query_batched` without waiting (NOT `llm_map_reduce`); collect later, order preserved. Tasks outlive the repl() call, so spawn slow work early and await when you need it.",
     "",
     "",
     "- `answers` / `plan` — dicts persisted across every repl() call and snapshot. Your memo.",

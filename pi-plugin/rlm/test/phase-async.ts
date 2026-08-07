@@ -78,6 +78,19 @@ print(rlm_await("not a task"))
       misuse.stdout.includes("expects a Task"), "");
     check("misuse never raises", !misuse.raised, misuse.stderr.slice(0, 120));
 
+    // llm_map_reduce cannot be a single Task (its reduce depends on its own map results) — the
+    // error must SAY so, since the glossary lists it right next to the spawnable helpers.
+    const mapReduce = await sb.exec(`print(rlm_await(spawn(llm_map_reduce, ["a"], "map", "reduce")))`);
+    check("spawn(llm_map_reduce) explains why it is excluded",
+      mapReduce.stdout.includes("not llm_map_reduce"), mapReduce.stdout.trim().slice(0, 80));
+
+    // Empty prompts: a sub-LLM asked nothing confabulates, and the confabulation looks like data.
+    const blank = await sb.exec(`print(llm_query("   "))\nprint(llm_query_batched(["", " "])[0])`);
+    check("llm_query('') is refused instead of answered",
+      blank.stdout.includes("empty prompt"), blank.stdout.trim().slice(0, 80));
+    check("an all-blank batch is refused per prompt",
+      blank.stdout.includes("only empty prompts"), "");
+
     // A Task holds a worker back-reference; snapshotting it must be skipped, not fatal.
     await sb.exec(`leftover = spawn(llm_query, "3")`);
     const snapOk = await sb.snapshot("/tmp/rlm-phase-async-snap.pkl", "nonce-async");
@@ -161,15 +174,19 @@ async function testGates(): Promise<void> {
   const sem = new Semaphore(8);
   let peak = 0;
   let active = 0;
-  const out = await sem.map(Array.from({ length: 50 }, (_, i) => i), async (i) => {
-    active += 1;
-    peak = Math.max(peak, active);
-    await sleep(5);
-    active -= 1;
-    return i * 2;
-  });
+  // Order-preserving parallel map via run + Promise.all (Semaphore.map was removed — it
+  // invited the re-entrant deadlock that phase-batch-gate locks out).
+  const out = await Promise.all(Array.from({ length: 50 }, (_, i) =>
+    sem.run(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await sleep(5);
+      active -= 1;
+      return i * 2;
+    }),
+  ));
   check("Semaphore never exceeds its limit", peak <= 8, `peak=${peak}`);
-  check("Semaphore.map preserves order", out[0] === 0 && out[49] === 98, `${out[0]}..${out[49]}`);
+  check("Semaphore.run + Promise.all preserves order", out[0] === 0 && out[49] === 98, `${out[0]}..${out[49]}`);
 
   // A single shared gate at limit 1 would deadlock here: the depth-0 holder waits forever
   // for a slot its own child needs. Per-depth gates break the cycle.

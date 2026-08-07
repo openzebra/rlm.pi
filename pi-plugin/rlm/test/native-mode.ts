@@ -75,6 +75,25 @@ function testAnswerSubmittedSummary() {
   check("buildReplResultText — final answer content hidden", !result.text.includes("final answer"));
 }
 
+/**
+ * A silent block must not read as a no-op: without the var list the model concludes its work
+ * was lost and re-runs the block, paying for every sub-call twice (seen in an e2e run).
+ */
+function testSilentBlockVarsHint() {
+  const silent = buildReplResultText("", undefined, [], 0, ["answers", "paths"]);
+  check("buildReplResultText — silent block lists REPL vars", silent.text.includes("answers, paths"));
+  check("buildReplResultText — silent block warns against re-running", silent.text.includes("Do NOT re-run"));
+
+  const noVars = buildReplResultText("", undefined, [], 0, []);
+  check("buildReplResultText — no vars, no hint", noVars.text.includes("(no output)") && !noVars.text.includes("Do NOT re-run"));
+
+  const printed = buildReplResultText("real stdout", undefined, [], 0, ["answers"]);
+  check("buildReplResultText — hint only when stdout is empty", !printed.text.includes("Do NOT re-run"));
+
+  const answered = buildReplResultText("", "the answer", [], 0, ["answers"]);
+  check("buildReplResultText — answer submission outranks the hint", !answered.text.includes("Do NOT re-run"));
+}
+
 function testCollectReplWarnings() {
   const ok: readonly RlmSubcall[] = Object.freeze([
     { id: "s1", depth: 0, kind: "llm", label: "a", status: "done", startedAt: 0, costUsd: 0, tokens: 0 },
@@ -113,6 +132,7 @@ async function testSandboxManager() {
     python: "python3",
     sandboxInitTimeoutMs: 30_000,
     maxPromptChars: 400_000,
+    awaitTimeoutS: 10,
     onSandboxDiscarded: () => { discardedCount++; },
   });
 
@@ -162,6 +182,7 @@ async function main() {
 
   console.log("\n─── Result text / warnings ───");
   testAnswerSubmittedSummary();
+  testSilentBlockVarsHint();
   testCollectReplWarnings();
 
   console.log("\n─── SandboxManager ───");

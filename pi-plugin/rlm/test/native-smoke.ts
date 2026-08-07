@@ -79,6 +79,7 @@ const mgr = new SandboxManager({
   python: "python3",
   sandboxInitTimeoutMs: 30_000,
   maxPromptChars: 400_000,
+  awaitTimeoutS: 30,
 });
 
 // Store context payload (same as index.ts does)

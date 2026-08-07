@@ -14,6 +14,8 @@ export interface SandboxManagerConfig {
   readonly python: string;
   readonly sandboxInitTimeoutMs: number;
   readonly maxPromptChars: number;
+  /** Max seconds the worker waits for a host reply while parked in rlm_await. */
+  readonly awaitTimeoutS: number;
   readonly signal?: AbortSignal;
   readonly onSandboxDiscarded?: () => void;
 }
@@ -61,6 +63,7 @@ export class SandboxManager {
       signal: this.config.signal,
       initTimeoutMs: this.config.sandboxInitTimeoutMs,
       maxPromptChars: this.config.maxPromptChars,
+      awaitTimeoutS: this.config.awaitTimeoutS,
       handlers,
     }).then(async (s) => {
       // Load context on first creation if available.
@@ -85,19 +88,19 @@ export class SandboxManager {
    * a promise queue (second call waits for the first, no interleaving). On failure the sandbox
    * is nullified so the next call recreates it (death-recreate).
    */
-  async exec(code: string): Promise<ReplResult> {
-    return this.execQueued(code);
+  async exec(code: string, signal?: AbortSignal): Promise<ReplResult> {
+    return this.execQueued(code, undefined, signal);
   }
 
   /**
    * Execute code after running `setup` inside the serialized execution slot, so per-invocation
    * handler state (emitter, limits, depth) always matches the active REPL run.
    */
-  async execWithSetup(code: string, setup: () => void): Promise<ReplResult> {
-    return this.execQueued(code, setup);
+  async execWithSetup(code: string, setup: () => void, signal?: AbortSignal): Promise<ReplResult> {
+    return this.execQueued(code, setup, signal);
   }
 
-  private async execQueued(code: string, setup?: () => void): Promise<ReplResult> {
+  private async execQueued(code: string, setup?: () => void, signal?: AbortSignal): Promise<ReplResult> {
     if (!this.sandbox) throw new Error("Sandbox not initialized — call getOrCreate first");
 
     // Serialize: queue behind any in-flight execution
@@ -111,7 +114,7 @@ export class SandboxManager {
       const sandbox = this.sandbox;
       if (!sandbox) throw new Error("Sandbox not initialized — previous execution disposed it");
       setup?.();
-      return await sandbox.exec(code);
+      return await sandbox.exec(code, signal);
     } catch (err) {
       // Death-recreate: worker died — nullify so next repl() recreates
       if (this.sandbox) {

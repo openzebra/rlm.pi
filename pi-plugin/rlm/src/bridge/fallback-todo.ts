@@ -90,12 +90,22 @@ function withPatch(task: Task, params: TodoParams): Task {
   });
 }
 
+/** The actions `worker.py::_todo` documents. Anything else is a caller error, not a missing task. */
+const TODO_ACTIONS: ReadonlySet<string> = Object.freeze(new Set([
+  "create", "update", "list", "get", "delete", "clear",
+]));
+
 export function createTodoFallback(): (action: string, params: Record<string, unknown>) => Promise<string> {
   let nextId = 1;
   let tasks: readonly Task[] = Object.freeze([]);
   const fmt = (task: Task): string => taskLines(task)[0] ?? `#${task.id}`;
 
   const apply = (action: string, rawParams: Record<string, unknown>): string => {
+    // Validated BEFORE the id lookup below: an unknown action used to fall through to it and
+    // report "task #? not found", which reads as a missing task rather than a bad action.
+    if (!TODO_ACTIONS.has(action)) {
+      return formatError(`unknown todo action '${action}' — expected ${[...TODO_ACTIONS].join(", ")}`);
+    }
     const params = toTodoParams(rawParams);
     if (action === "clear") {
       const count = tasks.length;
@@ -131,7 +141,8 @@ export function createTodoFallback(): (action: string, params: Record<string, un
       tasks = Object.freeze(tasks.map((item) => item.id === task.id ? updated : item));
       return `Updated ${fmt(updated)}`;
     }
-    return formatError(`unknown todo action '${action}'`);
+    // Unreachable: every TODO_ACTIONS member is handled above. Kept as the exhaustiveness arm.
+    return formatError(`unhandled todo action '${action}'`);
   };
   return async (action, params) => apply(action, params);
 }

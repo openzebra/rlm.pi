@@ -43,6 +43,36 @@ async function main(): Promise<void> {
     check("F6: context-prefixed user vars survive snapshot restore", r.stdout.trim() === "snapshot me", r.stdout.trim());
     r = await sb2.exec("print(llm_query('test'))");
     check("llm_query works after restore", r.stdout.includes("STUB"), r.stdout.trim());
+
+    // Scaffold integrity across repeated snapshot/restore cycles.
+    // An audit blamed restore for "rotating None scaffold names". It cannot: every scaffold
+    // name is in RESERVED, so snapshot skips it and restore never rebinds it — and execute()
+    // re-injects the scaffold before AND after every exec. Ten cycles with exactly the
+    // namespace shape that was suspected (a live Task holding a Worker back-reference, plus a
+    // self-referential dict) must leave every name callable.
+    const SCAFFOLD = [
+      "llm_query", "llm_query_batched", "llm_query_chunked", "rlm_query", "rlm_query_batched",
+      "spawn", "rlm_await", "rlm_await_all", "map_files", "llm_map_reduce",
+      "search", "grep_context", "outline", "todo", "load_library", "SHOW_VARS",
+    ];
+    await sb2.exec(`leftover = spawn(llm_query, "held"); selfref = {}; selfref["me"] = selfref`);
+    const cyclePath = join(tmp, "cycles.pkl");
+    const cycleNonce = randomUUID();
+    let cyclesOk = true;
+    for (let i = 0; i < 10; i++) {
+      cyclesOk = await sb2.snapshot(cyclePath, cycleNonce) && cyclesOk;
+      cyclesOk = await sb2.restore(cyclePath, cycleNonce) && cyclesOk;
+    }
+    check("10 snapshot/restore cycles all succeed", cyclesOk);
+    // `globals()` is blocked in the sandbox, so probe the names directly.
+    r = await sb2.exec(
+      `names = {${SCAFFOLD.map((n) => `"${n}": ${n}`).join(", ")}}\n`
+      + `print([n for n, v in names.items() if v is None or not callable(v)])`,
+    );
+    check("scaffold survives 10 snapshot/restore cycles",
+      !r.raised && r.stdout.trim() === "[]", `${r.stdout.trim()} ${r.stderr.slice(0, 120)}`);
+    r = await sb2.exec("print(rlm_await(leftover))");
+    check("a Task held across the cycles still resolves", r.stdout.includes("STUB"), r.stdout.trim());
     await sb2.dispose();
   } finally {
     rmSync(tmp, { recursive: true, force: true });

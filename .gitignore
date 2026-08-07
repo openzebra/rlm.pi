@@ -9,5 +9,9 @@ dist/
 .rpiv/
 .rlm/
 
+# E2E harness artifacts + local OpenRouter key (never commit)
+.rlm-e2e/
+pi-plugin/rlm/test/.env.e2e
+
 # npm pack output
 *.tgz

@@ -25,6 +25,7 @@ import {
   type WorkerResponse,
 } from "./protocol.ts";
 import { errorMessage, formatError } from "../util/errors.ts";
+import { trace, traceEnabled } from "../util/trace.ts";
 
 /** Result of a host-side library pack requested by `load_library`. */
 export interface LibraryLoadResult {
@@ -84,6 +85,11 @@ export interface SandboxOptions {
    * Native repl() data work leaves this false so scratch-file writes still work.
    */
   readonly readOnly?: boolean;
+  /**
+   * Max seconds the worker will wait for a host reply while parked in `_drain_until`
+   * (rlm_await / sync sub-call). Defaults to the worker's own RLM_AWAIT_TIMEOUT_S (600).
+   */
+  readonly awaitTimeoutS?: number;
 }
 
 const WORKER_PATH = join(dirname(fileURLToPath(import.meta.url)), "worker.py");
@@ -172,6 +178,9 @@ export class PythonSandbox {
     if (opts.readOnly) {
       workerArgs.push("--read-only");
     }
+    if (opts.awaitTimeoutS !== undefined) {
+      workerArgs.push("--await-timeout", String(opts.awaitTimeoutS));
+    }
     this.proc = spawn(
       python,
       workerArgs,
@@ -242,8 +251,8 @@ export class PythonSandbox {
     return file;
   }
 
-  async exec(code: string): Promise<ReplResult> {
-    const res = await this.request({ type: "exec", code });
+  async exec(code: string, signal?: AbortSignal): Promise<ReplResult> {
+    const res = await this.request({ type: "exec", code }, signal);
     if (!res.ok) throw new Error(res.error ?? "exec failed");
     return {
       stdout: res.stdout ?? "",
@@ -308,12 +317,27 @@ export class PythonSandbox {
     });
   }
 
-  private request(payload: RequestBody): Promise<WorkerResponse> {
+  private request(payload: RequestBody, signal?: AbortSignal): Promise<WorkerResponse> {
     if (this.disposed) return Promise.reject(new Error("sandbox disposed"));
+    if (signal?.aborted) return Promise.reject(new Error("repl execution aborted"));
     const id = `r${++this.seq}`;
     return new Promise<WorkerResponse>((resolve, reject) => {
       const timer = this.createWatchdog(id, payload.type, reject);
-      this.pending.set(id, { resolve, reject, timer, requestType: payload.type });
+      // Cancel == kill. The worker may be parked inside `_drain_until` with no other way out;
+      // `proc.on("exit") -> failAll` settles this request and SandboxManager's catch recreates
+      // the sandbox. REPL variables are lost — the documented price of interrupting.
+      const onAbort = (): void => {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        try { this.proc.kill("SIGKILL"); } catch { /* already dead */ }
+        reject(new Error("repl execution aborted — REPL variables were reset"));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const once = <T>(settle: (value: T) => void) => (value: T): void => {
+        signal?.removeEventListener("abort", onAbort);
+        settle(value);
+      };
+      this.pending.set(id, { resolve: once(resolve), reject: once(reject), timer, requestType: payload.type });
       this.send({ id, ...payload } as ParentMessage);
     });
   }
@@ -344,6 +368,13 @@ export class PythonSandbox {
   }
 
   private send(msg: ParentMessage): void {
+    if (traceEnabled) {
+      trace("frame.out", {
+        frame: msg.type,
+        id: "id" in msg ? msg.id : undefined,
+        rid: "rid" in msg ? msg.rid : undefined,
+      });
+    }
     this.proc.stdin.write(`${JSON.stringify(msg)}\n`);
   }
 
@@ -373,6 +404,19 @@ export class PythonSandbox {
   }
 
   private dispatch(msg: WorkerMessage): void {
+    if (traceEnabled) {
+      if (isInterrupt(msg)) {
+        trace("frame.in", {
+          frame: msg.type,
+          rid: msg.rid,
+          depth: msg.depth,
+          detached: msg.detached === true,
+          prompts: "prompts" in msg ? msg.prompts?.length : 1,
+        });
+      } else {
+        trace("frame.in", { frame: "response", id: msg.id, ok: msg.ok });
+      }
+    }
     if (isInterrupt(msg)) {
       this.touchPending();
       void this.serviceInterrupt(msg);

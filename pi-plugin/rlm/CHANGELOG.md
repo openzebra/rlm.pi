@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-08
+
+### Fixed
+
+- **Batch gate deadlock.** `llm_query_batched` re-acquired the session-wide leaf semaphore
+  around each prompt *and* inside every `complete1`, so any batch of ≥ `maxConcurrentSubcalls`
+  (default 6) filled the gate and hung forever — including `map_files` / `llm_query_chunked`.
+  Batches now fan out with a single acquire per prompt; `Semaphore.map` is gone.
+- **Unbounded `rlm_await`.** The worker no longer pauses the cell alarm while draining host
+  replies; a re-armable stall alarm (`--await-timeout`, default 600s) raises inside the
+  ```repl``` block if the host goes silent.
+- **ESC during `repl()`.** Execution `AbortSignal` is wired through to the sandbox request and
+  SIGKILLs the worker (REPL variables reset — documented price of interrupt).
+
+- **`spawn(map_files, …)`.** The native glossary promised "start any query fn above" while the
+  worker allowlist admitted 5 of 7, so the documented default for bulk reading could not be
+  detached. `map_files` is now a builder like the others (`_start_map_files` + a pure regroup
+  reducer) and posts every batch at once — a >20-file map costs one round-trip instead of
+  `ceil(n/20)`. `llm_map_reduce` stays excluded (its reduce depends on its own map results) and
+  the prompts + the `spawn()` error now say so instead of over-promising.
+- **`todo` with an unknown action** reported `task #? not found`, sending callers hunting for a
+  task instead of fixing the action name. The action is validated before the id lookup.
+- **`llm_query("")`** reached the model, which confabulated an answer that then sat in `answers`
+  looking like data. Empty (and all-blank batch) prompts are refused up front.
+- **Missing builtins fail at startup.** `_builtin()`'s `getattr(..., None)` fallback would
+  silently inject `None` and surface much later as `'NoneType' object is not callable`; the
+  worker now raises at import instead.
+- **Blocked builtins explain themselves.** `eval`/`exec`/`compile`/`input`/`globals`/`locals`
+  were bound to `None`, so reaching for one gave a bare `'NoneType' object is not callable` —
+  indistinguishable from a corrupted namespace (an audit session spent six execs on this and
+  filed a phantom bug). They now raise `PermissionError` naming the block and pointing at the
+  supported alternative, at the point of failure and at no cost to prompt budget.
+
+### Added
+
+- **Live background tree.** Detached `spawn()` work is merged into the progressive repl card
+  (`↯N bg` stats + `↯bg` node tags) so in-flight sub-calls are visible while they run.
+- **Spawn misuse → stderr.** `_surfaced_error` prints `[rlm] …` into the cell so a string that
+  later breaks `tasks.items()` is not a mystery.
+- **Silent blocks list their REPL vars.** A block that stores results in `answers` and prints
+  nothing returned a bare `(no output)`, so the model assumed the work was lost and re-ran it —
+  paying for every sub-call twice. Native mode now appends the same var-list hint the headless
+  engine has always used (`core/answer.ts`).
+- **`RLM_TRACE_FILE` JSONL tracer** and **`bun run test:e2e "<task>"`** — real pi + OpenRouter
+  harness with merged root/repl/sub-call timeline and a deadlock stall watchdog.
+- **`phase-batch-gate.ts`** — token-free regression: 20 prompts through a limit-6 gate must
+  finish fast with peak ≤ 6.
+
 ## [0.2.0] - 2026-08-01
 
 ### Added

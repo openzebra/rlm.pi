@@ -52,11 +52,21 @@ export function cardStatsLine(
   totals: { readonly costUsd: number; readonly tokens: number },
   theme: Theme,
   extra?: string,
+  backgroundPending?: number,
 ): string {
   const parts: string[] = [formatCost(totals.costUsd)];
   if (totals.tokens > 0) parts.push(`${formatTokens(totals.tokens)} tok`);
   if (extra) parts.push(extra);
-  return theme.fg("dim", parts.join(" · "));
+  const line = theme.fg("dim", parts.join(" · "));
+  // The one thing no tree can show: spawned work that may outlive this block.
+  return backgroundPending !== undefined && backgroundPending > 0
+    ? `${line} ${theme.fg("warning", `↯${backgroundPending} bg`)}`
+    : line;
+}
+
+/** Detached nodes carry BackgroundTasks' "bg" id prefix (RlmEmitter("bg")). */
+function backgroundTag(sc: RlmSubcall, theme: Theme): string {
+  return sc.id.startsWith("bg") ? ` ${theme.fg("warning", "↯bg")}` : "";
 }
 
 /** `<glyph> <TITLE> <stats>` — the first line of both tools' collapsed and expanded views. */
@@ -128,7 +138,8 @@ export function renderCollapsedSubcallTree(
       const branch = isLast ? "└─" : "├─";
       const gGlyph = subcallStatusGlyph(sc, theme);
       const gStats = subcallStatsLine(sc);
-      lines.push(`${prefix}${branch} ${sc.label}  ${gGlyph}  ${gStats}`);
+      const gBg = backgroundTag(sc, theme);
+      lines.push(`${prefix}${branch} ${sc.label}  ${gGlyph}  ${gStats}${gBg}`);
       const childPrefix = prefix + (isLast ? "   " : "│  ");
       lines.push(...walk(sc.id, childPrefix));
     }
@@ -155,7 +166,8 @@ export function renderExpandedSubcallTree(
     const sKind = theme.fg("muted", sc.label);
     const sModel = sc.model ? theme.fg("dim", ` ${sc.model}`) : "";
     const sStats = sc.endedAt ? `  ${theme.fg("dim", subcallStatsLine(sc))}` : "";
-    let line = `${pad}${sGlyph} ${sKind}${sModel}${sStats}`;
+    const sBg = backgroundTag(sc, theme);
+    let line = `${pad}${sGlyph} ${sKind}${sModel}${sStats}${sBg}`;
 
     if (sc.args) {
       line += `\n${pad}  ${theme.fg("dim", previewText(sc.args, ARGS_PREVIEW_CHARS))}`;

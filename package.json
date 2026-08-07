@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "bun run index.ts",
-    "dev": "bun --watch run index.ts"
+    "dev": "bun --watch run index.ts",
+    "test": "bun run pi-plugin/rlm/test/smoke.ts",
+    "test:e2e": "bun run pi-plugin/rlm/test/e2e.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "latest",

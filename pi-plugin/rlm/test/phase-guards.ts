@@ -9,6 +9,7 @@ import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { NATIVE_PROMPT_STATIC, NATIVE_PROMPT_BUDGET, NATIVE_TURN_REMINDER } from "../src/prompts/system.ts";
 import { formatForLLM } from "../src/context/repomix-context.ts";
 import { buildReplResultText } from "../src/tool/repl-tool.ts";
+import { createTodoFallback } from "../src/bridge/fallback-todo.ts";
 import {
   bashCommandFromInput,
   capToolResultText,
@@ -70,6 +71,27 @@ async function main() {
     "chunked rejects prompts leaving under 1,000 chars",
     tiny.stdout.includes("Error: prompt leaves under 1,000 chars per chunk"),
     tiny.stdout.trim(),
+  );
+
+  // ── blocked builtins explain themselves ──
+  // They used to be bound to None, so reaching for eval() gave a bare "'NoneType' object is not
+  // callable" — indistinguishable from a corrupted namespace. An audit burned six execs on that
+  // and filed a phantom bug. The message is the fix, not a line of prompt budget.
+  for (const name of ["eval", "exec", "globals", "locals", "compile", "input"]) {
+    const blocked = await sb.exec(`${name}("1+1")`);
+    check(
+      `${name}() is blocked with an explanation, not a NoneType error`,
+      blocked.raised
+        && blocked.stderr.includes("disabled in the RLM sandbox by design")
+        && !blocked.stderr.includes("NoneType"),
+      blocked.stderr.trim().split("\n").at(-1)?.slice(0, 100) ?? "",
+    );
+  }
+  const stillCallable = await sb.exec("print(callable(llm_query), callable(search), len([1,2]))");
+  check(
+    "blocking does not disturb the rest of the namespace",
+    stillCallable.stdout.includes("True True 2"),
+    stillCallable.stdout.trim(),
   );
   await sb.dispose();
 
@@ -142,6 +164,18 @@ async function main() {
   // A delegation subcall present → no nudge even with big stdout.
   const delegated = buildReplResultText(bigStdout, undefined, [llmSubcall]);
   check("delegation subcall suppresses the nudge", !delegated.text.includes("sub-LLM calls"));
+
+  // ── todo fallback: a bad action must not masquerade as a missing task ──
+  // An unknown action used to fall through to the id lookup and report "task #? not found",
+  // which sends the caller hunting for a task instead of fixing the action name.
+  const todo = createTodoFallback();
+  const bogus = await todo("bogus_action", {});
+  check("unknown todo action names the action", bogus.includes("unknown todo action 'bogus_action'"), bogus);
+  check("unknown todo action does not report a missing task", !bogus.includes("not found"), bogus);
+  const created = await todo("create", { subject: "real task" });
+  check("todo create still works", created.startsWith("Created"), created);
+  const missing = await todo("get", { id: 999 });
+  check("a genuinely missing task still reports not found", missing.includes("not found"), missing);
 
   console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
   process.exit(failureCount() === 0 ? 0 : 1);

@@ -16,6 +16,7 @@ import { SubcallStore, type SubcallTotals } from "./subcall-store.ts";
 import type { RlmSubcall } from "./rlm-details.ts";
 import { LimitGuard, type Limits } from "../core/limits.ts";
 import type { Invocation } from "../bridge/subcall-handlers.ts";
+import { trace, traceEnabled } from "../util/trace.ts";
 
 /** What a drain hands to the turn that is reporting it. */
 export interface BackgroundDrain {
@@ -25,8 +26,8 @@ export interface BackgroundDrain {
 
 export class BackgroundTasks {
   /** "bg" prefix so these IDs can never collide with a turn emitter's `s1, s2, …`. */
-  private readonly emitter = new RlmEmitter("bg");
-  private readonly store = new SubcallStore(this.emitter);
+  private readonly _emitter = new RlmEmitter("bg");
+  private readonly store = new SubcallStore(this._emitter);
   private readonly limits: LimitGuard;
   private active = 0;
 
@@ -34,10 +35,15 @@ export class BackgroundTasks {
     this.limits = new LimitGuard(limits);
   }
 
+  /** Read-only access for the progressive tracer (scope "background"). */
+  get emitter(): RlmEmitter {
+    return this._emitter;
+  }
+
   /** The Invocation detached sub-calls resolve to. Stable for the session. */
   get invocation(): Invocation {
     return {
-      emitter: this.emitter,
+      emitter: this._emitter,
       parentId: undefined,
       depth: 0,
       limits: this.limits,
@@ -49,13 +55,26 @@ export class BackgroundTasks {
     return this.active;
   }
 
+  /** Live snapshot of detached sub-calls, settled or not — progressive rendering only. */
+  liveSubcalls(): readonly RlmSubcall[] {
+    return this.store.getSubcalls();
+  }
+
+  /** Live totals for that same snapshot. Accounting still flows through `drain()`. */
+  liveTotals(): SubcallTotals {
+    return this.store.getTotals();
+  }
+
   /** Count `run` as in-flight detached work for its duration. */
   async track<T>(run: () => Promise<T>): Promise<T> {
     this.active += 1;
+    const startedAt = Date.now();
+    if (traceEnabled) trace("bg.start", { pending: this.active });
     try {
       return await run();
     } finally {
       this.active -= 1;
+      if (traceEnabled) trace("bg.settle", { pending: this.active, durationMs: Date.now() - startedAt });
     }
   }
 
@@ -71,6 +90,6 @@ export class BackgroundTasks {
 
   dispose(): void {
     this.store.dispose();
-    this.emitter.shutdown();
+    this._emitter.shutdown();
   }
 }

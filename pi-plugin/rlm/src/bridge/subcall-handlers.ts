@@ -303,7 +303,9 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
     llmQueryBatched: (prompts, model, depth, opts) => emitting(
       opts, depth,
       { kind: "batch", label: `llm_query ×${prompts.length}`, model, args: `prompt: ${previewText(prompts[0] ?? "")}` },
-      (inv, track) => deps.gates.leaf.map(prompts, (p) => complete1(inv, p, model, track)),
+      // NO outer gate. `complete1` already takes the single `leaf` slot each prompt needs;
+      // an outer `gates.leaf.map` here deadlocked every batch of >= limit prompts.
+      (inv, track) => Promise.all(prompts.map((p) => complete1(inv, p, model, track))),
       (out) => {
         const { failed, error } = summarizeBatch(out);
         const first = previewText(out[0] ?? "");

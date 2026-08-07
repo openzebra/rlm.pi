@@ -157,6 +157,22 @@ async function main(): Promise<void> {
     check("map_files splits a file that exceeds the per-call budget",
       parsePrinted(r.stdout) === true, `${r.stdout.trim()} sizes=${JSON.stringify(batchSizes)}`);
 
+    // ── spawn(map_files): detached, awaited in a LATER exec, same result shape ────────────
+    // map_files is the documented default for bulk reading, so it has to be spawnable — the
+    // glossary promised it while the allowlist refused it.
+    batchCalls = 0; batchSizes = [];
+    r = await sandbox.exec(
+      't = spawn(map_files, ["src/config/settings.ts", "docs/README.md"], "Summarize")\n'
+      + 'print(json.dumps([type(t).__name__, t.done]))',
+    );
+    check("spawn(map_files) returns a Task without awaiting it",
+      JSON.stringify(parsePrinted(r.stdout)) === '["Task",false]', r.stdout.trim());
+    check("spawned map_files posts its batch immediately", batchCalls === 1, `calls=${batchCalls}`);
+
+    r = await sandbox.exec('print(json.dumps(sorted(rlm_await(t).keys())))');
+    check("rlm_await(map_files task) yields the same {path: answer} dict",
+      JSON.stringify(parsePrinted(r.stdout)) === '["docs/README.md","src/config/settings.ts"]', r.stdout.trim());
+
     // ── llm_map_reduce: map batch then a single reduce ───────────────────────────────────
     batchCalls = 0; batchSizes = []; singleCalls = 0;
     r = await sandbox.exec('print(json.dumps(llm_map_reduce(context[:3], "Summarize", "Combine")))');

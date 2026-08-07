@@ -11,6 +11,10 @@
 /**
  * Counting semaphore: at most `limit` holders at once, FIFO.
  *
+ * NOT re-entrant. A leaf completion takes exactly ONE slot, in `complete1`; wrapping a batch in
+ * a second acquisition of this same gate deadlocks as soon as the batch reaches `limit`
+ * prompts — the outer holders fill the gate and each waits for an inner slot nothing can free.
+ *
  * FIFO means a large fan-out is not starved, but also that it is not preempted: a
  * 500-prompt `llm_query_chunked` holds the queue until it drains, so an interactive
  * `llm_query` issued behind it waits for the whole thing. Acceptable while sub-calls are
@@ -24,7 +28,9 @@ export class Semaphore {
 
   /** Hold a slot for the duration of `fn`. */
   async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.limit) {
+    // `while`, not `if`: a caller arriving between the decrement below and a woken waiter's
+    // resumption would otherwise slip past the limit.
+    while (this.active >= this.limit) {
       await new Promise<void>((resolve) => { this.waiters.push(resolve); });
     }
     this.active += 1;
@@ -34,11 +40,6 @@ export class Semaphore {
       this.active -= 1;
       this.waiters.shift()?.();
     }
-  }
-
-  /** Order-preserving parallel map bounded by this semaphore. */
-  map<T, R>(items: readonly T[], fn: (item: T, idx: number) => Promise<R>): Promise<R[]> {
-    return Promise.all(items.map((item, idx) => this.run(() => fn(item, idx))));
   }
 
   /** In-flight holders. Exposed for tests asserting the bound. */
