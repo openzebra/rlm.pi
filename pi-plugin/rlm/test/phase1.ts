@@ -11,6 +11,7 @@ import { formatReplOutputs, turnHadError } from "../src/core/answer.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { buildMetadataLine, buildRlmSystemPrompt } from "../src/prompts/system.ts";
 import { findReplBlocks, truncateOutput } from "../src/text/parsing.ts";
+import { contextLength } from "../src/text/tokens.ts";
 
 
 async function main() {
@@ -37,6 +38,26 @@ async function main() {
     sp.includes("grep_context(") && sp.includes("outline(") && sp.includes("BM25"));
   const childPrompt = buildRlmSystemPrompt({ contextType: "str", contextChars: 5000 }, { orchestrator: false });
   check("F1: string context prompt does not describe list[dict]", !childPrompt.includes("list[dict]") && childPrompt.includes("plain string"), childPrompt.slice(0, 120));
+  const subRlmPrompt = buildRlmSystemPrompt(
+    { contextType: "list[3]", contextChars: 5000 },
+    { orchestrator: false, child: true },
+  );
+  check("child prompt orients the sub-RLM in its parent's world",
+    subRlmPrompt.includes("You are a sub-RLM") && subRlmPrompt.includes("lib/<id>/"));
+  check("root prompt has no sub-RLM orientation",
+    !buildRlmSystemPrompt({ contextType: "list[3]", contextChars: 5000 }, {}).includes("sub-RLM"));
+
+  // contextLength must read each entry's content: String(entry) is "[object Object]" (15 chars),
+  // which under-reported a packed repository by ~200x in the number the model sizes batches by.
+  check("contextLength: string", contextLength("z".repeat(3000)) === 3000);
+  check("contextLength: file bundle sums content lengths",
+    contextLength([
+      { path: "a.ts", content: "x".repeat(1000), tokens: 250 },
+      { path: "b.ts", content: "y".repeat(2000), tokens: 500 },
+    ]) === 3000);
+  check("contextLength: degenerate entries do not throw",
+    contextLength([null, 42, "abc"]) > 0);
+
   const metadata = buildMetadataLine({ contextType: "json", contextChars: 5000 });
   check(
     "metadata describes JSON array context",

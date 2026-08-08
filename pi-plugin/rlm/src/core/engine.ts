@@ -16,7 +16,7 @@ import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { buildInteractiveHandlers } from "../bridge/interactive.ts";
 import { buildLibraryHandler } from "../bridge/library.ts";
-import { mergeLibraryIntoContext } from "../context/library-context.ts";
+import { libraryPrefixesIn, mergeLibraryIntoContext } from "../context/library-context.ts";
 import {
   createSubcallHandlers,
   type Invocation,
@@ -28,6 +28,7 @@ import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
 import { phaseGuidance } from "../prompts/phases.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
 import { PythonSandbox } from "../sandbox/sandbox.ts";
+import { pinContext, type PinnedContext } from "../sandbox/context-file.ts";
 import {
   phaseGatePrompt,
   type Phase,
@@ -209,13 +210,18 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let detachedIdle: (() => void) | undefined;
     const subcalls = createSubcallHandlers({
       resolve: () => invocation,
-      gates: deps.gates ?? createSubcallGates(deps.config.maxConcurrentSubcalls),
+      gates: deps.gates
+        ?? createSubcallGates(deps.config.maxConcurrentSubcalls, deps.config.maxConcurrentChildren),
       registry: deps.registry,
       getWorkerModel: () => deps.workerModel,
       getModel: () => model,
       getConfig: () => deps.config,
       signal: deps.signal,
       runChild: run,
+      // Read lazily: a library loaded on turn 3 must reach a child spawned on turn 4. Safe
+      // despite being wired before liveContext is assigned — children can only spawn from an
+      // interrupt during runTurn, which is strictly after loadContext below.
+      getChildContext: () => liveContext,
       trackDetached: async (task) => {
         detachedInFlight += 1;
         try {
@@ -236,6 +242,25 @@ export function createEngine(deps: EngineDeps): RunRlm {
       detachedIdle = undefined;
     };
     let sandbox: PythonSandbox | undefined;
+    /**
+     * This run's live context: the repo pack plus every library loaded so far. Children inherit
+     * it, so it must grow when load_library appends (see the library handler's onLoaded below).
+     *
+     * Run-scoped on purpose — recursion means N of these are live at once, and a module-level
+     * "current context" would hand a depth-3 child its cousin's world.
+     */
+    let liveContext: unknown = null;
+    /**
+     * This run's hold on the serialized context file. Kept for the whole run so every child that
+     * inherits the same payload reuses one file instead of re-serializing the repository.
+     */
+    let contextPin: PinnedContext | undefined;
+    /** Re-pin after the payload changes identity (mergeLibraryIntoContext returns a new array). */
+    const repinLiveContext = async (): Promise<void> => {
+      const previous = contextPin;
+      contextPin = await pinContext(liveContext);
+      await previous?.release();
+    };
     let best = "";
     let lastAnswer = "";
     let compactions = 0;
@@ -310,6 +335,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         pipeline: deps.config.pipeline && input.depth === 0,
         maxPromptChars: deps.config.maxPromptChars,
         libraryLoader: deps.config.libraryLoader,
+        child: input.depth > 0,
       });
 
       pipeline = new PipelineController({
@@ -348,26 +374,23 @@ export function createEngine(deps: EngineDeps): RunRlm {
         ? await readLibrarySidecars(deps.runState.cwd, deps.runState.dir, runId)
         : [];
       // Seed host-side idempotency from restored sidecars so re-load is a no-op.
-      const restoredPrefixes: string[] = [];
-      for (const slot of restoredSlots) {
-        if (!Array.isArray(slot.payload) || slot.payload.length === 0) continue;
-        const first = slot.payload[0];
-        if (first === null || typeof first !== "object") continue;
-        const path = typeof (first as { path?: unknown }).path === "string"
-          ? (first as { path: string }).path
-          : "";
-        const m = path.match(/^(lib\/[^/]+\/)/);
-        if (m?.[1] !== undefined) restoredPrefixes.push(m[1]);
-      }
+      const restoredPrefixes: readonly string[] =
+        restoredSlots.flatMap((slot) => libraryPrefixesIn(slot.payload));
       const libraryHandlers = deps.config.libraryLoader
         ? buildLibraryHandler({
             cwd: runCwd,
             emitter,
             parentId: selfReportId,
             signal: deps.signal,
+            getContext: () => liveContext,
             startIndex: 1 + restoredSlots.reduce((m, s) => Math.max(m, s.index), 0),
             loadedPrefixes: restoredPrefixes,
             onLoaded: async (index, payload) => {
+              // FIRST and unconditional: the accumulator is what children inherit, and it must
+              // not depend on whether run-state persistence happens to be enabled. This is also
+              // what makes inheritance transitive — grandchildren see the library too.
+              liveContext = mergeLibraryIntoContext(liveContext, payload);
+              await repinLiveContext();
               if (!persistOn || !runId || !deps.runState) return;
               await writeContextSidecar(
                 deps.runState.cwd, deps.runState.dir, runId,
@@ -419,14 +442,15 @@ export function createEngine(deps: EngineDeps): RunRlm {
 
       // Context: serialize ContextBundle to sandbox-ready JSON array, pass raw strings through.
       // Resume: merge library sidecars into the single `context` list (no context_N slots).
-      let contextValue: unknown =
+      liveContext =
         typeof input.context === "object" && input.context !== null && "files" in input.context
           ? serializeForSandbox(input.context as ContextBundle)
           : input.context;
       for (const slot of restoredSlots) {
-        contextValue = mergeLibraryIntoContext(contextValue, slot.payload);
+        liveContext = mergeLibraryIntoContext(liveContext, slot.payload);
       }
-      await sandbox.loadContext(contextValue);
+      contextPin = await pinContext(liveContext);
+      await sandbox.loadContextPinned(contextPin);
       if (input.resume?.snapshotTurn !== undefined && deps.runState && runId && sessionNonce) // R-C1: restore only for same-session (sessionNonce present)
         await sandbox.restore(snapshotPath(deps.runState.cwd, deps.runState.dir, runId, input.resume.snapshotTurn), sessionNonce);
       for (let i = startTurn; i < deps.config.maxIterations; i++) {
@@ -607,7 +631,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
         if (nodeStatus !== "error" && lastAnswer) emitter.emitAnswer(previewText(lastAnswer));
         emitter.emitStatus(nodeStatus === "error" ? "error" : "done");
       }
+      // Settle detached work FIRST: a child still running may be about to pin this same payload.
       await settleDetached();
+      await contextPin?.release();
       await sandbox?.dispose();
     }
   };

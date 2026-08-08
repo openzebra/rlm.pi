@@ -123,5 +123,41 @@ const single = await Promise.race([
 ]);
 check("single llm_query still completes", single === "ok", single.slice(0, 60));
 
+// ── children are bounded separately from leaves ──
+// Each child engine is a Python subprocess holding its own copy of the context it inherited,
+// so a shared limit with leaf HTTP calls over-admits them badly.
+const CHILD_LIMIT = 2;
+const childGates = createSubcallGates(GATE_LIMIT, CHILD_LIMIT);
+let childPeak = 0;
+let childActive = 0;
+const childHandlers = createSubcallHandlers({
+  resolve: (_opts, depth) => ({ emitter, parentId: undefined, depth, limits: limitsFromRemaining() }),
+  gates: childGates,
+  registry: ModelRegistry.create(AuthStorage.create()),
+  getWorkerModel: () => fakeModel,
+  getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 4 }),
+  runChild: async () => {
+    childActive += 1;
+    if (childActive > childPeak) childPeak = childActive;
+    await sleep(20);
+    childActive -= 1;
+    return { answer: "child", iterations: 1, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 0 };
+  },
+  degrade: async () => "degraded",
+});
+
+const childPrompts = Array.from({ length: 8 }, (_, i) => `child ${i}`);
+const childOut = await Promise.race([
+  childHandlers.rlmQueryBatched(childPrompts, null, 0, ATTACHED),
+  sleep(DEADLOCK_MS).then((): null => null),
+]);
+check("child batch completes through the per-depth gate", childOut !== null);
+check(
+  `child gate bounds concurrency at ${CHILD_LIMIT}, below the leaf limit of ${GATE_LIMIT}`,
+  childPeak > 0 && childPeak <= CHILD_LIMIT,
+  `peak=${childPeak}`,
+);
+check("leaf gate keeps its own, larger limit", peak > CHILD_LIMIT, `leaf peak=${peak}`);
+
 server.close();
 process.exit(failureCount() > 0 ? 1 : 0);

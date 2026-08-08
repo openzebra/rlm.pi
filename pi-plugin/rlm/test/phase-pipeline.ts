@@ -8,46 +8,13 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Api, Model, Usage } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { check, failureCount } from "./helpers.ts";
+import { check, failureCount, MOCK_MODEL, MOCK_REGISTRY, repl, ZERO_USAGE } from "./helpers.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { createEngine } from "../src/core/engine.ts";
 import type { CompleteFn } from "../src/core/iteration.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { ARTIFACTS_DIR } from "../src/core/artifacts.ts";
 import type { ChatMsg } from "../src/bridge/model.ts";
-
-const ZERO_USAGE: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-const MOCK_MODEL = {
-  id: "mock",
-  provider: "test",
-  api: "openai-completions" as const,
-  name: "mock",
-  baseUrl: "http://localhost",
-  reasoning: false,
-  input: ["text"] as const,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 4096,
-} as unknown as Model<Api>;
-
-const MOCK_REGISTRY = {
-  getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "x", headers: {} }),
-  find: () => undefined,
-} as unknown as ModelRegistry;
-
-function repl(code: string): string {
-  return "```repl\n" + code + "\n```";
-}
 
 function historyBlob(messages: readonly ChatMsg[]): string {
   return messages.map((m) => m.content).join("\n");

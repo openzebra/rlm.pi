@@ -3,13 +3,18 @@
  * Run: bun run pi-plugin/rlm/test/phase-library.ts
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { check, failureCount } from "./helpers.ts";
 import {
+  contextEntryPath,
+  filterContextByPaths,
+  isContextFile,
   libraryNamespace,
   libraryPathPrefix,
+  libraryPrefixesIn,
   librarySourceId,
   MAX_LIBRARY_FILE_BYTES,
   mergeLibraryIntoContext,
@@ -18,6 +23,7 @@ import {
   payloadPrefix,
   resolveLibrarySource,
 } from "../src/context/library-context.ts";
+import { pinContext, pinnedCount } from "../src/sandbox/context-file.ts";
 import { buildLibraryHandler } from "../src/bridge/library.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
@@ -344,6 +350,127 @@ async function main() {
       "t",
     );
     check("withChars: sum of content lengths", wc.chars === 7, String(wc.chars));
+
+    // ── Phase 1a primitives ──
+    check("isContextFile: accepts a file entry",
+      isContextFile({ path: "a.ts", content: "x", tokens: 1 }));
+    check("isContextFile: rejects non-file shapes",
+      !isContextFile(null) && !isContextFile("a.ts") && !isContextFile({ path: 1, content: "x" }));
+    check("contextEntryPath: reads a path, undefined otherwise",
+      contextEntryPath({ path: "a.ts", content: "x" }) === "a.ts"
+        && contextEntryPath(42) === undefined);
+
+    check("libraryPrefixesIn: empty for a non-array", libraryPrefixesIn("plain text").length === 0);
+    const twoLibs = [
+      { path: "repo.ts", content: "r", tokens: 1 },
+      { path: "lib/one-11111111/a.ts", content: "x", tokens: 1 },
+      { path: "lib/two-22222222/b.ts", content: "y", tokens: 1 },
+      { path: "lib/one-11111111/c.ts", content: "z", tokens: 1 },
+      { path: "lib/unknown/legacy.ts", content: "w", tokens: 1 },
+    ];
+    const prefixes = libraryPrefixesIn(twoLibs);
+    check("libraryPrefixesIn: distinct prefixes, lib/unknown/ skipped",
+      prefixes.length === 2 && prefixes.includes("lib/one-11111111/")
+        && prefixes.includes("lib/two-22222222/"),
+      prefixes.join(","));
+
+    const filteredOne = filterContextByPaths(twoLibs, ["lib/one-11111111/"]);
+    check("filterContextByPaths: prefix selects its subtree",
+      filteredOne.files.length === 2 && filteredOne.unmatched.length === 0,
+      `${filteredOne.files.length} file(s)`);
+    const filteredMixed = filterContextByPaths(twoLibs, ["lib/two-22222222/", "nope/"]);
+    check("filterContextByPaths: reports prefixes that matched nothing",
+      filteredMixed.files.length === 1 && filteredMixed.unmatched.length === 1
+        && filteredMixed.unmatched[0] === "nope/",
+      filteredMixed.unmatched.join(","));
+    check("filterContextByPaths: non-array yields no files, all unmatched",
+      filterContextByPaths("text", ["a/"]).files.length === 0
+        && filterContextByPaths("text", ["a/"]).unmatched.length === 1);
+    check("filterContextByPaths: no prefixes selects nothing",
+      filterContextByPaths(twoLibs, []).files.length === 0);
+
+    // ── Accumulator: what a child inherits must grow when a library loads ──
+    let accumulated: unknown = [{ path: "repo.ts", content: "r", tokens: 1 }];
+    const accBundle = buildLibraryHandler({
+      cwd: tmp,
+      startIndex: 1,
+      getContext: () => accumulated,
+      onLoaded: (_i, payload) => { accumulated = mergeLibraryIntoContext(accumulated, payload); },
+    });
+    await accBundle.handlers.loadLibrary(pathA, 0);
+    await accBundle.handlers.loadLibrary(pathB, 0);
+    const accPrefixes = libraryPrefixesIn(accumulated);
+    check("accumulator: both libraries present after two loads", accPrefixes.length === 2,
+      accPrefixes.join(","));
+    const lenAfterTwo = Array.isArray(accumulated) ? accumulated.length : -1;
+    await accBundle.handlers.loadLibrary(pathA, 0);
+    check("accumulator: re-loading a source does not duplicate it",
+      Array.isArray(accumulated) && accumulated.length === lenAfterTwo,
+      `len=${Array.isArray(accumulated) ? accumulated.length : "n/a"}`);
+
+    // reset(keep) re-derives the cache from the payload that will be replayed, so a recreated
+    // sandbox does not re-clone what its replayed context already holds.
+    let repacks = 0;
+    const resetBundle = buildLibraryHandler({
+      cwd: tmp,
+      startIndex: 1,
+      onLoaded: () => { repacks++; },
+    });
+    await resetBundle.handlers.loadLibrary(pathA, 0);
+    resetBundle.reset(libraryPrefixesIn(accumulated));
+    check("reset(keep): re-seeds the prefix cache", resetBundle.loadedPrefixes().size === 2,
+      String(resetBundle.loadedPrefixes().size));
+    const afterReset = await resetBundle.handlers.loadLibrary(pathA, 0);
+    check("reset(keep): a kept source is alreadyLoaded without re-packing",
+      afterReset.alreadyLoaded === true && repacks === 1, `repacks=${repacks}`);
+    resetBundle.reset();
+    check("reset(): no-arg still clears, as before", resetBundle.loadedPrefixes().size === 0);
+
+    // ── Pre-flight refusals: never commit an index/prefix for an append the worker will reject ──
+    let refusedLoads = 0;
+    const refuseBundle = buildLibraryHandler({
+      cwd: tmp,
+      startIndex: 1,
+      getContext: () => "plain text",   // what a pre-#4 child had as its whole world
+      onLoaded: () => { refusedLoads++; },
+    });
+    let refusal = "";
+    try {
+      await refuseBundle.handlers.loadLibrary(pathA, 0);
+    } catch (e: unknown) {
+      refusal = e instanceof Error ? e.message : String(e);
+    }
+    check("pre-flight: non-list context is refused with the worker's exact wording",
+      refusal === "load_library requires list context (file bundle); got str", refusal);
+    check("pre-flight: nothing committed on refusal",
+      refusedLoads === 0 && refuseBundle.loadedPrefixes().size === 0);
+
+    const emptyDir = join(tmp, "empty-lib");
+    await mkdir(emptyDir, { recursive: true });
+    let emptyRefusal = "";
+    const emptyBundle = buildLibraryHandler({ cwd: tmp, startIndex: 1, getContext: () => [] });
+    try {
+      await emptyBundle.handlers.loadLibrary(emptyDir, 0);
+    } catch (e: unknown) {
+      emptyRefusal = e instanceof Error ? e.message : String(e);
+    }
+    check("pre-flight: a source that packs to nothing is refused before committing",
+      emptyRefusal.includes("produced no files") || emptyRefusal.includes("pack failed"),
+      emptyRefusal);
+    check("pre-flight: empty source consumed no prefix", emptyBundle.loadedPrefixes().size === 0);
+
+    // ── M2: concurrent pins share one write, and the file is unlinked exactly once ──
+    const payload = [{ path: "p.ts", content: "shared", tokens: 1 }];
+    const [pinA, pinB] = await Promise.all([pinContext(payload), pinContext(payload)]);
+    check("pin: concurrent holders share one file", pinA.path === pinB.path, pinA.path);
+    check("pin: content is the serialized payload",
+      JSON.parse(await readFile(pinA.path, "utf-8"))[0].content === "shared");
+    await pinA.release();
+    check("pin: file survives while a holder remains", existsSync(pinB.path));
+    await pinB.release();
+    check("pin: unlinked once the last holder releases", !existsSync(pinB.path));
+    await pinB.release(); // idempotent — must not throw or double-unlink
+    check("pin: release is idempotent", pinnedCount() === 0, String(pinnedCount()));
 
     // Live optional: real https clone
     if (process.env.RLM_TEST_LIVE === "1") {

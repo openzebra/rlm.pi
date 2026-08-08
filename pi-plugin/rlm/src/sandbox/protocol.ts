@@ -100,12 +100,19 @@ interface PromptInterrupt extends InterruptBase {
   readonly type: "llm_query" | "rlm_query";
   readonly prompt?: string;
   readonly model?: string | null;
+  /**
+   * `rlm_query` only — path prefixes narrowing the child's inherited context. Never sent for
+   * `llm_query`, whose frame stays byte-identical to before.
+   */
+  readonly paths?: readonly string[];
 }
 
 interface BatchedPromptInterrupt extends InterruptBase {
   readonly type: "llm_query_batched" | "rlm_query_batched";
   readonly prompts?: readonly string[];
   readonly model?: string | null;
+  /** `rlm_query_batched` only — one prefix set shared by every prompt in the batch. */
+  readonly paths?: readonly string[];
 }
 
 interface AdvancePhaseInterrupt extends InterruptBase {

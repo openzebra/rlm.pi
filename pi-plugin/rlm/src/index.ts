@@ -42,7 +42,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   });
   // One admission gate for the whole session: spawn() lets the sandbox put many requests on
   // the wire at once, so nothing smaller than session scope actually bounds fan-out.
-  const gates = createSubcallGates(config.maxConcurrentSubcalls);
+  const gates = createSubcallGates(config.maxConcurrentSubcalls, config.maxConcurrentChildren);
   const background = new BackgroundTasks({
     maxBudgetUsd: config.maxBudgetUsd,
     maxTimeoutMs: config.maxTimeoutMs,

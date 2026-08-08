@@ -20,6 +20,7 @@ import { displayModelRef, modelRef, resolveModelId } from "../config/settings.ts
 import { type ChatMsg, modelComplete } from "./model.ts";
 import { previewText } from "../text/preview.ts";
 import { checkResourceLimits } from "../core/resource-limits.ts";
+import { filterContextByPaths } from "../context/library-context.ts";
 import type { RlmInput, RlmResult, Sampling } from "../core/types.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
 import type { SubcallOpts, SubLlmHandlers } from "../sandbox/sandbox.ts";
@@ -107,6 +108,15 @@ export interface SubcallHandlerDeps {
    * one emitter is what lets the session registry drain the subtree intact.
    */
   readonly runChild?: (input: RlmInput, inv: Invocation) => Promise<RlmResult>;
+  /**
+   * The parent's live context, read at spawn time and never captured: a library loaded on turn 3
+   * must reach a child spawned on turn 4. `undefined`/`null` ⇒ no inheritance, and the child falls
+   * back to prompt-as-context.
+   *
+   * This is the ONLY inheritance seam. Adding a second construction path for a child's world
+   * would re-open issue #4 on whichever path forgets to grow.
+   */
+  readonly getChildContext?: () => unknown;
   readonly getModel?: () => Model<Api>;
   /**
    * What rlm_query degrades to at the depth cap. A child RLM there would just be an LM, so
@@ -140,6 +150,14 @@ const UNWIRED = formatError("RLM bridge not wired for this invocation");
 function emptyResult(answer: string): RlmResult {
   return { answer, iterations: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 0 };
 }
+
+/** What a child RLM will see, plus any `paths=` prefix that selected nothing. */
+interface ChildContext {
+  readonly context: unknown;
+  readonly unmatched: readonly string[];
+}
+
+const NO_UNMATCHED: readonly string[] = Object.freeze([]);
 
 export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers {
   /** DRY #3 — the one display-model resolution. */
@@ -237,10 +255,37 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
   }
 
   /**
+   * Resolve the child's world: the parent's live context, optionally narrowed by path prefixes.
+   *
+   * Falls back to prompt-as-context when nothing is wired, and to the FULL context when `paths`
+   * matched nothing — a silently blind child is exactly the bug this fixes, so a bad prefix
+   * degrades loudly (see the note childRun folds into rootPrompt) rather than quietly.
+   */
+  function childContextFor(prompt: string, paths: readonly string[] | undefined): ChildContext {
+    const inherited = deps.getChildContext?.();
+    if (inherited === undefined || inherited === null) {
+      return Object.freeze({ context: prompt, unmatched: NO_UNMATCHED });
+    }
+    if (paths === undefined || paths.length === 0) {
+      return Object.freeze({ context: inherited, unmatched: NO_UNMATCHED });
+    }
+    const filtered = filterContextByPaths(inherited, paths);
+    return Object.freeze({
+      context: filtered.files.length > 0 ? filtered.files : inherited,
+      unmatched: filtered.unmatched,
+    });
+  }
+
+  /**
    * One child RLM run: depth cap → resource guard → spawn engine → debit parent.
    * Emits its own subcall node, so callers must not wrap it in another.
    */
-  async function childRun(inv: Invocation, prompt: string, model: string | null): Promise<RlmResult> {
+  async function childRun(
+    inv: Invocation,
+    prompt: string,
+    model: string | null,
+    paths: readonly string[] | undefined,
+  ): Promise<RlmResult> {
     const childDepth = inv.depth + 1;
     const run = deps.runChild;
     const maxDepth = deps.getConfig().maxDepth;
@@ -268,10 +313,16 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
       kind: "rlm", parentId: inv.parentId, label: "rlm_query",
       model: modelLabel, detail: prompt.slice(0, 60), depth: childDepth,
     });
+    // The child's context is the parent's world, not the prompt text. The prompt becomes the
+    // child's rootPrompt, exactly as a depth-0 run takes the user's question.
+    const child = childContextFor(prompt, paths);
+    const rootPrompt = child.unmatched.length === 0
+      ? prompt
+      : `${prompt}\n\n[rlm] paths=${child.unmatched.join(", ")} matched no files; you received the full context.`;
     try {
       const res = await deps.gates.rlm.at(childDepth).run(() => run({
-        rootPrompt: "",
-        context: prompt,
+        rootPrompt,
+        context: child.context,
         depth: childDepth,
         parentNodeId: subId,
         modelOverride: model ?? undefined,
@@ -320,7 +371,7 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
     async rlmQuery(prompt, model, depth, opts) {
       const inv = deps.resolve(opts, depth);
       if (inv === null) return UNWIRED;
-      return detachable(opts, async () => (await childRun(inv, prompt, model)).answer);
+      return detachable(opts, async () => (await childRun(inv, prompt, model, opts.paths)).answer);
     },
 
     async rlmQueryBatched(prompts, model, depth, opts) {
@@ -328,7 +379,7 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
       if (inv === null) return prompts.map(() => UNWIRED);
       // Bounded by the per-depth rlm gate inside childRun, not by an outer pool.
       return detachable(opts, async () => {
-        const results = await Promise.all(prompts.map((p) => childRun(inv, p, model)));
+        const results = await Promise.all(prompts.map((p) => childRun(inv, p, model, opts.paths)));
         return results.map((r) => r.answer);
       });
     },

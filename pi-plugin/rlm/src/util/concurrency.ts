@@ -80,10 +80,14 @@ export interface SubcallGates {
 }
 
 /**
- * Worst case is `maxDepth × limit` concurrent child engines (each owning a Python
- * subprocess) plus `limit` leaf completions, so keep `limit` modest — see
- * DEFAULT_CONFIG.maxConcurrentSubcalls.
+ * Worst case is `(maxDepth - 1) × childLimit` concurrent child engines — the cap short-circuits
+ * at `childDepth >= maxDepth`, so engines exist at depths 1..maxDepth-1 — plus `leafLimit` leaf
+ * completions.
+ *
+ * Children get their own, smaller bound because they are far heavier than leaves: each owns a
+ * Python subprocess AND its own copy of the context it inherited from its parent, where a leaf
+ * is one HTTP request. See DEFAULT_CONFIG.maxConcurrentChildren.
  */
-export function createSubcallGates(limit: number): SubcallGates {
-  return Object.freeze({ leaf: new Semaphore(limit), rlm: new DepthGates(limit) });
+export function createSubcallGates(leafLimit: number, childLimit: number = leafLimit): SubcallGates {
+  return Object.freeze({ leaf: new Semaphore(leafLimit), rlm: new DepthGates(childLimit) });
 }

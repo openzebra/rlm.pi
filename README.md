@@ -49,7 +49,10 @@ sub-LLM calls, hence the name.
 
 - A **root orchestrator** model drives a **persistent Python REPL** turn-by-turn.
 - Long-context work is **delegated** to cheap worker models via `llm_query` / `llm_query_batched`.
-- Hard sub-problems **recurse** into child RLMs via `rlm_query` (depth-capped).
+- Hard sub-problems **recurse** into child RLMs via `rlm_query` (depth-capped). A child inherits
+  its parent's `context` — the repository plus every library loaded with `load_library()` — so it
+  runs the same retrieval primitives over the same paths. Inheritance costs no extra tokens: the
+  content lives in the sandbox, and only a size line reaches the model.
 - Everything runs **in-process** — the only external process is one local `python3` worker.
 
 > This is a Pi-plugin reimplementation of the RLM method (see the [RLM paper](https://arxiv.org/abs/2512.24601)).
@@ -118,8 +121,8 @@ These functions are injected into the model's Python namespace inside the REPL:
 | `context` | `list[dict]` | Repository packed as `[{"path","content","tokens"}, ...]` — the full codebase |
 | `llm_query` | `(prompt, model=None) -> str` | One-shot sub-LLM call (worker model) |
 | `llm_query_batched` | `(prompts, model=None) -> list[str]` | Concurrent sub-LLM calls (pool-bounded) |
-| `rlm_query` | `(prompt, model=None) -> str` | Recursive child RLM with its own sandbox (depth-capped) |
-| `rlm_query_batched` | `(prompts, model=None) -> list[str]` | Concurrent recursive child RLMs |
+| `rlm_query` | `(prompt, model=None, paths=None) -> str` | Recursive child RLM with its own sandbox (depth-capped). Inherits your `context`; `paths` narrows it by prefix |
+| `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | Concurrent recursive child RLMs, sharing one `paths` slice |
 | `todo` | `(action, **kwargs) -> str` | Task list: `create`/`update`/`list`/`get`/`delete`/`clear` |
 | `ask_user_question` | `(questions) -> list[dict]` | Ask the user structured questions (depth 0 only) |
 | `stage_edit` | `(path, old_text, new_text) -> str` | Stage a file edit; relayed to the host's native edit flow |

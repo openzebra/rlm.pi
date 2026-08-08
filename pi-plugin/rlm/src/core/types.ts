@@ -34,6 +34,9 @@ export interface RlmConfig {
   readonly requestTimeoutMs: number;
   /** Concurrency pool for *_batched sub-calls. */
   readonly maxConcurrentSubcalls: number;
+  /** Concurrent recursive child engines admitted per depth. Lower than maxConcurrentSubcalls:
+   *  each child is a Python subprocess holding its own copy of the inherited context. */
+  readonly maxConcurrentChildren: number;
   /** Reject sub-LLM prompts larger than this many chars. */
   readonly maxPromptChars: number;
   /** Max USD spend across the whole tree before the engine stops (undefined = no cap). */

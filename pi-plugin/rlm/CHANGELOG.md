@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A dying Python worker could take the whole pi session down.** `PythonSandbox` attached
+  listeners to the child process and to stdout/stderr, but never to `proc.stdin`. A write to a
+  dead worker's pipe fails *asynchronously* — node emits `'error'` on the stream, and an
+  EventEmitter `'error'` with no listener is an `uncaughtException`, which neither the
+  `try { send(…) } catch {}` in `dispose()` nor the `try { await dispose() } catch {}` in
+  `SandboxManager` can intercept. The deterministic route in: the request watchdog SIGKILLs the
+  worker, `SandboxManager` disposes it, and `dispose()` writes a `shutdown` frame to the corpse →
+  `write EPIPE` → process exit, losing session history and REPL state over a worker that was
+  meant to be disposable. Now every stdio pipe has an `'error'` listener that records to the
+  bounded stderr tail; `send()` drops frames for a dead worker instead of writing (and never
+  throws — `reply()` calls it from a catch block); `request()` rejects up front rather than
+  waiting for the watchdog; and `dispose()` only handshakes a live worker.
+- **Worker deaths now say what happened.** The `exit` handler reports `signal SIGKILL` vs
+  `code 1` alongside the stderr tail, so the surviving `REPL error: …` distinguishes a watchdog
+  kill, an abort, an OOM kill, and a Python-level crash.
+- `dispose()` waits for the worker's actual `exit` event (bounded) instead of sleeping a fixed
+  50 ms on every teardown.
+
+- **Child RLM context inheritance ([#4]).** A recursive `rlm_query` child received the prompt
+  string as its *entire* `context`, so it had no repository files and no libraries — ever.
+  `load_library()` made it visible: the parent would reference `lib/<id>/…` paths, the child
+  would try to resolve them as real directories, fail, and answer from general knowledge with no
+  error surfaced. Children now inherit the parent's live context (repo pack + every loaded
+  library) under the same paths, with `search` / `grep_context` / `outline` / `map_files`
+  working. The prompt becomes the child's question, as at depth 0. This costs **zero extra LLM
+  tokens** — only a size line reaches the model; the content lives in the sandbox.
+- **`contextLength` under-reported file bundles by ~200×.** It summed `String(entry).length`,
+  i.e. `"[object Object]"` (15 chars) per file, so a 3,000-char two-file context reported 30.
+  That number is what the model is told to size its batches against, and it is replayed into the
+  rebuilt system prompt on `/rlm-resume`.
+- **`load_library` could report `already_loaded` for a library that was never appended.** The
+  host committed the sidecar index and loaded-prefix on *pack* success, while the worker could
+  still refuse (non-list context, or a source that packs to zero files). Both refusals are now
+  pre-flighted host-side with the worker's exact wording, before anything is committed.
+- **Libraries were lost on sandbox death-recreate (native mode).** `SandboxManager.contextPayload`
+  was never updated after a `load_library`, so a recreate silently replayed a repo-only context.
+
+### Added
+
+- **`rlm_query(prompt, paths=['src/auth/', 'lib/x-9f3a/'])`** — narrow a child's inherited context
+  to path prefixes (prefix match, not globs). A prefix that matches nothing hands over the full
+  context and says so in the child's prompt, rather than blinding it.
+- **`maxConcurrentChildren`** (default 3) — child engines are now bounded separately from leaf
+  sub-calls (`maxConcurrentSubcalls`, default 6). Each child is a Python subprocess holding its
+  own copy of the inherited context, so the previous shared limit allowed up to 18 concurrent
+  repository-sized workers.
+- Context files are serialized once per payload version and shared by refcount across every
+  child that inherits it, in bounded chunks so a large repository never blocks the event loop.
+
+### Changed
+
+- **Cost profile of `rlm_query`.** A child that used to see a 2 KB prompt now sees the whole
+  repository and has `maxIterations` turns to spend on it, so a fan-out of N children is N real
+  repository analyses. Budget and timeout still descend as *remaining* amounts, so the tree
+  cannot exceed the root cap.
+
+[#4]: https://github.com/openzebra/rlm.pi/issues/4
+
 ## [0.2.1] - 2026-08-08
 
 ### Fixed
