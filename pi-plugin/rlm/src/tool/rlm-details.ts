@@ -40,7 +40,5 @@ export interface RlmDetails {
   readonly subcalls: readonly RlmSubcall[];
   readonly totals: { readonly costUsd: number; readonly tokens: number };
   readonly answer?: string;
-  /** Advisory diagnostics — surfaced to the user, never a failure. */
-  readonly warnings?: readonly string[];
 }
 

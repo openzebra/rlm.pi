@@ -6,10 +6,9 @@
 
 import { check, failureCount } from "./helpers.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
-import { NATIVE_PROMPT_STATIC, NATIVE_PROMPT_BUDGET, NATIVE_TURN_REMINDER } from "../src/prompts/system.ts";
+import { NATIVE_PROMPT_STATIC, NATIVE_PROMPT_BUDGET, NATIVE_TURN_REMINDER } from "../src/prompts/native.ts";
 import { formatForLLM } from "../src/context/repomix-context.ts";
-import { buildReplResultText } from "../src/tool/repl-tool.ts";
-import { createTodoFallback } from "../src/bridge/fallback-todo.ts";
+import { buildReplResultText } from "../src/tool/repl-result.ts";
 import {
   bashCommandFromInput,
   capToolResultText,
@@ -170,17 +169,25 @@ async function main() {
   const delegated = buildReplResultText(bigStdout, undefined, [llmSubcall]);
   check("delegation subcall suppresses the nudge", !delegated.text.includes("sub-LLM calls"));
 
-  // ── todo fallback: a bad action must not masquerade as a missing task ──
-  // An unknown action used to fall through to the id lookup and report "task #? not found",
-  // which sends the caller hunting for a task instead of fixing the action name.
-  const todo = createTodoFallback();
-  const bogus = await todo("bogus_action", {});
-  check("unknown todo action names the action", bogus.includes("unknown todo action 'bogus_action'"), bogus);
-  check("unknown todo action does not report a missing task", !bogus.includes("not found"), bogus);
-  const created = await todo("create", { subject: "real task" });
-  check("todo create still works", created.startsWith("Created"), created);
-  const missing = await todo("get", { id: 999 });
-  check("a genuinely missing task still reports not found", missing.includes("not found"), missing);
+  // ── Removed REPL surface stays removed ──
+  // These were the pipeline/todo scaffold. A stale `ns[...]` binding would silently re-expose
+  // a tool with no host handler behind it, so assert absence the same way smoke.ts asserts
+  // `stage_edit` is gone.
+  const sandbox = await PythonSandbox.spawn({
+    depth: 0, execTimeoutS: 30, requestTimeoutMs: 30_000,
+    python: "python3", initTimeoutMs: 30_000, maxPromptChars: 400_000,
+    handlers: {},
+  });
+  try {
+    for (const name of Object.freeze(["todo", "save_artifact", "advance_phase", "ask_user_question"])) {
+      const probe = await sandbox.exec(`print(${name})`);
+      check(`${name} is removed from the sandbox`, probe.raised && probe.stderr.includes("NameError"), probe.stderr.slice(0, 120));
+    }
+    const alive = await sandbox.exec("print(callable(llm_query), callable(search), callable(load_library))");
+    check("retrieval + delegation surface intact", !alive.raised && alive.stdout.includes("True True True"), alive.stderr.slice(0, 120));
+  } finally {
+    await sandbox.dispose();
+  }
 
   console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
   process.exit(failureCount() === 0 ? 0 : 1);

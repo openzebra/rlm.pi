@@ -29,11 +29,10 @@ import { errorMessage, formatError, isErrorText } from "../util/errors.ts";
 
 /**
  * The slice of LimitGuard these handlers need. Narrow on purpose: the headless bridge is
- * constructed from a `remainingBudget()` callback rather than owning a guard, and both
+ * constructed from a remaining-timeout callback rather than owning a guard, and both
  * shapes satisfy this.
  */
 export interface InvocationLimits {
-  remainingBudgetUsd(): number | undefined;
   remainingTimeoutMs(): number | undefined;
   addUsage(usage: Usage): void;
   addRaw(costUsd: number, inputTokens: number, outputTokens: number): void;
@@ -46,10 +45,9 @@ export interface InvocationLimits {
  * `onChildUsage`, so the accounting methods here are deliberately inert.
  */
 export function limitsFromRemaining(
-  remaining?: () => { readonly budgetUsd?: number; readonly timeoutMs?: number },
+  remaining?: () => { readonly timeoutMs?: number },
 ): InvocationLimits {
   return {
-    remainingBudgetUsd: () => remaining?.().budgetUsd,
     remainingTimeoutMs: () => remaining?.().timeoutMs,
     addUsage: () => {},
     addRaw: () => {},
@@ -61,7 +59,7 @@ export function limitsFromRemaining(
  *
  * Captured at interrupt entry and threaded down, never re-read: once handlers can outlive
  * their exec, re-reading mutable tool state after an await would attribute a sub-call to
- * whichever turn happens to be current when it resumes.
+ * whichever turn happens to be current when it settles.
  */
 export interface Invocation {
   readonly emitter: RlmEmitter;
@@ -92,7 +90,7 @@ export interface SubcallHandlerDeps {
   /** Session-wide admission control. Required — a per-caller default would silently unbound it. */
   readonly gates: SubcallGates;
   readonly registry: ModelRegistry;
-  readonly getWorkerModel: () => Model<Api>;
+  readonly getLlmModel: () => Model<Api>;
   /** Live accessor — `/rlm-config` replaces the config object, so never capture the value. */
   readonly getConfig: () => SubcallConfig;
   readonly signal?: AbortSignal;
@@ -162,7 +160,7 @@ const NO_UNMATCHED: readonly string[] = Object.freeze([]);
 export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers {
   /** DRY #3 — the one display-model resolution. */
   const displayModel = (model: string | null): string =>
-    displayModelRef(deps.registry, model, deps.getWorkerModel());
+    displayModelRef(deps.registry, model, deps.getLlmModel());
 
   /** Detached work is counted by the session registry; attached work runs as-is. */
   const detachable = <T>(opts: SubcallOpts, run: () => Promise<T>): Promise<T> =>
@@ -177,7 +175,6 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
   ): Promise<string> {
     const config = deps.getConfig();
     const limitError = checkResourceLimits({
-      budgetUsd: inv.limits.remainingBudgetUsd(),
       timeoutMs: inv.limits.remainingTimeoutMs(),
     });
     if (limitError !== undefined) return limitError;
@@ -192,7 +189,7 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
     try {
       const messages: ChatMsg[] = [{ role: "user", content: prompt }];
       const res = await deps.gates.leaf.run(() => modelComplete(messages, {
-        model: resolved ?? deps.getWorkerModel(),
+        model: resolved ?? deps.getLlmModel(),
         registry: deps.registry,
         system: config.subSystemPrompt,
         maxTokens: config.subSampling?.maxTokens,
@@ -299,9 +296,8 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
       return emptyResult(answer);
     }
 
-    const remBudget = inv.limits.remainingBudgetUsd();
     const remTimeout = inv.limits.remainingTimeoutMs();
-    const limitError = checkResourceLimits({ budgetUsd: remBudget, timeoutMs: remTimeout });
+    const limitError = checkResourceLimits({ timeoutMs: remTimeout });
     if (limitError) return emptyResult(limitError);
 
     const rootModel = deps.getModel?.();
@@ -326,7 +322,6 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
         depth: childDepth,
         parentNodeId: subId,
         modelOverride: model ?? undefined,
-        remainingBudgetUsd: remBudget,
         remainingTimeoutMs: remTimeout,
       }, inv));
       inv.limits.addRaw(res.costUsd, res.inputTokens, res.outputTokens);

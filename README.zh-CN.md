@@ -58,7 +58,7 @@ pi 进程 (TypeScript)
   当沙箱代码调用 `llm_query` 时，worker 在 stdout 上写入请求并在 stdin 上阻塞；
   Pi 在进程内提供服务并将回复写回。**供应商 API 密钥绝不会进入沙箱。**
 - 沙箱公开了 `context`, `llm_query`, `llm_query_batched`, `rlm_query`,
-  `rlm_query_batched`, `SHOW_VARS()`, `todo()`, `ask_user_question()` 以及一个 `answer` 字典。
+  `rlm_query_batched`, `SHOW_VARS()`, `ask_user_question()` 以及一个 `answer` 字典。
   模型通过设置 `answer["ready"] = True` 来提交最终结果。
 
 ## 安装
@@ -98,9 +98,6 @@ rm -rf ~/.pi/agent/extensions/rlm
 | `/rlm` | `Ctrl+Shift+R` | 切换持久化 RLM 模式 (通过 RLM 引擎路由普通提示词) |
 | `/rlm-stop` | | 终止正在运行的任务 |
 | `/rlm-config` | | 选择 smart + worker 模型并调整运行设置 |
-| `/rlm-resume` | | 恢复被中断的任务 (默认 `@latest`) |
-| `/rlm-runs` | | 列出最近的任务 |
-| `/rlm-help` | | 显示启动指南和速查表 |
 
 在任务激活期间，一个**实时树**会显示根编排器和每个子 LLM /
 递归子节点的状态、模型、成本、token 和持续时间。最终答案将以 markdown 形式发布
@@ -117,7 +114,6 @@ rm -rf ~/.pi/agent/extensions/rlm
 | `llm_query_batched` | `(prompts, model=None) -> list[str]` | 并发子 LLM 调用 (池上限) |
 | `rlm_query` | `(prompt, model=None, paths=None) -> str` | 具有自有沙箱的递归子 RLM (设有深度限制)。继承父级的 `context`；`paths` 按前缀缩小范围 |
 | `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | 并发递归子 RLM，共享同一个 `paths` 切片 |
-| `todo` | `(action, **kwargs) -> str` | 任务列表：`create`/`update`/`list`/`get`/`delete`/`clear` |
 | `ask_user_question` | `(questions) -> list[dict]` | 向用户提出结构化问题 (仅限深度 0) |
 | `SHOW_VARS` | `() -> str` | 列出当前定义的变量及其类型 |
 | `answer` | `dict` | 设置 `answer["content"]=...; answer["ready"]=True` 以结束 |
@@ -138,7 +134,6 @@ rm -rf ~/.pi/agent/extensions/rlm
 | Trajectory compaction | on (0.85) | 当历史记录接近上下文窗口时进行总结 |
 | `yolo` | off | 立即应用建议的修改，跳过审核弹出窗 |
 | `askUserQuestion` | on | 向模型公开 `ask_user_question()` |
-| `todo` | on | 向模型公开 `todo()` |
 
 > **并发注意：** 每个 `rlm_query` 子节点都会启动自己的 `python3` worker (冷启动约 50–150 毫秒)。
 > 最坏情况下的并发解释器数量 ≈ `maxConcurrentSubcalls`^(depth−1)；在
@@ -147,9 +142,6 @@ rm -rf ~/.pi/agent/extensions/rlm
 
 ## 遥测与运行日志
 
-- **运行日志** (`runLog`)：默认始终开启。每次运行将 JSONL 轨迹写入 `.rlm/runs/`
-  (默认)，上限为 `maxRuns` (50)。支持通过 `/rlm-resume` 进行**快照** (`sandbox.pkl`) 和**恢复**
-  被中断的任务。快照受每个会话的 `nonce` 保护，以防止跨会话重放。
 - **MLflow 追踪** (`telemetry`)：可选。设置 `MLFLOW_TRACKING_URI` 或在
   `/rlm-config` 中配置 `trackingUri` / `experimentId`。根运行被标记为 MLflow span
   以便在恢复时进行追踪关联。Bearer 令牌来自 `MLFLOW_TRACKING_TOKEN`
@@ -175,22 +167,19 @@ rm -rf ~/.pi/agent/extensions/rlm
 
 ```
 src/
-  sandbox/    worker.py + JSONL stdio driver (PythonSandbox) · protocol.ts · sandbox-manager.ts
-  bridge/     model.ts (one-shot completion) · llm-query.ts · rlm-query.ts (recursion)
-  core/       engine.ts (the loop) · iteration · limits · answer · compaction · pipeline · types
-  prompts/    system + per-turn prompts (ported from the Python reference)
-  text/       parsing (repl blocks) · tokens · preview · edits
-  state/      agent-tree · events · reads/writes · resume · paths · rows
-  tool/       repl-tool · rlm-events · aggregator · propose-edits · emitter-listener
+  sandbox/    py/ (worker.py · guards · retrieval · tasks) · sandbox.ts · interrupts · protocol · sandbox-manager · context-file
+  bridge/     model.ts (single completion) · subcall-handlers.ts (the one llm/rlm impl) · ask-user · library
+  core/       engine.ts (the loop) · iteration · limits · resource-limits · answer · compaction · history · types
+  prompts/    glossary (shared REPL vocabulary) · system (headless) · native · user
+  text/       parsing (repl blocks) · tokens · preview
+  tool/       repl-tool · repl-result · repl-render · rlm-tool · rlm-events · rlm-aggregator · subcall-store · background-tasks
   config/     defaults · settings (rlm.json persistence + validation)
-  context/    repomix-based repository packing + caching
-  telemetry/  MLflow sink · dispatcher · mlflow-config
-  ui/         tree-widget · status · model-picker · config-panel · intro · theme
+  context/    repomix repository packing + library context merge
+  ui/         status · model-picker · config-panel · intro · theme
   commands/   rlm · rlm-config
-  mode/       rlm-mode (controller) · input-router
-  patch/      apply · popup · index
-  util/       errors · concurrency
-test/         phase1–phase9 · native-smoke · native-mode · helpers
+  mode/       rlm-mode (controller) · worker-model (cheapest pick) · native-guards
+  util/       errors · concurrency · trace
+test/         phase suites · native-smoke · native-mode · helpers
 ```
 
 ## 测试

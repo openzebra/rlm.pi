@@ -11,9 +11,8 @@ export const RLM_GUIDE = `# RLM mode
 ## Commands
 
 - \`/rlm\` — toggle RLM mode (shortcut: Ctrl+Shift+R). Turning it OFF also stops a running query.
-- \`/rlm-config\` — choose models, reasoning, and budget limits
+- \`/rlm-config\` — choose models, reasoning, and run limits
 - \`/rlm-stop\` — cancel the current run but stay in RLM mode (use /rlm or Ctrl+Shift+R to leave)
-- \`/rlm-help\` — show this guide again
 
 When RLM mode is ON, \`read\`/\`grep\` are disabled and the agent reads the repository through the
 \`repl\` tool, delegating bulk analysis to sub-LLMs. The footer/status line shows the current state.`;

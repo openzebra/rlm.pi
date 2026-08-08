@@ -1,15 +1,16 @@
-/** Persist RLM settings (tunable config + chosen worker model id). */
+/** Persist RLM settings (tunable config + pinned sub-LLM model id). */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import type { RlmConfig, RunLogConfig } from "../core/types.ts";
+import type { RlmConfig } from "../core/types.ts";
 import { DEFAULT_CONFIG } from "./defaults.ts";
 
 export interface PersistedSettings {
   readonly config: Partial<RlmConfig>;
-  readonly worker?: string;
+  /** "provider/id" of the pinned sub-LLM, or undefined for "cheapest (auto)". */
+  readonly llm?: string;
 }
 
 type MutablePartialRlmConfig = { -readonly [K in keyof RlmConfig]?: RlmConfig[K] };
@@ -43,21 +44,6 @@ function validateThinkingLevel(v: unknown): ThinkingLevel | undefined {
   return typeof v === "string" && Object.hasOwn(THINKING_LEVELS, v) ? (v as ThinkingLevel) : undefined;
 }
 
-function validateRunLog(raw: unknown): Partial<RunLogConfig> | undefined {
-  if (typeof raw !== "object" || raw === null) return undefined;
-  const r = raw as Record<string, unknown>;
-  const out: { enabled?: boolean; dir?: string; snapshot?: boolean; maxRuns?: number } = {};
-  const enabled = validateBoolean(r.enabled);
-  if (enabled !== undefined) out.enabled = enabled;
-  const dir = validateString(r.dir);
-  if (dir !== undefined) out.dir = dir;
-  const snapshot = validateBoolean(r.snapshot);
-  if (snapshot !== undefined) out.snapshot = snapshot;
-  const maxRuns = validateNumber(r.maxRuns, 1);
-  if (maxRuns !== undefined) out.maxRuns = maxRuns;
-  return Object.keys(out).length > 0 ? Object.freeze(out) : undefined;
-}
-
 function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (typeof raw !== "object" || raw === null) return {};
   const r = raw as Record<string, unknown>;
@@ -78,8 +64,6 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (maxConcurrentChildren !== undefined) out.maxConcurrentChildren = maxConcurrentChildren;
   const maxPromptChars = validateNumber(r.maxPromptChars, 1000);
   if (maxPromptChars !== undefined) out.maxPromptChars = maxPromptChars;
-  const maxBudgetUsd = validateNumber(r.maxBudgetUsd, 0.01);
-  if (maxBudgetUsd !== undefined) out.maxBudgetUsd = maxBudgetUsd;
   const maxTimeoutMs = validateNumber(r.maxTimeoutMs, 1000);
   if (maxTimeoutMs !== undefined) out.maxTimeoutMs = maxTimeoutMs;
   const maxTokens = validateNumber(r.maxTokens, 1);
@@ -88,10 +72,6 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (maxErrors !== undefined) out.maxErrors = maxErrors;
   const orchestrator = validateBoolean(r.orchestrator);
   if (orchestrator !== undefined) out.orchestrator = orchestrator;
-  const pipeline = validateBoolean(r.pipeline);
-  if (pipeline !== undefined) out.pipeline = pipeline;
-  const maxBackwardJumps = validateNumber(r.maxBackwardJumps, 0);
-  if (maxBackwardJumps !== undefined) out.maxBackwardJumps = maxBackwardJumps;
   const compaction = validateBoolean(r.compaction);
   if (compaction !== undefined) out.compaction = compaction;
   const compactionThresholdPct = validateNumber(r.compactionThresholdPct, 0);
@@ -102,14 +82,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (smartReasoning !== undefined) out.smartReasoning = smartReasoning;
   const subSystemPrompt = validateString(r.subSystemPrompt);
   if (subSystemPrompt !== undefined) out.subSystemPrompt = subSystemPrompt;
-  const runLog = validateRunLog(r.runLog);
-  if (runLog) out.runLog = runLog;
   const sandboxInitTimeoutMs = validateNumber(r.sandboxInitTimeoutMs, 100);
   if (sandboxInitTimeoutMs !== undefined) out.sandboxInitTimeoutMs = sandboxInitTimeoutMs;
-  const askUserQuestion = validateBoolean(r.askUserQuestion);
-  if (askUserQuestion !== undefined) out.askUserQuestion = askUserQuestion;
-  const todo = validateBoolean(r.todo);
-  if (todo !== undefined) out.todo = todo;
   const libraryLoader = validateBoolean(r.libraryLoader);
   if (libraryLoader !== undefined) out.libraryLoader = libraryLoader;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
@@ -144,7 +118,8 @@ export async function loadSettings(): Promise<PersistedSettings> {
     const r = raw as Record<string, unknown>;
     return {
       config: validateConfig(r.config),
-      worker: typeof r.worker === "string" ? r.worker : undefined,
+      // `worker` is the pre-rename key — still read so an existing pin survives the upgrade.
+      llm: validateString(r.llm) ?? validateString(r.worker),
     };
   } catch {
     return { config: {} };
@@ -169,7 +144,6 @@ export function mergeConfig(partial: Partial<RlmConfig>): RlmConfig {
     ...partial,
     subSampling: { ...DEFAULT_CONFIG.subSampling, ...partial.subSampling },
     rootSampling: Object.freeze({ ...DEFAULT_CONFIG.rootSampling, ...partial.rootSampling }),
-    ...(partial.runLog ? { runLog: Object.freeze({ ...DEFAULT_CONFIG.runLog, ...partial.runLog }) } : {}),
   };
 }
 

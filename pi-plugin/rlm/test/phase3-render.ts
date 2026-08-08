@@ -133,7 +133,6 @@ const completedDetails: RlmDetails = {
   ],
   totals: { costUsd: 0.0423, tokens: 12300 },
   answer: "I've created the dashboard component with responsive charts and tables.\n\nThe component supports:\n- Auto-sizing charts via Recharts ResponsiveContainer\n- Dark/light theme support\n- Loading and error states\n- TypeScript props for chart configuration",
-  warnings: ["3/8 sub-call(s) failed — results may be incomplete"],
 };
 
 const runningDetails: RlmDetails = {
@@ -227,7 +226,6 @@ console.log("\n=== renderResult expanded (done) ===");
   // Sections
   check("expanded has Sub-calls section", text.includes("─── Sub-calls ───"));
   check("expanded has Answer section", text.includes("─── Answer ───"));
-  check("expanded shows warnings with real counts", text.includes("3/8 sub-call(s) failed"));
 
   // Individual subcalls
   check("expanded shows llm_query items individually", (text.match(/llm_query/g)?.length ?? 0) >= 2);

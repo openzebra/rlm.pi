@@ -10,8 +10,8 @@ import { check, fail, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { formatForLLM } from "../src/context/repomix-context.ts";
-import { buildNativeSystemPrompt } from "../src/prompts/system.ts";
-import { buildReplResultText, collectReplWarnings } from "../src/tool/repl-tool.ts";
+import { buildNativeSystemPrompt } from "../src/prompts/native.ts";
+import { buildReplResultText, collectReplWarnings } from "../src/tool/repl-result.ts";
 import type { ContextBundle } from "../src/context/repomix-context.ts";
 import type { RlmSubcall } from "../src/tool/rlm-details.ts";
 

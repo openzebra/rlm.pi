@@ -7,8 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-09
+
+### Removed
+
+- **`/rlm-resume`, `/rlm-runs`, `/rlm-help`.** Resume existed for a headless engine root the
+  plugin no longer routes to, and `/rlm-help` duplicated the guide already posted at
+  `session_start`. `/rlm`, `/rlm-stop` and `/rlm-config` remain.
+- **The phase pipeline** (`clarify → research → blueprint → validate`), which shipped
+  `pipeline: false` and was never turned on. With it go `core/pipeline*.ts`, `core/gates.ts`,
+  `core/critique.ts`, `prompts/phases.ts`, the `save_artifact` / `advance_phase` sandbox
+  functions, and the `--read-only` worker mode that only existed to keep a plan run from
+  writing files.
+- **`core/artifacts.ts` / `save_artifact`.** Only ever reachable from the pipeline.
+- **`todo()`.** It was a per-session in-memory list wired to nothing outside the plugin — a
+  wrapper for a job that belongs to the main agent and its own tools, not to the RLM sandbox.
+  Following prime-agent: do not re-add non-native wrappers.
+- **The run trail, `.pkl` snapshots and `runLog` config** (`src/state/**`, `sandbox.snapshot` /
+  `restore`, the worker's snapshot RPC). With resume and `/rlm-runs` gone nothing in the tree
+  read any of it, so every run was paying for write-only disk I/O. **The engine now performs no
+  disk I/O at all.**
+- **`ask_user_question` / `askUserQuestion` config.** The clarify pipeline was the only real
+  consumer; the REPL helper, bridge, protocol interrupt, config toggle, and prompts are gone.
+- **USD budget ceiling (`maxBudgetUsd`).** Config, UI, `LimitGuard` enforcement, and remaining-
+  budget propagation on recursive children are removed. Cost is still tracked for display;
+  wall-clock / token / consecutive-error caps remain.
+
 ### Fixed
 
+- **"Cheapest LLM model" could not see a free model.** Pi's `ModelCost` is non-nullable, so
+  free is a literal `0` — but many catalog entries (subscription and token-plan providers,
+  anything composed with default costs) are also `0`, and `[...models].sort()[0]` is stable, so
+  the pick was simply whichever zero-cost model came first in catalog order. Ranking now lives in
+  `mode/llm-model.ts`: free first, then widest context window (a free 4K model is useless as a
+  bulk reader), then `maxTokens`, then `provider/id` so the choice is stable across sessions and
+  catalog reorderings. Pricing is weighted 3:1 toward input, matching what a sub-call actually
+  sends. Selection is a single pass — no array copy, no sort allocation.
+- **`/rlm-config` silently ended "cheapest (auto)".** Pressing ESC at the model picker fell into
+  the branch that resolves cheapest *once* and writes it to `~/.pi/agent/rlm.json`, after which
+  the auto pick was never consulted again — including once a cheaper model appeared. Only an
+  explicit choice now touches the pin, and the confirmation names the model that actually
+  resolved instead of printing `(cheapest)`.
+- **LLM-model selection could run against an empty catalog.** `session_start` (and
+  `/rlm-config`) now await `modelRegistry.refresh()` before reading `getAvailable()`, which
+  newer pi builds populate asynchronously. Fail-soft: a refresh error is logged, never fatal.
+- **`/rlm-config` dumped the entire model catalog.** The picker used `getAll()`, so every
+  provider's catalog entry appeared — far more than Pi's own model list. It now mirrors Pi:
+  session `scopedModels` when set, otherwise `getAvailable()` (auth-configured providers only).
 - **A dying Python worker could take the whole pi session down.** `PythonSandbox` attached
   listeners to the child process and to stdout/stderr, but never to `proc.stdin`. A write to a
   dead worker's pipe fails *asynchronously* — node emits `'error'` on the stream, and an
@@ -26,7 +71,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kill, an abort, an OOM kill, and a Python-level crash.
 - `dispose()` waits for the worker's actual `exit` event (bounded) instead of sleeping a fixed
   50 ms on every teardown.
-
 - **Child RLM context inheritance ([#4]).** A recursive `rlm_query` child received the prompt
   string as its *entire* `context`, so it had no repository files and no libraries — ever.
   `load_library()` made it visible: the parent would reference `lib/<id>/…` paths, the child
@@ -37,8 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokens** — only a size line reaches the model; the content lives in the sandbox.
 - **`contextLength` under-reported file bundles by ~200×.** It summed `String(entry).length`,
   i.e. `"[object Object]"` (15 chars) per file, so a 3,000-char two-file context reported 30.
-  That number is what the model is told to size its batches against, and it is replayed into the
-  rebuilt system prompt on `/rlm-resume`.
+  That number is what the model is told to size its batches against.
 - **`load_library` could report `already_loaded` for a library that was never appended.** The
   host committed the sidecar index and loaded-prefix on *pack* success, while the worker could
   still refuse (non-list context, or a source that packs to zero files). Both refusals are now
@@ -51,19 +94,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`rlm_query(prompt, paths=['src/auth/', 'lib/x-9f3a/'])`** — narrow a child's inherited context
   to path prefixes (prefix match, not globs). A prefix that matches nothing hands over the full
   context and says so in the child's prompt, rather than blinding it.
-- **`maxConcurrentChildren`** (default 3) — child engines are now bounded separately from leaf
-  sub-calls (`maxConcurrentSubcalls`, default 6). Each child is a Python subprocess holding its
-  own copy of the inherited context, so the previous shared limit allowed up to 18 concurrent
-  repository-sized workers.
+- **`maxConcurrentChildren`** — child engines bounded separately from leaf sub-calls. Each child
+  is a Python subprocess holding its own copy of the inherited context.
 - Context files are serialized once per payload version and shared by refcount across every
   child that inherits it, in bounded chunks so a large repository never blocks the event loop.
 
 ### Changed
 
+- **Default concurrency:** `maxConcurrentSubcalls` **16**, `maxConcurrentChildren` **6**
+  (was 6 and 3).
+- **`worker` → `llm` naming** for the sub-LLM pin (`mode/llm-model.ts`, settings key `llm` with
+  legacy `worker` still read on load).
+- Files split so none carries two jobs: `sandbox/worker.py` → `sandbox/py/{worker,guards,
+  retrieval,tasks}.py`; `prompts/system.ts` → `glossary` + `system` + `native`;
+  `tool/repl-tool.ts` → `repl-result` + `repl-render` + the tool; `sandbox/sandbox.ts` →
+  transport + `sandbox/interrupts.ts`.
 - **Cost profile of `rlm_query`.** A child that used to see a 2 KB prompt now sees the whole
   repository and has `maxIterations` turns to spend on it, so a fan-out of N children is N real
-  repository analyses. Budget and timeout still descend as *remaining* amounts, so the tree
-  cannot exceed the root cap.
+  repository analyses. Remaining wall-clock timeout still propagates down the tree.
 
 [#4]: https://github.com/openzebra/rlm.pi/issues/4
 
@@ -460,7 +508,9 @@ for the Pi coding agent.
   budget ceiling, max consecutive errors, per-REPL-block timeout, max concurrent sub-calls,
   trajectory compaction, and toggles for `ask_user_question` and `todo`.
 
-[Unreleased]: https://github.com/openzebra/rlm.pi/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/openzebra/rlm.pi/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/openzebra/rlm.pi/releases/tag/v0.2.2
+[0.2.1]: https://github.com/openzebra/rlm.pi/releases/tag/v0.2.1
 [0.2.0]: https://github.com/openzebra/rlm.pi/releases/tag/v0.2.0
 [0.1.9]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.9
 [0.1.8]: https://github.com/openzebra/rlm.pi/releases/tag/v0.1.8

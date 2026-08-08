@@ -45,10 +45,6 @@ export interface SubcallUpdatedEvent {
   readonly totalCount?: number;
 }
 
-export interface WarningsEvent {
-  readonly warnings: readonly string[];
-}
-
 export interface TurnEvent {
   readonly current: number;
   readonly max: number;
@@ -121,11 +117,6 @@ export class RlmEmitter {
     this.ee.emit("answer", { text } satisfies AnswerEvent);
   }
 
-  /** Set advisory warnings (root-only; never a failure). */
-  emitWarnings(warnings: readonly string[]): void {
-    this.ee.emit("warnings", { warnings } satisfies WarningsEvent);
-  }
-
   /** Set the root run status (done/error/aborted). */
   emitStatus(status: RlmRunStatus): void {
     this.ee.emit("status", { status } satisfies StatusEvent);
@@ -161,11 +152,6 @@ export class RlmEmitter {
   onAnswer(handler: (event: AnswerEvent) => void): () => void {
     this.ee.on("answer", handler);
     return () => { this.ee.off("answer", handler); };
-  }
-
-  onWarnings(handler: (event: WarningsEvent) => void): () => void {
-    this.ee.on("warnings", handler);
-    return () => { this.ee.off("warnings", handler); };
   }
 
   onStatus(handler: (event: StatusEvent) => void): () => void {

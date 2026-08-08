@@ -7,7 +7,7 @@
  *   3. repl() tool executes code via the persistent sandbox
  *   4. REPL state persists across multiple repl() calls
  *   5. context variable is accessible in the sandbox (file paths, content)
- *   6. llm_query/rlm_query/todo handlers are wired (but NOT invoked — no API cost)
+ *   6. llm_query/rlm_query handlers are wired (but NOT invoked — no API cost)
  *
  * Run: bun run pi-plugin/rlm/test/native-smoke.ts
  */
@@ -15,7 +15,8 @@
 import { check, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
 import { packRepository, formatForLLM, serializeForSandbox } from "../src/context/repomix-context.ts";
-import { buildNativeSystemPrompt, buildRlmSystemPrompt, NATIVE_PROMPT_BUDGET } from "../src/prompts/system.ts";
+import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
+import { buildNativeSystemPrompt, NATIVE_PROMPT_BUDGET } from "../src/prompts/native.ts";
 import type { ContextBundle } from "../src/context/repomix-context.ts";
 import { contextLength, contextTypeLabel } from "../src/text/tokens.ts";
 
@@ -61,7 +62,7 @@ check("native prompt — contains [NATIVE RLM MODE]", nativePrompt.includes("NAT
 check("native prompt — mentions repl", nativePrompt.includes("repl"));
 
 const meta = { contextType: contextTypeLabel(bundle), contextChars: contextLength(bundle) };
-const fullPrompt = buildRlmSystemPrompt(meta, { orchestrator: true, recursion: true, askUserQuestion: true, todo: true });
+const fullPrompt = buildRlmSystemPrompt(meta, { orchestrator: true, recursion: true });
 check("rlm system prompt — non-empty", fullPrompt.length > 500);
 check("rlm system prompt — mentions llm_query", fullPrompt.includes("llm_query"));
 check("rlm system prompt — mentions rlm_query", fullPrompt.includes("rlm_query"));
@@ -145,11 +146,14 @@ print(f"rlm_query signature: {sig}")
 check("REPL — rlm_query function exists", r6.stdout.includes("rlm_query signature"));
 
 const r7 = await mgr.exec(`
-# Verify todo function exists
-sig = inspect.signature(todo)
-print(f"todo signature: {sig}")
+# Verify ask_user_question was removed
+try:
+    ask_user_question
+    print("ask_user_question still present")
+except NameError:
+    print("ask_user_question removed")
 `);
-check("REPL — todo function exists", r7.stdout.includes("todo signature"));
+check("REPL — ask_user_question removed", r7.stdout.includes("ask_user_question removed"));
 
 const r8 = await mgr.exec(`
 # Verify SHOW_VARS works

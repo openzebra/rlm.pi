@@ -7,7 +7,8 @@ import { registerRlmConfigCommand } from "./commands/rlm-config.ts";
 import { createRlmTool } from "./tool/rlm-tool.ts";
 import { createReplTool } from "./tool/repl-tool.ts";
 import { loadSettings, mergeConfig, resolveModelId } from "./config/settings.ts";
-import { RlmController, cheapestModel } from "./mode/rlm-mode.ts";
+import { RlmController } from "./mode/rlm-mode.ts";
+import { cheapestModel } from "./mode/llm-model.ts";
 import { postRlmGuide } from "./ui/intro.ts";
 import { setRlmModeStatus } from "./ui/status.ts";
 import { markdownTheme } from "./ui/theme-adapter.ts";
@@ -15,7 +16,7 @@ import { SandboxManager } from "./sandbox/sandbox-manager.ts";
 import { createSubcallGates } from "./util/concurrency.ts";
 import { BackgroundTasks } from "./tool/background-tasks.ts";
 import { packRepository, formatForLLM, serializeForSandbox } from "./context/repomix-context.ts";
-import { buildNativeSystemPrompt, NATIVE_TURN_REMINDER } from "./prompts/system.ts";
+import { buildNativeSystemPrompt, NATIVE_TURN_REMINDER } from "./prompts/native.ts";
 import { bashCommandFromInput, isFileReadingCommand, capToolResultText, BASH_BLOCK_REASON } from "./mode/native-guards.ts";
 import { errorMessage } from "./util/errors.ts";
 
@@ -44,7 +45,6 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // the wire at once, so nothing smaller than session scope actually bounds fan-out.
   const gates = createSubcallGates(config.maxConcurrentSubcalls, config.maxConcurrentChildren);
   const background = new BackgroundTasks({
-    maxBudgetUsd: config.maxBudgetUsd,
     maxTimeoutMs: config.maxTimeoutMs,
     maxTokens: config.maxTokens,
     maxErrors: config.maxErrors,
@@ -79,7 +79,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   const settingsReady = loadSettings()
     .then((persisted) => {
       controller.config = mergeConfig(persisted.config);
-      controller.savedWorkerRef = persisted.worker;
+      controller.savedLlmRef = persisted.llm;
     })
     .catch((err) => {
       console.warn(`[rlm] settings load failed: ${errorMessage(err)}`);
@@ -120,22 +120,33 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const flag = pi.getFlag("rlm");
     if (typeof flag === "boolean") controller.setConfig(Object.freeze({ ...controller.config, enabled: flag }));
 
-    if (controller.savedWorkerRef) {
-      const resolved = resolveModelId(ctx.modelRegistry, controller.savedWorkerRef);
-      if (resolved) controller.workerModel = resolved;
+    // Reload the catalog before the worker-model pick below reads it. Newer pi builds make
+    // `getAvailable()` an async-populated snapshot that starts empty, and picking from an empty
+    // catalog silently falls back to the root model. Called with no arguments and awaited so it
+    // is valid whether `refresh` returns void (current) or a promise (newer); fail-soft, because
+    // a refresh error must not abort session start.
+    try {
+      await ctx.modelRegistry.refresh();
+    } catch (err) {
+      console.warn(`[rlm] model registry refresh failed: ${errorMessage(err)}`);
+    }
+
+    if (controller.savedLlmRef) {
+      const resolved = resolveModelId(ctx.modelRegistry, controller.savedLlmRef);
+      if (resolved) controller.llmModel = resolved;
     }
 
     // Re-register repl tool each session to pick up model provider changes
-    const workerModel = controller.workerModel ?? cheapestModel(ctx.modelRegistry) ?? ctx.model;
+    const llmModel = controller.llmModel ?? cheapestModel(ctx.modelRegistry) ?? ctx.model;
     const model = ctx.model;
-    if (workerModel && model) {
+    if (llmModel && model) {
       try {
         pi.registerTool(createReplTool({
           sandboxManager,
           model,
-          workerModel,
+          llmModel,
           getModel: () => controller.resolveModels(ctx)?.model,
-          getWorkerModel: () => controller.resolveModels(ctx)?.worker,
+          getLlmModel: () => controller.resolveModels(ctx)?.llm,
           registry: ctx.modelRegistry,
           getConfig: () => controller.config,
           gates,

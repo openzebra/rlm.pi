@@ -8,7 +8,6 @@
 import { type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { createPiInteractiveDeps } from "../bridge/pi-interactive.ts";
 import type { RlmController, StartInput } from "../mode/rlm-mode.ts";
 import { spinnerFrame } from "../ui/theme.ts";
 import { markdownTheme } from "../ui/theme-adapter.ts";
@@ -82,15 +81,10 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
 
       try {
         const input: StartInput = {
-          kind: "fresh",
           rootPrompt: params.prompt,
           context: params.context ?? undefined,
         };
-        const interactive = createPiInteractiveDeps(ctx);
-        const { done } = controller.start(ctx, input, emitter, {
-          onAskUserQuestion: controller.config.askUserQuestion ? interactive.onAskUserQuestion : undefined,
-          onTodo: controller.config.todo ? interactive.onTodo : undefined,
-        });
+        const { done } = controller.start(ctx, input, emitter);
         const result = await done;
 
         emitter.emitAnswer(result.answer);
@@ -150,11 +144,6 @@ function renderExpanded(details: RlmDetails, theme: Theme): Component {
     container.addChild(new Spacer(1));
     container.addChild(new Text(theme.fg("muted", "─── Answer ───"), 0, 0));
     container.addChild(new Markdown(details.answer, 0, 0, markdownTheme(theme)));
-  }
-
-  if (details.warnings && details.warnings.length > 0) {
-    container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("muted", details.warnings.join("\n")), 0, 0));
   }
 
   return container;

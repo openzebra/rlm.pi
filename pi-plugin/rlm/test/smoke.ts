@@ -16,11 +16,9 @@ const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 /** Suites run in sequence as child processes. */
 const SUITES: readonly string[] = Object.freeze([
   "phase1.ts", "phase2.ts", "phase3.ts", "phase3-render.ts", "phase4.ts",
-  "phase8-state.ts", "phase8-snapshot.ts", "phase8-resume.ts",
-  "phase9-prune.ts", "phase9-engine-persistence.ts", "phase-chunked.ts",
-  "phase-async.ts", "phase-batch-gate.ts", "phase-gates.ts", "phase-guards.ts",
-  "phase-library.ts", "phase-pipeline.ts",
-  "phase-retrieval.ts", "phase-state.ts", "native-mode.ts", "native-smoke.ts",
+  "phase-chunked.ts", "phase-async.ts", "phase-batch-gate.ts", "phase-guards.ts",
+  "phase-library.ts", "phase-retrieval.ts", "phase-llm-model.ts",
+  "native-mode.ts", "native-smoke.ts",
 ]);
 
 async function assertEditSurfaceRemoved(): Promise<void> {
@@ -36,31 +34,6 @@ async function assertEditSurfaceRemoved(): Promise<void> {
     check("smoke — core REPL surface intact", !alive.raised && alive.stdout.includes("True True True"));
   } finally {
     await sandbox.dispose();
-  }
-
-  // Read-only open guard (pipeline mode) — all common write routes blocked.
-  const ro = await PythonSandbox.spawn({
-    depth: 0, execTimeoutS: 30, requestTimeoutMs: 30_000,
-    python: "python3", initTimeoutMs: 30_000, maxPromptChars: 400_000,
-    readOnly: true, handlers: {},
-  });
-  try {
-    for (const [label, code] of Object.freeze([
-      ["builtin open", `open("probe-a.txt","w").write("x")`],
-      ["pathlib", `from pathlib import Path\nPath("probe-b.txt").write_text("x")`],
-      ["os.open", `import os\nos.open("probe-c.txt", os.O_WRONLY | os.O_CREAT)`],
-    ] as const)) {
-      const r = await ro.exec(code);
-      check(
-        `smoke — read-only blocks ${label}`,
-        r.raised && r.stderr.includes("PermissionError"),
-        r.stderr.slice(0, 160),
-      );
-    }
-    const readOk = await ro.exec(`print(open("/dev/null").read() or "ok")`);
-    check("smoke — read-only run still allows reading", !readOk.raised && readOk.stdout.includes("ok"), readOk.stderr.slice(0, 120));
-  } finally {
-    await ro.dispose();
   }
 }
 

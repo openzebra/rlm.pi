@@ -1,10 +1,11 @@
 /** Model picker TUI — choose a model and, when supported, a thinking level. */
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import { Container, type Component, type SelectItem, SelectList, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { formatCost } from "./theme.ts";
+import { compareLlm } from "../mode/llm-model.ts";
 
 export interface ModelSelection {
   readonly model: Model<Api>;
@@ -16,15 +17,38 @@ type SelectableThinkingLevel = (typeof LEVELS)[number];
 
 const CHEAPEST_VALUE = "__rlm_cheapest__";
 
-function items(models: Model<Api>[], includeCheapest = false): SelectItem[] {
-  const modelItems = models.map((m) => ({
-    value: `${m.provider}/${m.id}`,
-    label: `${m.provider}/${m.id}`,
-    description: `in ${formatCost(m.cost.input)}/Mtok · out ${formatCost(m.cost.output)}/Mtok${m.reasoning ? " · reasoning" : ""}`,
-  }));
+/**
+ * Models Pi itself would offer for this session, cheapest-first.
+ *
+ * Mirrors the built-in model switcher:
+ *   - if the session has scoped models (`--models` / enabledModels) → those only
+ *   - else → `getAvailable()` (providers with configured auth)
+ *
+ * Deliberately NOT `getAll()`: the full catalog dumps every provider's catalog entry and is
+ * not what the user sees in Pi natively. See Pi extension docs on `ctx.scopedModels`.
+ */
+export function pickableModels(
+  registry: ModelRegistry,
+  scoped?: readonly { readonly model: Model<Api> }[],
+): readonly Model<Api>[] {
+  const source = scoped !== undefined && scoped.length > 0
+    ? scoped.map((s) => s.model)
+    : registry.getAvailable();
+  return [...source].sort(compareLlm);
+}
+
+function items(models: readonly Model<Api>[], includeCheapest: boolean): SelectItem[] {
+  const modelItems = models.map((m) => {
+    const price = `in ${formatCost(m.cost.input)}/Mtok · out ${formatCost(m.cost.output)}/Mtok`;
+    return {
+      value: `${m.provider}/${m.id}`,
+      label: `${m.provider}/${m.id}`,
+      description: `${price}${m.reasoning ? " · reasoning" : ""}`,
+    };
+  });
   if (!includeCheapest) return modelItems;
   return [
-    { value: CHEAPEST_VALUE, label: "⟳ cheapest (auto)", description: "Always use the cheapest available model" },
+    { value: CHEAPEST_VALUE, label: "⟳ cheapest (auto)", description: "Always use the cheapest model with a configured key" },
     ...modelItems,
   ];
 }
@@ -79,12 +103,12 @@ async function selectThinkingLevel(
 export async function selectModel(
   ctx: ExtensionContext,
   title: string,
-  models: Model<Api>[],
+  models: readonly Model<Api>[],
   current?: Model<Api>,
   currentThinking?: ThinkingLevel,
 ): Promise<ModelSelection | null | undefined> {
   if (models.length === 0) {
-    ctx.ui.notify("RLM: no models with configured auth", "warning");
+    ctx.ui.notify("RLM: no models available (add a provider key in Pi, or widen --models / enabledModels)", "warning");
     return undefined;
   }
   if (ctx.mode !== "tui") {

@@ -90,7 +90,7 @@ const handlers = createSubcallHandlers({
   resolve: (_opts, depth) => ({ emitter, parentId: undefined, depth, limits: limitsFromRemaining() }),
   gates: createSubcallGates(GATE_LIMIT),
   registry: ModelRegistry.create(AuthStorage.create()),
-  getWorkerModel: () => fakeModel,
+  getLlmModel: () => fakeModel,
   getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 2 }),
 });
 
@@ -134,7 +134,7 @@ const childHandlers = createSubcallHandlers({
   resolve: (_opts, depth) => ({ emitter, parentId: undefined, depth, limits: limitsFromRemaining() }),
   gates: childGates,
   registry: ModelRegistry.create(AuthStorage.create()),
-  getWorkerModel: () => fakeModel,
+  getLlmModel: () => fakeModel,
   getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 4 }),
   runChild: async () => {
     childActive += 1;

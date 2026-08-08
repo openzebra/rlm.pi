@@ -21,7 +21,7 @@ import {
 import { createEngine } from "../src/core/engine.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { loadSettings, mergeConfig } from "../src/config/settings.ts";
-import { cheapestModel } from "../src/mode/rlm-mode.ts";
+import { cheapestModel } from "../src/mode/llm-model.ts";
 import rlmExtension from "../src/index.ts";
 
 function capableModel(reg: ModelRegistryType) {
@@ -120,7 +120,7 @@ async function main() {
   const limEngine = createEngine({
     emitter: new RlmEmitter(),
     model: model,
-    workerModel: cheapestModel(modelRegistry) ?? model,
+    llmModel: cheapestModel(modelRegistry) ?? model,
     registry: modelRegistry,
     config: baseCfg,
     limits: { maxTokens: 1 },

@@ -8,33 +8,42 @@
 
 ## Architecture
 
-This is a **Recursive Language Model (RLM) plugin** for the Pi coding agent. The engine drives a "smart" model turn-by-turn over Python `repl()` blocks, each executing in a persistent Python subprocess sandbox (`worker.py`). Sub-LLM calls (`llm_query`, `rlm_query`) are serviced in-process by bridges that hold API keys — the sandbox never sees them.
+This is a **Recursive Language Model (RLM) plugin** for the Pi coding agent. The engine drives a "smart" model turn-by-turn over Python `repl()` blocks, each executing in a persistent Python subprocess sandbox (`sandbox/py/worker.py`). Sub-LLM calls (`llm_query`, `rlm_query`) are serviced in-process by bridges that hold API keys — the sandbox never sees them.
 
 ```
 pi-plugin/rlm/src/
-├── core/          Headless RLM loop, limits, compaction, phase pipeline
+├── core/          Headless RLM loop, limits, compaction, history
 ├── bridge/        Sub-LLM/rlm/interactive handlers (subcall-handlers.ts is the single impl)
-├── sandbox/       Python subprocess, JSONL protocol, sandbox manager
+├── sandbox/       Python subprocess (py/), JSONL protocol, interrupt dispatch, sandbox manager
 ├── tool/          repl() and rlm() Pi tool registrations + event emitter
-├── state/         JSONL audit trail (write/read/resume), fail-soft I/O
 ├── config/        rlm.json persistence, defaults, model resolution
-├── prompts/       System prompts (headless + native mode)
+├── prompts/       glossary (shared) → system (headless) + native
 ├── context/       repomix-based repository packing + caching
 ├── ui/            Config panel, model picker, status line, theme
 ├── text/          REPL block parsing, token estimation, text preview
-├── mode/          RlmController + input routing
+├── mode/          RlmController, worker-model ranking, native-mode guards
 ├── util/          Result type, error formatting, concurrency pool
-├── commands/      /rlm, /rlm-config, /rlm-resume CLI commands
+├── commands/      /rlm, /rlm-stop, /rlm-config
 └── index.ts       Extension entry point
 ```
+
+The engine performs **no disk I/O**. There is no run trail, no snapshot, no resume: a run
+lives entirely in memory and its answer is its only durable output.
 
 **Entry points:**
 - Root `index.ts` — harness that boots Pi with `createAgentSession()`
 - `pi-plugin/rlm/src/index.ts` — `rlmExtension()`: registers tools, commands, prompt injection, input routing
 - `core/engine.ts` — `createEngine()`: builds the `runRlm` function (headless turn loop)
-- `sandbox/worker.py` — Python REPL worker: executes model code, bridges sub-LLM calls over stdin/stdout
+- `sandbox/py/worker.py` — Python REPL worker: executes model code, bridges sub-LLM calls over stdin/stdout.
+  Siblings `guards.py` / `retrieval.py` / `tasks.py` resolve via `sys.path[0]` (the script's own
+  directory) — no packaging step, and they ship with `src/` like everything else.
 
 **Key types file:** `core/types.ts` — `RlmConfig`, `RlmInput`, `RlmResult`, `RunRlm`, `Sampling`
+
+**Model-visible surface is deliberately small** (prime-agent's rule): two Pi tools (`repl`, `rlm`)
+and a REPL namespace of retrieval + delegation only. There is no `todo`, no `save_artifact`, no
+`advance_phase`. Task tracking belongs to the main agent and its own tools, not to the sandbox —
+do not re-add a wrapper for something Pi already owns.
 
 ## DRY Rules — DO NOT Duplicate
 
@@ -69,9 +78,10 @@ field to `SubcallHandlerDeps` instead.
 - **ZERO `!` non-null assertions** — use `?.`, `??`, type guards. Currently clean.
 - **`readonly` on ALL interface properties** — every interface in this project uses `readonly`.
 - **`Object.freeze()` on constants** — arrays, sets, default configs, enums must be frozen.
-- **Discriminated unions** over flags: `StartInput = { kind: "fresh", ... } | { kind: "resume", ... }`.
+- **Discriminated unions** over flags — never a boolean that silently changes a shape.
 - **`Result<T, E>`** (`{ ok: true, value } | { ok: false, error }`) for fallible operations — use from `util/errors.ts`.
-- **Fail-soft I/O** — state writers return `boolean`, warn instead of throwing. Follow `state/writes.ts` patterns.
+- **Fail-soft I/O** — writers return `boolean` and warn instead of throwing; never `console.log` from a
+  TUI path (it corrupts the render).
 - **Type guards over casts** — every `unknown` must be narrowed via `is*` functions before use.
 
 ## Patterns to Follow
@@ -87,21 +97,22 @@ field to `SubcallHandlerDeps` instead.
 | Config validation | `settings.ts` `validateNumber(v, min)`, `validateBoolean(v)`, `validateString(v)` — all accept `unknown` |
 | Pre-allocated arrays | `new Array<R>(items.length)` before loops, never `.push()` in a loop |
 | JSONL protocol | `sandbox/protocol.ts` — newline-delimited JSON, parent→worker requests, worker→parent interrupts |
-| Async sub-calls | `worker.py` posts a request and parks the reply by rid (`_post` / `park_reply` / `_drain_until`); `spawn()` returns a `Task`, `rlm_await` / `rlm_await_all` collect it, possibly in a later exec |
-| Resume fold | `state/resume.ts` `reconstructRlmState()` — replays JSONL trail through engine's own prompt builders |
+| Async sub-calls | `py/worker.py` posts a request and parks the reply by rid (`_post` / `park_reply` / `_drain_until`); `spawn()` returns a `Task`, `rlm_await` / `rlm_await_all` collect it, possibly in a later exec |
+| Worker-model ranking | `mode/worker-model.ts` `compareWorker` — free first, then widest context window, then provider/id for determinism |
 
 ## Adding a New Bridge Handler
 
 If a new sandbox function is needed (e.g., `new_tool()` from Python):
 1. Add the interrupt type to `protocol.ts` (`WorkerInterrupt` union)
-2. Add the handler to `SubLlmHandlers` interface in `sandbox.ts`
-3. Implement in `worker.py` (Worker class `_new_tool` + RPC)
-4. Wire in `interactive.ts` or a new bridge file — reuse the emitter pattern
-5. Register in `sandbox.ts` `REJECT` defaults
-6. Register in `worker.py` safe builtins / scaffold restoration
+2. Add the handler to the `SubLlmHandlers` interface in `sandbox/interrupts.ts`
+3. Implement in `py/worker.py` (Worker class `_new_tool` + RPC)
+4. Wire in `bridge/library.ts` or a new bridge file — reuse the emitter pattern
+5. Register in `sandbox/interrupts.ts`: the `SubLlmHandlers` interface, the `REJECT` default,
+   and the `serviceInterrupt` dispatch
+6. Register in `py/worker.py` `RESERVED` + `_restore_scaffold`
 
 ## Testing
 - Tests live in `pi-plugin/rlm/test/`
-- Phase-based tests: `phase1.ts` through `phase9-*.ts`
+- Phase-based tests: `phase1.ts` … `phase-*.ts`; `test/smoke.ts` runs every suite and boots a real sandbox
 - `native-smoke.ts` and `native-mode.ts` test the repl() tool integration
 - `helpers.ts` provides test utilities

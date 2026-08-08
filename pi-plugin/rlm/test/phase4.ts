@@ -40,7 +40,7 @@ function rlmOnlyHandlers(opts: {
   maxDepth: number;
   /** Stands in for the parent's live context; omit to test the unwired fallback. */
   childContext?: () => unknown;
-  remaining?: () => { readonly budgetUsd?: number; readonly timeoutMs?: number };
+  remaining?: () => { readonly timeoutMs?: number };
   onChildUsage?: (costUsd: number, inputTokens: number, outputTokens: number) => void;
 }): SubcallHandlers {
   const emitter = new RlmEmitter();
@@ -49,7 +49,7 @@ function rlmOnlyHandlers(opts: {
     resolve: (_o, depth) => ({ emitter, parentId: undefined, depth, limits }),
     gates: createSubcallGates(2),
     registry: MR.create(AuthStorage.create()),
-    getWorkerModel: () => {
+    getLlmModel: () => {
       throw new Error("leaf completion must not be reached in the recursion tests");
     },
     getConfig: () => ({ maxPromptChars: Number.MAX_SAFE_INTEGER, maxDepth: opts.maxDepth }),
@@ -59,7 +59,7 @@ function rlmOnlyHandlers(opts: {
     onChildUsage: opts.onChildUsage,
   });
 }
-import { cheapestModel } from "../src/mode/rlm-mode.ts";
+import { cheapestModel } from "../src/mode/llm-model.ts";
 
 /** Deterministic, token-free check of the recursion depth-cap + ordering logic. */
 async function testRecursionBridge(): Promise<boolean> {
@@ -204,7 +204,7 @@ async function testChildEngineSeesInheritedContext(): Promise<boolean> {
   const res = await createEngine({
     emitter: new RlmEmitter(),
     model: MOCK_MODEL,
-    workerModel: MOCK_MODEL,
+    llmModel: MOCK_MODEL,
     registry: MOCK_REGISTRY,
     config: { ...DEFAULT_CONFIG, maxIterations: 4, compaction: false },
     complete,
@@ -222,8 +222,8 @@ async function testChildEngineSeesInheritedContext(): Promise<boolean> {
   return pass;
 }
 
-/** Token-free: prove recursive child cost is debited from the parent's budget guard. */
-async function testChildBudgetPropagation(): Promise<boolean> {
+/** Token-free: prove recursive child cost is debited from the parent's guard. */
+async function testChildCostPropagation(): Promise<boolean> {
   let pass = true;
   const log = (n: string, ok: boolean, extra = "") => {
     console.log(`${ok ? "✓" : "✗"} ${n}${extra ? `  — ${extra}` : ""}`);
@@ -270,7 +270,7 @@ async function testChildBudgetPropagation(): Promise<boolean> {
   return pass;
 }
 
-/** Token-free: prove pre-spawn guard refuses children when budget/timeout is exhausted. */
+/** Token-free: prove pre-spawn guard refuses children when timeout is exhausted. */
 async function testPreSpawnGuard(): Promise<boolean> {
   let pass = true;
   const log = (n: string, ok: boolean, extra = "") => {
@@ -285,18 +285,6 @@ async function testPreSpawnGuard(): Promise<boolean> {
   };
   const degrade: Degrade = async () => "";
 
-  // Budget exhausted — should NOT spawn.
-  spawnCount = 0;
-  const h0 = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ budgetUsd: 0 }) });
-  const r0 = await h0.rlmQuery("x", null, 0, ATTACHED);
-  log("F-spawn: budget=0 refuses child spawn", r0 === "Error: budget exhausted", r0);
-  log("F-spawn: no run() called when budget exhausted", spawnCount === 0, `spawned ${spawnCount}`);
-
-  // Budget negative — should NOT spawn.
-  const hNeg = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ budgetUsd: -0.5 }) });
-  const rNeg = await hNeg.rlmQuery("x", null, 0, ATTACHED);
-  log("F-spawn: budget<0 refuses child spawn", rNeg === "Error: budget exhausted", rNeg);
-
   // Timeout exhausted — should NOT spawn.
   spawnCount = 0;
   const hT = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ timeoutMs: 0 }) });
@@ -304,11 +292,17 @@ async function testPreSpawnGuard(): Promise<boolean> {
   log("F-spawn: timeout=0 refuses child spawn", rT === "Error: timeout exhausted", rT);
   log("F-spawn: no run() called when timeout exhausted", spawnCount === 0, `spawned ${spawnCount}`);
 
-  // Budget available — SHOULD spawn normally.
+  // Timeout available — SHOULD spawn normally.
   spawnCount = 0;
-  const hOk = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ budgetUsd: 1.0 }) });
+  const hOk = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ timeoutMs: 60_000 }) });
   const rOk = await hOk.rlmQuery("x", null, 0, ATTACHED);
-  log("F-spawn: budget>0 spawns child normally", rOk === "ok" && spawnCount === 1, `${rOk} spawned=${spawnCount}`);
+  log("F-spawn: timeout>0 spawns child normally", rOk === "ok" && spawnCount === 1, `${rOk} spawned=${spawnCount}`);
+
+  // No remaining callback — SHOULD spawn normally (no timeout cap).
+  spawnCount = 0;
+  const hNone = rlmOnlyHandlers({ run, degrade, maxDepth: 3 });
+  const rNone = await hNone.rlmQuery("x", null, 0, ATTACHED);
+  log("F-spawn: no timeout cap spawns child normally", rNone === "ok" && spawnCount === 1, `${rNone} spawned=${spawnCount}`);
 
   return pass;
 }
@@ -327,8 +321,8 @@ async function main() {
   const childEngineOk = await testChildEngineSeesInheritedContext();
   if (!childEngineOk) process.exit(1);
 
-  const budgetOk = await testChildBudgetPropagation();
-  if (!budgetOk) process.exit(1);
+  const costOk = await testChildCostPropagation();
+  if (!costOk) process.exit(1);
 
   const guardOk = await testPreSpawnGuard();
   if (!guardOk) process.exit(1);
@@ -343,16 +337,16 @@ async function main() {
         emitter: new RlmEmitter(),
         parentId: undefined,
         depth: 0,
-        limits: limitsFromRemaining(() => ({ budgetUsd: 0 })),
+        limits: limitsFromRemaining(() => ({ timeoutMs: 0 })),
       }),
       gates: createSubcallGates(2),
       registry,
-      getWorkerModel: () => fallbackModel,
+      getLlmModel: () => fallbackModel,
       getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 0 }),
     });
     const guardedOut = await guardedLlm.llmQuery("must not call provider", null, 0, ATTACHED);
-    const guardedOk = guardedOut === "Error: budget exhausted";
-    console.log(`${guardedOk ? "✓" : "✗"} F4: llm_query refuses exhausted budget before completion`);
+    const guardedOk = guardedOut === "Error: timeout exhausted";
+    console.log(`${guardedOk ? "✓" : "✗"} F4: llm_query refuses exhausted timeout before completion`);
     if (!guardedOk) process.exit(1);
 
     const model = cheapestModel(registry) ?? fallbackModel;
@@ -363,7 +357,7 @@ async function main() {
     const overrideEngine = createEngine({
     emitter: new RlmEmitter(),
       model: model,
-      workerModel: model,
+      llmModel: model,
       registry,
       config: DEFAULT_CONFIG,
     });
@@ -407,10 +401,10 @@ async function main() {
   const engine = createEngine({
     emitter: new RlmEmitter(),
     model: smart,
-    workerModel: worker,
+    llmModel: worker,
     registry,
     config: { ...DEFAULT_CONFIG, maxIterations: 8, maxDepth: 2, execTimeoutS: 30 },
-    limits: { maxBudgetUsd: 0.5, maxTimeoutMs: 180_000 },
+    limits: { maxTimeoutMs: 180_000 },
     onUsage: (u, role) => {
       if (role === "root") rootUsd += u.cost.total;
       else subUsd += u.cost.total;

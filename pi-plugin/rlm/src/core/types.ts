@@ -1,24 +1,11 @@
 /** Shared configuration + runtime types for the RLM engine. */
 
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
-import type { AskAnswer, AskQuestion } from "../sandbox/protocol.ts";
-import type { ReconstructResult } from "../state/resume.ts";
 
 export interface Sampling {
   readonly maxTokens?: number;
   readonly temperature?: number;
   readonly reasoning?: ThinkingLevel;
-}
-
-export interface RunLogConfig {
-  /** Default: true — always-on, opt-out. */
-  readonly enabled?: boolean;
-  /** Default: ".rlm/runs". Directory under cwd for run artifacts. */
-  readonly dir?: string;
-  /** Default: true — whether to write sandbox.pkl snapshots. */
-  readonly snapshot?: boolean;
-  /** Default: 50 — prune oldest runs beyond this count on each new run. */
-  readonly maxRuns?: number;
 }
 
 export interface RlmConfig {
@@ -39,8 +26,6 @@ export interface RlmConfig {
   readonly maxConcurrentChildren: number;
   /** Reject sub-LLM prompts larger than this many chars. */
   readonly maxPromptChars: number;
-  /** Max USD spend across the whole tree before the engine stops (undefined = no cap). */
-  readonly maxBudgetUsd?: number;
   /** Max wall-clock ms across the whole tree before the engine stops (undefined = no cap). */
   readonly maxTimeoutMs?: number;
   /** Max total input+output tokens across the whole tree before the engine stops (undefined = no cap). */
@@ -49,10 +34,6 @@ export interface RlmConfig {
   readonly maxErrors?: number;
   /** Append the orchestrator addendum to the system prompt. */
   readonly orchestrator: boolean;
-  /** Enable the phase pipeline (advance_phase + stall nags) at depth 0. */
-  readonly pipeline: boolean;
-  /** Max validate→blueprint corrective re-entries when validation reports blockers (default 2). */
-  readonly maxBackwardJumps: number;
   /** Summarize the trajectory when it grows past the threshold (keeps the root window small). */
   readonly compaction: boolean;
   /** Compact when estimated history tokens reach this fraction of the model's context window. */
@@ -61,10 +42,6 @@ export interface RlmConfig {
   readonly python: string;
   /** Worker startup wait before treating sandbox init as failed (ms). */
   readonly sandboxInitTimeoutMs: number;
-  /** Allow ask_user_question() calls from the root REPL. */
-  readonly askUserQuestion: boolean;
-  /** Allow todo() calls from the REPL. */
-  readonly todo: boolean;
   /** Enable the load_library() REPL scaffold (external dirs/files/git repos as extra context slots). */
   readonly libraryLoader: boolean;
   /** ThinkingLevel for the root smart model (set via /rlm-config). */
@@ -79,8 +56,6 @@ export interface RlmConfig {
   readonly subSystemPrompt?: string;
   /** Sampling for sub-LLM (worker) calls. */
   readonly subSampling: Readonly<Sampling>;
-  /** Optional run-state persistence configuration. Enabled by default. */
-  readonly runLog?: RunLogConfig;
 }
 
 /** Input to a (headless) RLM run. */
@@ -95,12 +70,8 @@ export interface RlmInput {
   readonly parentNodeId?: string;
   /** "provider/id" — overrides the root model for this run (set by recursive rlm_query). */
   readonly modelOverride?: string;
-  /** Remaining budget for this subtree (set by parent from its LimitGuard). */
-  readonly remainingBudgetUsd?: number;
   /** Remaining timeout for this subtree (set by parent from its LimitGuard). */
   readonly remainingTimeoutMs?: number;
-  /** Depth-0 resume payload — controller rebuilds this from the trail's `reconstructRlmState()`. */
-  readonly resume?: ReconstructResult & { readonly ok: true };
 }
 
 /** Result of a completed RLM run. */
@@ -114,11 +85,4 @@ export interface RlmResult {
 }
 
 /** A function that runs an RLM to completion — used to wire recursion (rlm_query). */
-export interface InteractiveDeps {
-  /** Called when the sandbox issues ask_user_question; undefined = feature disabled. */
-  readonly onAskUserQuestion?: (questions: readonly AskQuestion[]) => Promise<AskAnswer[]>;
-  /** Called when the sandbox issues todo; undefined = feature disabled. */
-  readonly onTodo?: (action: string, params: Record<string, unknown>) => Promise<string>;
-}
-
 export type RunRlm = (input: RlmInput) => Promise<RlmResult>;

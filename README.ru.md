@@ -57,7 +57,7 @@ pi process (TypeScript)
 
 - **Никаких серверов, сокетов или Docker.** Единственным внешним процессом является локальная песочница `python3`. Когда код в песочнице вызывает `llm_query`, worker пишет запрос в stdout и блокируется на stdin; Pi обрабатывает его внутри своего процесса и записывает ответ обратно. **API-ключи провайдеров никогда не попадают в песочницу.**
 - Песочница предоставляет `context`, `llm_query`, `llm_query_batched`, `rlm_query`,
-  `rlm_query_batched`, `SHOW_VARS()`, `todo()`, `ask_user_question()` и словарь `answer`.
+  `rlm_query_batched`, `SHOW_VARS()`, `ask_user_question()` и словарь `answer`.
   Модель отправляет окончательный результат, устанавливая `answer["ready"] = True`.
 
 ## Установка
@@ -94,9 +94,6 @@ rm -rf ~/.pi/agent/extensions/rlm
 | `/rlm` | `Ctrl+Shift+R` | Переключить постоянный режим RLM (направлять обычные промпты через движок RLM) |
 | `/rlm-stop` | | Прервать текущий запуск |
 | `/rlm-config` | | Выбрать smart- и worker-модели и настроить параметры запуска |
-| `/rlm-resume` | | Возобновить прерванный запуск (по умолчанию `@latest`) |
-| `/rlm-runs` | | Список последних запусков |
-| `/rlm-help` | | Показать руководство по запуску и шпаргалку |
 
 Пока запуск активен, **живое дерево** отображает корневой оркестратор и каждый sub-LLM / рекурсивный дочерний элемент со статусом, моделью, стоимостью, токенами и длительностью. Окончательный ответ публикуется в чате в формате markdown; любые правки кода собираются в виде диффов и проверяются через всплывающее окно (если не включен `yolo`).
 
@@ -111,7 +108,6 @@ rm -rf ~/.pi/agent/extensions/rlm
 | `llm_query_batched` | `(prompts, model=None) -> list[str]` | Параллельные вызовы sub-LLM (с ограничением пула) |
 | `rlm_query` | `(prompt, model=None, paths=None) -> str` | Рекурсивный дочерний RLM со своей песочницей (с ограничением глубины). Наследует ваш `context`; `paths` сужает его по префиксу |
 | `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | Параллельные рекурсивные дочерние RLM с общим срезом `paths` |
-| `todo` | `(action, **kwargs) -> str` | Список задач: `create`/`update`/`list`/`get`/`delete`/`clear` |
 | `ask_user_question` | `(questions) -> list[dict]` | Задать пользователю структурированные вопросы (только на глубине 0) |
 | `SHOW_VARS` | `() -> str` | Список текущих переменных и их типов |
 | `answer` | `dict` | Установите `answer["content"]=...; answer["ready"]=True` для завершения |
@@ -132,13 +128,11 @@ rm -rf ~/.pi/agent/extensions/rlm
 | Trajectory compaction | вкл (0.85) | суммаризация истории при приближении к лимиту окна контекста |
 | `yolo` | выкл | применять предлагаемые правки немедленно, пропуская окно подтверждения |
 | `askUserQuestion` | вкл | предоставить доступ к `ask_user_question()` для модели |
-| `todo` | вкл | предоставить доступ к `todo()` для модели |
 
 > **Примечание по параллелизму:** каждый дочерний `rlm_query` запускает собственного worker `python3` (~50–150 мс «холодного старта»). В худшем случае количество параллельных интерпретаторов ≈ `maxConcurrentSubcalls`^(depth−1); при настройках по умолчанию (глубина 4, параллелизм 4) это 4³ = 64 в патологическом случае. Лимиты бюджета и ошибок (см. выше) ограничивают общие затраты независимо от степени разветвления.
 
 ## Телеметрия и логи запусков
 
-- **Логи запусков** (`runLog`): включены по умолчанию. Каждый запуск записывает след в формате JSONL в `.rlm/runs/` (по умолчанию) с ограничением `maxRuns` (50). Поддерживает **снимки** (`sandbox.pkl`) и **возобновление** прерванных запусков через `/rlm-resume`. Снимки защищены сессионным `nonce` для предотвращения повторов между сессиями.
 - **Трассировка MLflow** (`telemetry`): опционально. Установите `MLFLOW_TRACKING_URI` или настройте `trackingUri` / `experimentId` в `/rlm-config`. Корневой запуск помечается как span MLflow для корреляции трасс при возобновлении. Bearer-токен берется из переменной окружения `MLFLOW_TRACKING_TOKEN` и **никогда не сохраняется** в `rlm.json`.
 
 ## Безопасность
@@ -153,22 +147,19 @@ rm -rf ~/.pi/agent/extensions/rlm
 
 ```
 src/
-  sandbox/    worker.py + JSONL stdio driver (PythonSandbox) · protocol.ts · sandbox-manager.ts
-  bridge/     model.ts (одноразовое завершение) · llm-query.ts · rlm-query.ts (рекурсия)
-  core/       engine.ts (цикл) · iteration · limits · answer · compaction · pipeline · types
-  prompts/    системные промпты и промпты для каждого шага (перенесены из Python-референса)
-  text/       парсинг (repl-блоки) · токены · превью · правки
-  state/      дерево-агентов · события · чтения/записи · возобновление · пути · строки
-  tool/       repl-tool · rlm-events · агрегатор · предложение-правок · emitter-listener
-  config/     значения по умолчанию · настройки (сохранение и валидация rlm.json)
-  context/    упаковка репозитория на базе repomix + кеширование
-  telemetry/  MLflow sink · диспетчер · mlflow-config
-  ui/         виджет-дерева · статус · выбор-модели · панель-конфигурации · вступление · тема
+  sandbox/    py/ (worker.py · guards · retrieval · tasks) · sandbox.ts · interrupts · protocol · sandbox-manager · context-file
+  bridge/     model.ts (single completion) · subcall-handlers.ts (the one llm/rlm impl) · ask-user · library
+  core/       engine.ts (the loop) · iteration · limits · resource-limits · answer · compaction · history · types
+  prompts/    glossary (shared REPL vocabulary) · system (headless) · native · user
+  text/       parsing (repl blocks) · tokens · preview
+  tool/       repl-tool · repl-result · repl-render · rlm-tool · rlm-events · rlm-aggregator · subcall-store · background-tasks
+  config/     defaults · settings (rlm.json persistence + validation)
+  context/    repomix repository packing + library context merge
+  ui/         status · model-picker · config-panel · intro · theme
   commands/   rlm · rlm-config
-  mode/       rlm-mode (контроллер) · маршрутизатор-ввода
-  patch/      применение · всплывающее-окно · индекс
-  util/       ошибки · параллелизм
-test/         фазы 1–9 · native-smoke · native-mode · помощники
+  mode/       rlm-mode (controller) · worker-model (cheapest pick) · native-guards
+  util/       errors · concurrency · trace
+test/         phase suites · native-smoke · native-mode · helpers
 ```
 
 ## Тесты

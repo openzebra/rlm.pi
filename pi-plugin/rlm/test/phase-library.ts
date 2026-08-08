@@ -27,8 +27,6 @@ import { pinContext, pinnedCount } from "../src/sandbox/context-file.ts";
 import { buildLibraryHandler } from "../src/bridge/library.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
-import { writeContextSidecar } from "../src/state/writes.ts";
-import { readLibrarySidecars } from "../src/state/reads.ts";
 
 /** Match `lib/<basename>-<8hex>/…` fingerprinted prefixes. */
 function hasLibPrefix(path: string | undefined, basename: string): boolean {
@@ -226,27 +224,7 @@ async function main() {
       !buildRlmSystemPrompt(meta, { libraryLoader: false }).includes("load_library"),
     );
 
-    // 7. Sidecar round-trip
-    const cwd = tmp;
-    const dir = "runs";
-    const runId = "2026-01-01_00-00-00-abcd";
-    await writeContextSidecar(cwd, dir, runId, [{ path: "lib/mylib/a", content: "x", tokens: 1 }], true, 2);
-    const slots = await readLibrarySidecars(cwd, dir, runId);
-    check(
-      "sidecar: write/read library slot index 2",
-      slots.length === 1 && slots[0]?.index === 2 && Array.isArray(slots[0]?.payload),
-      `len=${slots.length} idx=${slots[0]?.index}`,
-    );
-    // slot 0 uses legacy name — must not appear in library lister
-    await writeContextSidecar(cwd, dir, runId, "repo context", false, 0);
-    const slots2 = await readLibrarySidecars(cwd, dir, runId);
-    check(
-      "sidecar: slot 0 context.txt not listed as library slot",
-      slots2.length === 1 && slots2[0]?.index === 2,
-      `len=${slots2.length}`,
-    );
-
-    // 8. Git clone error path (unreachable URL, no network success required)
+    // 7. Git clone error path (unreachable URL, no network success required)
     const gitFail = await resolveLibrarySource("https://127.0.0.1:1/not-a-repo.git", tmp);
     check(
       "resolver: git clone failure returns error",
@@ -258,7 +236,6 @@ async function main() {
     let onLoadedCalls = 0;
     const bundle = buildLibraryHandler({
       cwd: tmp,
-      startIndex: 1,
       onLoaded: async () => { onLoadedCalls++; },
     });
     const first = await bundle.handlers.loadLibrary(f, 0);
@@ -272,7 +249,6 @@ async function main() {
     let collisionLoads = 0;
     const collisionBundle = buildLibraryHandler({
       cwd: tmp,
-      startIndex: 1,
       onLoaded: async () => { collisionLoads++; },
     });
     const loadA = await collisionBundle.handlers.loadLibrary(pathA, 0);
@@ -393,9 +369,8 @@ async function main() {
     let accumulated: unknown = [{ path: "repo.ts", content: "r", tokens: 1 }];
     const accBundle = buildLibraryHandler({
       cwd: tmp,
-      startIndex: 1,
       getContext: () => accumulated,
-      onLoaded: (_i, payload) => { accumulated = mergeLibraryIntoContext(accumulated, payload); },
+      onLoaded: (payload) => { accumulated = mergeLibraryIntoContext(accumulated, payload); },
     });
     await accBundle.handlers.loadLibrary(pathA, 0);
     await accBundle.handlers.loadLibrary(pathB, 0);
@@ -413,7 +388,6 @@ async function main() {
     let repacks = 0;
     const resetBundle = buildLibraryHandler({
       cwd: tmp,
-      startIndex: 1,
       onLoaded: () => { repacks++; },
     });
     await resetBundle.handlers.loadLibrary(pathA, 0);
@@ -430,7 +404,6 @@ async function main() {
     let refusedLoads = 0;
     const refuseBundle = buildLibraryHandler({
       cwd: tmp,
-      startIndex: 1,
       getContext: () => "plain text",   // what a pre-#4 child had as its whole world
       onLoaded: () => { refusedLoads++; },
     });
@@ -448,7 +421,7 @@ async function main() {
     const emptyDir = join(tmp, "empty-lib");
     await mkdir(emptyDir, { recursive: true });
     let emptyRefusal = "";
-    const emptyBundle = buildLibraryHandler({ cwd: tmp, startIndex: 1, getContext: () => [] });
+    const emptyBundle = buildLibraryHandler({ cwd: tmp, getContext: () => [] });
     try {
       await emptyBundle.handlers.loadLibrary(emptyDir, 0);
     } catch (e: unknown) {
