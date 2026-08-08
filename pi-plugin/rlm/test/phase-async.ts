@@ -237,7 +237,7 @@ function testBackgroundRegistry(): void {
 }
 
 async function testUnawaitedCostReported(): Promise<void> {
-  const background = new BackgroundTasks({ maxBudgetUsd: 1 });
+  const background = new BackgroundTasks({});
   const emitter = background.invocation.emitter;
   check("BackgroundTasks starts with nothing pending", background.pending === 0, `${background.pending}`);
 

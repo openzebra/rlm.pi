@@ -106,7 +106,7 @@ If a new sandbox function is needed (e.g., `new_tool()` from Python):
 1. Add the interrupt type to `protocol.ts` (`WorkerInterrupt` union)
 2. Add the handler to the `SubLlmHandlers` interface in `sandbox/interrupts.ts`
 3. Implement in `py/worker.py` (Worker class `_new_tool` + RPC)
-4. Wire in `bridge/ask-user.ts` or a new bridge file — reuse the emitter pattern
+4. Wire in `bridge/library.ts` or a new bridge file — reuse the emitter pattern
 5. Register in `sandbox/interrupts.ts`: the `SubLlmHandlers` interface, the `REJECT` default,
    and the `serviceInterrupt` dispatch
 6. Register in `py/worker.py` `RESERVED` + `_restore_scaffold`

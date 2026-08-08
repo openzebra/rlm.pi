@@ -9,7 +9,6 @@
 
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { buildInteractiveHandlers } from "../bridge/ask-user.ts";
 import { buildLibraryHandler } from "../bridge/library.ts";
 import { mergeLibraryIntoContext } from "../context/library-context.ts";
 import {
@@ -30,7 +29,7 @@ import { compactHistory, shouldCompact } from "./compaction.ts";
 import { appendUserMessage } from "./history.ts";
 import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
-import type { InteractiveDeps, RlmConfig, RlmInput, RlmResult, RunRlm, Sampling } from "./types.ts";
+import type { RlmConfig, RlmInput, RlmResult, RunRlm, Sampling } from "./types.ts";
 import { serializeForSandbox, type ContextBundle } from "../context/repomix-context.ts";
 import { formatError } from "../util/errors.ts";
 import { createSubcallGates, type SubcallGates } from "../util/concurrency.ts";
@@ -43,9 +42,9 @@ import { createSubcallGates, type SubcallGates } from "../util/concurrency.ts";
 const DETACHED_SETTLE_MS = 5_000;
 
 
-export interface EngineDeps extends InteractiveDeps {
+export interface EngineDeps {
   readonly model: Model<Api>;
-  readonly workerModel: Model<Api>;
+  readonly llmModel: Model<Api>;
   readonly registry: ModelRegistry;
   readonly config: RlmConfig;
   readonly limits?: Limits;
@@ -89,10 +88,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
     const model = overrideModel ?? deps.model;
 
     // Create LimitGuard BEFORE the bridge so sub-LLM usage feeds into it.
-    // Children inherit the parent's remaining budget/timeout (reference: limits propagate
-    // as remaining amounts, not the full original cap).
+    // Children inherit the parent's remaining timeout (propagated as remaining amount, not
+    // the full original cap).
     const limits = new LimitGuard({
-      maxBudgetUsd: input.remainingBudgetUsd ?? deps.limits?.maxBudgetUsd,
       maxTimeoutMs: input.remainingTimeoutMs ?? deps.limits?.maxTimeoutMs,
       maxErrors: deps.limits?.maxErrors,
       maxTokens: deps.limits?.maxTokens,
@@ -106,7 +104,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
       parentId: selfReportId,
       depth: input.depth,
       limits: {
-        remainingBudgetUsd: () => limits.remainingBudgetUsd(),
         remainingTimeoutMs: () => limits.remainingTimeoutMs(),
         addUsage: (u) => {
           limits.addUsage(u);
@@ -126,7 +123,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
       gates: deps.gates
         ?? createSubcallGates(deps.config.maxConcurrentSubcalls, deps.config.maxConcurrentChildren),
       registry: deps.registry,
-      getWorkerModel: () => deps.workerModel,
+      getLlmModel: () => deps.llmModel,
       getModel: () => model,
       getConfig: () => deps.config,
       signal: deps.signal,
@@ -190,17 +187,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
       const system = buildRlmSystemPrompt(meta, {
         orchestrator: deps.config.orchestrator,
         recursion: input.depth + 1 < deps.config.maxDepth,
-        askUserQuestion: deps.config.askUserQuestion && input.depth === 0,
         maxPromptChars: deps.config.maxPromptChars,
         libraryLoader: deps.config.libraryLoader,
         child: input.depth > 0,
-      });
-
-      const interactiveHandlers = buildInteractiveHandlers({
-        onAskUserQuestion: deps.config.askUserQuestion ? deps.onAskUserQuestion : undefined,
-        emitter,
-        depth: input.depth,
-        parentId: selfReportId,
       });
 
       const libraryHandlers = deps.config.libraryLoader
@@ -228,7 +217,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         initTimeoutMs: deps.config.sandboxInitTimeoutMs,
         maxPromptChars: deps.config.maxPromptChars,
         awaitTimeoutS: Math.round(deps.config.requestTimeoutMs / 1000),
-        handlers: { ...subcalls, ...interactiveHandlers, ...libraryHandlers },
+        handlers: { ...subcalls, ...libraryHandlers },
       });
 
       let history: ChatMsg[] = [{ role: "system", content: system }];
@@ -250,7 +239,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           const compactionDeps = {
             // Summarisation is done by the cheap worker model; the threshold stays on the
             // root model's context window (that is the window the history fills each turn).
-            model: deps.workerModel,
+            model: deps.llmModel,
             registry: deps.registry,
             contextWindow: model.contextWindow,
             thresholdPct: deps.config.compactionThresholdPct,

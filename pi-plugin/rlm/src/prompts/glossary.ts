@@ -200,7 +200,6 @@ export function howToRunCode(): string {
 export function replGlossary(
   kind: ContextKind,
   recursion: boolean,
-  askUserQuestion: boolean,
   libraryLoader: boolean,
   child: boolean,
 ): string {
@@ -241,17 +240,6 @@ export function replGlossary(
     ...SPAWN_GLOSSARY_LINES,
     ...DELEGATION_GLOSSARY_LINES,
   );
-  if (askUserQuestion) {
-    lines.push(
-      "- `ask_user_question(questions: list[dict]) -> list[dict]`: pause and present the user",
-      "  with 1-4 structured questions. Each question: {question, header, options: [{label, description}],",
-      "  multiSelect?}. Returns list of {question, selected: [label], custom?}.",
-      "  Default: use concrete options grounded in code/data (2–4 choices, Recommended first when ranking).",
-      "  Exception — clarify-phase intent rounds: lead with an open-ended intent question whose options",
-      "  are answer *shapes* (not a Recommended pick); free-text / Other carries the real framing.",
-      "  Only valid at root depth; returns an error inside rlm_query sub-calls.",
-    );
-  }
   if (libraryLoader) {
     lines.push(
       "- `load_library(source: str) -> dict`: load an EXTERNAL library, source tree, or document and",

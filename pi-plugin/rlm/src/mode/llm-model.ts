@@ -1,5 +1,5 @@
 /**
- * Worker-model ranking — "cheapest available", with free models winning outright.
+ * Sub-LLM model ranking — "cheapest available", with free models winning outright.
  *
  * Pi's `ModelCost` is non-nullable (`packages/ai/src/types.ts`), so a free model is a literal 0,
  * not a null. That makes plain price sorting ambiguous rather than wrong: subscription and
@@ -23,13 +23,13 @@ export function isFreeModel(model: Model<Api>): boolean {
 }
 
 /**
- * Negative when `a` is the better worker.
+ * Negative when `a` is the better sub-LLM.
  *
  * Window before maxTokens before id: a free model with a 4K context is useless for bulk reading,
  * so price alone must not decide. The final id comparison exists only to make the result
  * deterministic — without it the pick drifts whenever a provider reorders its catalog.
  */
-export function compareWorker(a: Model<Api>, b: Model<Api>): number {
+export function compareLlm(a: Model<Api>, b: Model<Api>): number {
   return (priceOf(a) - priceOf(b))
     || (b.contextWindow - a.contextWindow)
     || (b.maxTokens - a.maxTokens)
@@ -37,7 +37,7 @@ export function compareWorker(a: Model<Api>, b: Model<Api>): number {
 }
 
 /**
- * Best worker among the models whose provider has configured auth.
+ * Best sub-LLM among the models whose provider has configured auth.
  *
  * Single pass rather than `[...models].sort()[0]`: the copy and the sort both allocate for a
  * result that is one element.
@@ -48,7 +48,7 @@ export function cheapestModel(registry: ModelRegistry): Model<Api> | undefined {
   for (let i = 0; i < models.length; i++) {
     const model = models[i];
     if (model === undefined) continue;
-    if (best === undefined || compareWorker(model, best) < 0) best = model;
+    if (best === undefined || compareLlm(model, best) < 0) best = model;
   }
   return best;
 }

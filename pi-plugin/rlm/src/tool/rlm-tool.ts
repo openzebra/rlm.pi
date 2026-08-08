@@ -8,7 +8,6 @@
 import { type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { createPiInteractiveDeps } from "../bridge/ask-user.ts";
 import type { RlmController, StartInput } from "../mode/rlm-mode.ts";
 import { spinnerFrame } from "../ui/theme.ts";
 import { markdownTheme } from "../ui/theme-adapter.ts";
@@ -85,10 +84,7 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
           rootPrompt: params.prompt,
           context: params.context ?? undefined,
         };
-        const interactive = createPiInteractiveDeps(ctx);
-        const { done } = controller.start(ctx, input, emitter, {
-          onAskUserQuestion: controller.config.askUserQuestion ? interactive.onAskUserQuestion : undefined,
-        });
+        const { done } = controller.start(ctx, input, emitter);
         const result = await done;
 
         emitter.emitAnswer(result.answer);

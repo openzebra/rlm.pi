@@ -18,7 +18,6 @@ export interface LlmReply {
   readonly rid: string;
   readonly response?: string;
   readonly responses?: readonly string[];
-  readonly answers?: readonly AskAnswer[];
   /** load_library reply: temp file with the packed payload (+ namespace metadata). */
   readonly path?: string;
   readonly json?: boolean;
@@ -57,27 +56,7 @@ export type InterruptKind =
   | "llm_query_batched"
   | "rlm_query"
   | "rlm_query_batched"
-  | "ask_user_question"
   | "load_library";
-
-export interface AskOption {
-  readonly label: string;
-  readonly description?: string;
-  readonly preview?: string;
-}
-
-export interface AskQuestion {
-  readonly question: string;
-  readonly header: string;
-  readonly multiSelect?: boolean;
-  readonly options: readonly AskOption[];
-}
-
-export interface AskAnswer {
-  readonly question: string;
-  readonly selected: readonly string[];
-  readonly custom?: string;
-}
 
 interface InterruptBase {
   readonly rid: string;
@@ -109,11 +88,6 @@ interface BatchedPromptInterrupt extends InterruptBase {
   readonly paths?: readonly string[];
 }
 
-export interface AskUserQuestionInterrupt extends InterruptBase {
-  readonly type: "ask_user_question";
-  readonly questions: readonly AskQuestion[];
-}
-
 export interface LoadLibraryInterrupt extends InterruptBase {
   readonly type: "load_library";
   readonly source?: string;
@@ -123,7 +97,6 @@ export interface LoadLibraryInterrupt extends InterruptBase {
 export type WorkerInterrupt =
   | PromptInterrupt
   | BatchedPromptInterrupt
-  | AskUserQuestionInterrupt
   | LoadLibraryInterrupt;
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
@@ -133,7 +106,6 @@ export const INTERRUPT_KINDS = Object.freeze(new Set<InterruptKind>([
   "llm_query_batched",
   "rlm_query",
   "rlm_query_batched",
-  "ask_user_question",
   "load_library",
 ]));
 

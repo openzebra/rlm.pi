@@ -47,7 +47,7 @@ async function main() {
     resolve: () => invocation,
     gates: createSubcallGates(4),
     registry,
-    getWorkerModel: () => worker,
+    getLlmModel: () => worker,
     getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 0, subSampling: { maxTokens: 32 } }),
     onUsage: (u) => {
       totalCost += u.cost.total;

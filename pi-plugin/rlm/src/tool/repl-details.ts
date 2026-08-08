@@ -2,7 +2,7 @@
  * ReplDetails — structured payload for the repl() tool's AgentToolResult<T>.
  *
  * Mirrors RlmDetails but scoped to a single code execution. Sub-calls (llm_query,
- * rlm_query, ask_user_question) triggered during sandbox execution are
+ * rlm_query, load_library) triggered during sandbox execution are
  * accumulated into the subcalls array for tree rendering.
  */
 

@@ -6,7 +6,7 @@
  * touches this file and worker.py; the transport underneath does not change.
  */
 
-import type { AskAnswer, AskQuestion, WorkerInterrupt } from "./protocol.ts";
+import type { WorkerInterrupt } from "./protocol.ts";
 import { writeContextTempFile } from "./context-file.ts";
 import { errorMessage, formatError } from "../util/errors.ts";
 
@@ -24,8 +24,8 @@ export interface LibraryLoadResult {
 /**
  * Per-interrupt routing context for the sub-LLM handlers.
  *
- * Only the four sub-call kinds can be spawned, so only they carry it; the interactive
- * handlers are always synchronous within one exec.
+ * Only the four sub-call kinds can be spawned, so only they carry it; load_library is
+ * always synchronous within one exec.
  */
 export interface SubcallOpts {
   /** Started via `spawn()` — route to session-scoped state, not the current invocation. */
@@ -43,7 +43,6 @@ export interface SubLlmHandlers {
   llmQueryBatched(prompts: readonly string[], model: string | null, depth: number, opts: SubcallOpts): Promise<string[]>;
   rlmQuery(prompt: string, model: string | null, depth: number, opts: SubcallOpts): Promise<string>;
   rlmQueryBatched(prompts: readonly string[], model: string | null, depth: number, opts: SubcallOpts): Promise<string[]>;
-  askUserQuestion(questions: readonly AskQuestion[], depth: number): Promise<AskAnswer[]>;
   loadLibrary(source: string, depth: number): Promise<LibraryLoadResult>;
 }
 
@@ -66,11 +65,6 @@ export const REJECT: SubLlmHandlers = {
   llmQueryBatched: async (p) => p.map(() => formatError("sub-LLM bridge not configured")),
   rlmQuery: async () => formatError("sub-LLM bridge not configured"),
   rlmQueryBatched: async (p) => p.map(() => formatError("sub-LLM bridge not configured")),
-  askUserQuestion: async (questions) => questions.map((q) => ({
-    question: q.question,
-    selected: [],
-    custom: formatError("ask_user_question not configured"),
-  })),
   loadLibrary: async () => { throw new Error("load_library not configured"); },
 };
 
@@ -78,7 +72,6 @@ export const REJECT: SubLlmHandlers = {
 export interface ReplyBody {
   response?: string;
   responses?: string[];
-  answers?: AskAnswer[];
   path?: string;
   json?: boolean;
   files?: number;
@@ -121,9 +114,6 @@ export async function serviceInterrupt(
     } else if (msg.type === "rlm_query_batched") {
       const responses = await h.rlmQueryBatched(msg.prompts ?? [], msg.model ?? null, d, opts);
       reply(msg.rid, { responses });
-    } else if (msg.type === "ask_user_question") {
-      const answers = await h.askUserQuestion(msg.questions ?? [], d);
-      reply(msg.rid, { answers });
     } else if (msg.type === "load_library") {
       const lib = await h.loadLibrary(msg.source ?? "", d);
       if (lib.alreadyLoaded) {

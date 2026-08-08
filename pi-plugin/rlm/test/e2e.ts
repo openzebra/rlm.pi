@@ -57,7 +57,7 @@ interface Args {
   readonly task: string;
   readonly cwd: string;
   readonly model: string;
-  readonly workerModel: string;
+  readonly llmModel: string;
   readonly timeoutS: number;
   readonly stallS: number;
   readonly keep: boolean;
@@ -66,7 +66,7 @@ interface Args {
 function parseArgs(argv: readonly string[]): Args {
   let cwd = REPO_ROOT;
   let model = DEFAULT_MODEL;
-  let workerModel = DEFAULT_MODEL;
+  let llmModel = DEFAULT_MODEL;
   let timeoutS = DEFAULT_TIMEOUT_S;
   let stallS = DEFAULT_STALL_S;
   let keep = false;
@@ -80,7 +80,7 @@ function parseArgs(argv: readonly string[]): Args {
     } else if (a === "--model") {
       model = argv[++i] ?? model;
     } else if (a === "--worker-model") {
-      workerModel = argv[++i] ?? workerModel;
+      llmModel = argv[++i] ?? llmModel;
     } else if (a === "--timeout") {
       timeoutS = Number(argv[++i] ?? timeoutS);
     } else if (a === "--stall") {
@@ -112,7 +112,7 @@ Options:
     console.error('Missing task. Example: bun run test:e2e "Summarize src/sandbox"');
     process.exit(2);
   }
-  return Object.freeze({ task, cwd, model, workerModel, timeoutS, stallS, keep });
+  return Object.freeze({ task, cwd, model, llmModel, timeoutS, stallS, keep });
 }
 
 // ── run dir ───────────────────────────────────────────────────────────────────
@@ -140,13 +140,12 @@ mkdirSync(sessionsDir, { recursive: true });
 writeFileSync(
   join(agentDir, "rlm.json"),
   `${JSON.stringify({
-    worker: args.workerModel,
+    worker: args.llmModel,
     config: {
       enabled: true,
       maxDepth: 2,
-      maxConcurrentSubcalls: 6,
-      maxBudgetUsd: 0.5,
-      runLog: { enabled: false },
+      maxConcurrentSubcalls: 16,
+      maxConcurrentChildren: 6,
     },
   }, null, 2)}\n`,
 );

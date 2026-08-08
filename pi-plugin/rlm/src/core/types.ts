@@ -1,7 +1,6 @@
 /** Shared configuration + runtime types for the RLM engine. */
 
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
-import type { AskAnswer, AskQuestion } from "../sandbox/protocol.ts";
 
 export interface Sampling {
   readonly maxTokens?: number;
@@ -27,8 +26,6 @@ export interface RlmConfig {
   readonly maxConcurrentChildren: number;
   /** Reject sub-LLM prompts larger than this many chars. */
   readonly maxPromptChars: number;
-  /** Max USD spend across the whole tree before the engine stops (undefined = no cap). */
-  readonly maxBudgetUsd?: number;
   /** Max wall-clock ms across the whole tree before the engine stops (undefined = no cap). */
   readonly maxTimeoutMs?: number;
   /** Max total input+output tokens across the whole tree before the engine stops (undefined = no cap). */
@@ -45,8 +42,6 @@ export interface RlmConfig {
   readonly python: string;
   /** Worker startup wait before treating sandbox init as failed (ms). */
   readonly sandboxInitTimeoutMs: number;
-  /** Allow ask_user_question() calls from the root REPL. */
-  readonly askUserQuestion: boolean;
   /** Enable the load_library() REPL scaffold (external dirs/files/git repos as extra context slots). */
   readonly libraryLoader: boolean;
   /** ThinkingLevel for the root smart model (set via /rlm-config). */
@@ -75,8 +70,6 @@ export interface RlmInput {
   readonly parentNodeId?: string;
   /** "provider/id" — overrides the root model for this run (set by recursive rlm_query). */
   readonly modelOverride?: string;
-  /** Remaining budget for this subtree (set by parent from its LimitGuard). */
-  readonly remainingBudgetUsd?: number;
   /** Remaining timeout for this subtree (set by parent from its LimitGuard). */
   readonly remainingTimeoutMs?: number;
 }
@@ -92,9 +85,4 @@ export interface RlmResult {
 }
 
 /** A function that runs an RLM to completion — used to wire recursion (rlm_query). */
-export interface InteractiveDeps {
-  /** Called when the sandbox issues ask_user_question; undefined = feature disabled. */
-  readonly onAskUserQuestion?: (questions: readonly AskQuestion[]) => Promise<AskAnswer[]>;
-}
-
 export type RunRlm = (input: RlmInput) => Promise<RlmResult>;

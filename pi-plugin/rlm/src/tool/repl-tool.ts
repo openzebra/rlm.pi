@@ -20,12 +20,11 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { Model, Usage, Api } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { buildInteractiveHandlers, createPiInteractiveDeps } from "../bridge/ask-user.ts";
 import { buildLibraryHandler } from "../bridge/library.ts";
 import { libraryPrefixesIn } from "../context/library-context.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
 import { LimitGuard, limitsFromConfig } from "../core/limits.ts";
-import type { InteractiveDeps, RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
+import type { RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
 import { SandboxManager } from "../sandbox/sandbox-manager.ts";
 import type { SubcallOpts } from "../sandbox/sandbox.ts";
 import { createSubcallHandlers, type Invocation } from "../bridge/subcall-handlers.ts";
@@ -79,14 +78,11 @@ export const ReplToolParams = Object.freeze(Type.Object({
  */
 class NativeBridgeState {
   private current: Invocation | null = null;
-  /** Interactive callbacks for the turn in progress; child engines inherit them. */
-  interactive: InteractiveDeps | null = null;
 
   constructor(private readonly background: BackgroundTasks) {}
 
-  swap(inv: Invocation, interactive: InteractiveDeps): void {
+  swap(inv: Invocation): void {
     this.current = Object.freeze({ ...inv });
-    this.interactive = interactive;
   }
 
   /** Detached ⇒ session registry; otherwise the turn that is currently executing. */
@@ -106,9 +102,9 @@ class NativeBridgeState {
 export interface ReplToolDeps {
   readonly sandboxManager: SandboxManager;
   readonly model: Model<Api>;
-  readonly workerModel: Model<Api>;
+  readonly llmModel: Model<Api>;
   readonly getModel?: () => Model<Api> | undefined;
-  readonly getWorkerModel?: () => Model<Api> | undefined;
+  readonly getLlmModel?: () => Model<Api> | undefined;
   readonly registry: ModelRegistry;
   /** Live accessor — `/rlm-config` replaces the config object, so never capture the value. */
   readonly getConfig: () => RlmConfig;
@@ -124,13 +120,13 @@ export interface ReplToolDeps {
 }
 
 export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplToolParams, ReplDetails> {
-  const { sandboxManager, workerModel, registry, getConfig, signal, onUsage, background } = deps;
+  const { sandboxManager, llmModel, registry, getConfig, signal, onUsage, background } = deps;
   const bridgeState = new NativeBridgeState(background);
 
   // Late-bound cwd — getOrCreate installs handlers only at spawn; never rebuild the closure.
   let sessionCwd = process.cwd();
 
-  const getWorkerModel = (): Model<Api> => deps.getWorkerModel?.() ?? workerModel;
+  const getLlmModel = (): Model<Api> => deps.getLlmModel?.() ?? llmModel;
   const getModel = (): Model<Api> => deps.getModel?.() ?? deps.model;
 
   // Each rlm_query spawns a child RLM with its own sandbox and turn loop, not a flat
@@ -138,7 +134,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
   // progress and cost deltas land on the emitter the parent invocation is using.
   const runChild = (input: RlmInput, inv: Invocation): Promise<RlmResult> => createEngine({
     model: getModel(),
-    workerModel: getWorkerModel(),
+    llmModel: getLlmModel(),
     registry,
     config: getConfig(),
     signal,
@@ -149,7 +145,6 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     // the child's own root turns — so fold both roles into "sub" rather than casting.
     onUsage: onUsage === undefined ? undefined : (usage: Usage) => onUsage(usage, "sub"),
     limits: limitsFromConfig(getConfig()),
-    onAskUserQuestion: bridgeState.interactive?.onAskUserQuestion,
   })(input);
 
   // Built once: the same closures stay correct across repl() calls because everything
@@ -158,7 +153,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     resolve: (opts) => bridgeState.resolve(opts),
     gates: deps.gates,
     registry,
-    getWorkerModel,
+    getLlmModel,
     getModel,
     getConfig,
     signal,
@@ -202,7 +197,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       "semantic reading to map_files / llm_query / llm_query_batched / llm_query_chunked " +
       "(rlm_query for iterative sub-tasks) — stdout returned to you is hard-capped at 4K chars, " +
       "so printing file bodies is useless. Variables, imports, and the `answers`/`plan` memo " +
-      "persist across calls. Also supports ask_user_question and load_library.",
+      "persist across calls. Also supports load_library.",
     promptSnippet:
       "repl: run Python in a persistent sandbox holding the whole repository in `context`; " +
       "search/grep_context/outline to locate, map_files/llm_query* to read.",
@@ -271,21 +266,11 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       }
 
       try {
-        // Build interactive handlers (session-stable callbacks)
-        const interactive = createPiInteractiveDeps(ctx);
-        const interactiveHandlers = buildInteractiveHandlers({
-          onAskUserQuestion: getConfig().askUserQuestion ? interactive.onAskUserQuestion : undefined,
-          emitter,
-          depth: 0,
-          parentId: undefined,
-        });
-
         sessionCwd = ctx.cwd ?? process.cwd();
 
         await deps.ensureContext?.();
         await sandboxManager.getOrCreate({
           ...subcallHandlers,
-          askUserQuestion: interactiveHandlers.askUserQuestion,
           ...(libraryBundle?.handlers ?? {}),
         });
 
@@ -307,7 +292,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           // Wire per-invocation mutable state only after the serialized exec slot
           // is active. Swapping earlier would let queued repl() calls overwrite
           // emitter/limits for the currently running REPL execution.
-          bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits }, interactive);
+          bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
         }, execSignal);
         const elapsed = Date.now() - start;
         capturedStdout = result.stdout;

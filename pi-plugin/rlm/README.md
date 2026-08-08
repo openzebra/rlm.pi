@@ -115,7 +115,6 @@ These functions are injected into the model's Python namespace inside the REPL:
 | `llm_query_chunked` | `(text, prompt, model=None) -> list[str]` | Split large text into cap-sized chunks and fan out via sub-LLMs |
 | `rlm_query` | `(prompt, model=None, paths=None) -> str` | Recursive child RLM with its own sandbox (depth-capped). Inherits your `context`; `paths` narrows it by prefix |
 | `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | Concurrent recursive child RLMs, sharing one `paths` slice |
-| `ask_user_question` | `(questions) -> list[dict]` | Ask the user structured questions (depth 0 only) |
 | `load_library` | `(source) -> dict \| str` | Append an external dir, file, or git URL into `context` under `lib/<id>/` |
 | `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
 | `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
@@ -147,23 +146,21 @@ default on). A library loaded at any point is inherited by every child spawned a
 | Max recursion depth | `4` | `rlm_query` past this degrades to plain `llm_query` |
 | Max iterations | `30` | root REPL turns before RLM asks for a final answer |
 | REPL block timeout (s) | `120` | wall-clock limit for one Python REPL block (SIGALRM) |
-| Max concurrent sub-calls | `4` | concurrency pool size for `*_batched` |
-| Budget ceiling (USD) | none | total spend cap for the whole recursive tree |
+| Max concurrent sub-calls | `16` | concurrency pool size for `*_batched` |
+| Max concurrent children | `6` | concurrent `rlm_query` child engines per depth |
 | Wall-clock ceiling (min) | none | total runtime cap for the whole recursive tree |
 | Token ceiling | none | total input+output token cap for the whole recursive tree |
 | Max consecutive errors | `5` | stop after N consecutive failing turns (none = off) |
 | Orchestrator addendum | on | divide-and-conquer guidance in the root system prompt |
-| Ask user question | on | expose `ask_user_question()` to the model (root depth only) |
 | Trajectory compaction | on (0.65) | summarize old turns when history nears the context window |
 | Root model output cap (tok) | `16384` | max output tokens per root-model turn |
 | Sandbox init timeout | `30000` ms | how long to wait for the Python worker to start |
-| `askUserQuestion` | on | expose `ask_user_question()` to the model |
 | Library loader | on | expose `load_library()` for external dirs/files/git repos |
 
 > **Concurrency note:** each `rlm_query` child spawns its own `python3` worker (~50–150 ms
-> cold start). Worst-case concurrent interpreters ≈ `maxConcurrentSubcalls`^(depth−1); at
-> defaults (depth 4, conc 4) that's 4³ = 64 in the pathological case. Budget and error
-> caps (above) bound total spend regardless of fan-out.
+> cold start). Children are bounded separately (`maxConcurrentChildren`, default 6) because
+> each holds a full Python process and its own copy of the inherited context. Error and
+> wall-clock caps (above) still bound a runaway tree.
 
 ## Security
 

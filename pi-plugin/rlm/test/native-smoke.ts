@@ -62,7 +62,7 @@ check("native prompt — contains [NATIVE RLM MODE]", nativePrompt.includes("NAT
 check("native prompt — mentions repl", nativePrompt.includes("repl"));
 
 const meta = { contextType: contextTypeLabel(bundle), contextChars: contextLength(bundle) };
-const fullPrompt = buildRlmSystemPrompt(meta, { orchestrator: true, recursion: true, askUserQuestion: true });
+const fullPrompt = buildRlmSystemPrompt(meta, { orchestrator: true, recursion: true });
 check("rlm system prompt — non-empty", fullPrompt.length > 500);
 check("rlm system prompt — mentions llm_query", fullPrompt.includes("llm_query"));
 check("rlm system prompt — mentions rlm_query", fullPrompt.includes("rlm_query"));
@@ -146,11 +146,14 @@ print(f"rlm_query signature: {sig}")
 check("REPL — rlm_query function exists", r6.stdout.includes("rlm_query signature"));
 
 const r7 = await mgr.exec(`
-# Verify ask_user_question function exists
-sig = inspect.signature(ask_user_question)
-print(f"ask_user_question signature: {sig}")
+# Verify ask_user_question was removed
+try:
+    ask_user_question
+    print("ask_user_question still present")
+except NameError:
+    print("ask_user_question removed")
 `);
-check("REPL — ask_user_question function exists", r7.stdout.includes("ask_user_question signature"));
+check("REPL — ask_user_question removed", r7.stdout.includes("ask_user_question removed"));
 
 const r8 = await mgr.exec(`
 # Verify SHOW_VARS works

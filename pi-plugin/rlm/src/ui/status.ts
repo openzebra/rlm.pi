@@ -12,12 +12,12 @@ export function modelLabel(model: Model<Api> | undefined, fallback: string): str
 
 export function formatRlmStateLine(controller: RlmController, contextUsage?: ContextUsage): string {
   if (!controller.enabled) return "○ RLM OFF";
-  const worker = modelLabel(controller.workerModel, controller.savedWorkerRef ?? "cheapest");
-  const workerSuffix = controller.config.subSampling.reasoning ? `:${controller.config.subSampling.reasoning}` : "";
+  const llm = modelLabel(controller.llmModel, controller.savedLlmRef ?? "cheapest");
+  const llmSuffix = controller.config.subSampling.reasoning ? `:${controller.config.subSampling.reasoning}` : "";
   // `percent` is null right after a compaction, before the next assistant response reports usage.
   const percent = contextUsage?.percent;
   const ctxSuffix = percent === null || percent === undefined ? "" : ` · ctx ${Math.round(percent)}%`;
-  return `● RLM ON · worker=${worker}${workerSuffix}${ctxSuffix}`;
+  return `● RLM ON · llm=${llm}${llmSuffix}${ctxSuffix}`;
 }
 
 export function setRlmModeStatus(ui: ExtensionUIContext, controller: RlmController, contextUsage?: ContextUsage): void {

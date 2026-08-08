@@ -1,4 +1,4 @@
-/** Persist RLM settings (tunable config + chosen worker model id). */
+/** Persist RLM settings (tunable config + pinned sub-LLM model id). */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -9,7 +9,8 @@ import { DEFAULT_CONFIG } from "./defaults.ts";
 
 export interface PersistedSettings {
   readonly config: Partial<RlmConfig>;
-  readonly worker?: string;
+  /** "provider/id" of the pinned sub-LLM, or undefined for "cheapest (auto)". */
+  readonly llm?: string;
 }
 
 type MutablePartialRlmConfig = { -readonly [K in keyof RlmConfig]?: RlmConfig[K] };
@@ -63,8 +64,6 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (maxConcurrentChildren !== undefined) out.maxConcurrentChildren = maxConcurrentChildren;
   const maxPromptChars = validateNumber(r.maxPromptChars, 1000);
   if (maxPromptChars !== undefined) out.maxPromptChars = maxPromptChars;
-  const maxBudgetUsd = validateNumber(r.maxBudgetUsd, 0.01);
-  if (maxBudgetUsd !== undefined) out.maxBudgetUsd = maxBudgetUsd;
   const maxTimeoutMs = validateNumber(r.maxTimeoutMs, 1000);
   if (maxTimeoutMs !== undefined) out.maxTimeoutMs = maxTimeoutMs;
   const maxTokens = validateNumber(r.maxTokens, 1);
@@ -85,8 +84,6 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (subSystemPrompt !== undefined) out.subSystemPrompt = subSystemPrompt;
   const sandboxInitTimeoutMs = validateNumber(r.sandboxInitTimeoutMs, 100);
   if (sandboxInitTimeoutMs !== undefined) out.sandboxInitTimeoutMs = sandboxInitTimeoutMs;
-  const askUserQuestion = validateBoolean(r.askUserQuestion);
-  if (askUserQuestion !== undefined) out.askUserQuestion = askUserQuestion;
   const libraryLoader = validateBoolean(r.libraryLoader);
   if (libraryLoader !== undefined) out.libraryLoader = libraryLoader;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
@@ -121,7 +118,8 @@ export async function loadSettings(): Promise<PersistedSettings> {
     const r = raw as Record<string, unknown>;
     return {
       config: validateConfig(r.config),
-      worker: typeof r.worker === "string" ? r.worker : undefined,
+      // `worker` is the pre-rename key — still read so an existing pin survives the upgrade.
+      llm: validateString(r.llm) ?? validateString(r.worker),
     };
   } catch {
     return { config: {} };

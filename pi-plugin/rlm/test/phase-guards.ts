@@ -179,12 +179,12 @@ async function main() {
     handlers: {},
   });
   try {
-    for (const name of Object.freeze(["todo", "save_artifact", "advance_phase"])) {
+    for (const name of Object.freeze(["todo", "save_artifact", "advance_phase", "ask_user_question"])) {
       const probe = await sandbox.exec(`print(${name})`);
       check(`${name} is removed from the sandbox`, probe.raised && probe.stderr.includes("NameError"), probe.stderr.slice(0, 120));
     }
-    const alive = await sandbox.exec("print(callable(llm_query), callable(search), callable(ask_user_question), callable(load_library))");
-    check("retrieval + delegation surface intact", !alive.raised && alive.stdout.includes("True True True True"), alive.stderr.slice(0, 120));
+    const alive = await sandbox.exec("print(callable(llm_query), callable(search), callable(load_library))");
+    check("retrieval + delegation surface intact", !alive.raised && alive.stdout.includes("True True True"), alive.stderr.slice(0, 120));
   } finally {
     await sandbox.dispose();
   }

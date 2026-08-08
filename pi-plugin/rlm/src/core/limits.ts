@@ -1,7 +1,9 @@
 /**
- * LimitGuard — wall-clock, token, cost, and consecutive-error caps for a headless RLM run
+ * LimitGuard — wall-clock, token, and consecutive-error caps for a headless RLM run
  * (ported from rlm/core/rlm.py `_check_timeout` / `_check_iteration_limits`). Any breach throws
  * a LimitError; the engine catches it and returns the best partial answer it has.
+ *
+ * Cost is tracked for reporting only — there is no USD spend ceiling.
  */
 
 import type { Usage } from "@earendil-works/pi-ai";
@@ -9,14 +11,12 @@ import type { Usage } from "@earendil-works/pi-ai";
 export interface Limits {
   readonly maxTimeoutMs?: number;
   readonly maxTokens?: number;
-  readonly maxBudgetUsd?: number;
   readonly maxErrors?: number;
 }
 
 /** Pick the limit caps out of a config (`RlmConfig` satisfies this structurally). */
 export function limitsFromConfig(config: Limits): Limits {
   return {
-    maxBudgetUsd: config.maxBudgetUsd,
     maxTimeoutMs: config.maxTimeoutMs,
     maxTokens: config.maxTokens,
     maxErrors: config.maxErrors,
@@ -33,7 +33,7 @@ export interface UsageSnapshot {
 
 export class LimitError extends Error {
   constructor(
-    public readonly kind: "timeout" | "tokens" | "budget" | "errors",
+    public readonly kind: "timeout" | "tokens" | "errors",
     message: string,
   ) {
     super(message);
@@ -77,15 +77,12 @@ export class LimitGuard {
   /** Call after each turn with whether the turn's REPL produced an error. */
   observe(hadError: boolean): void {
     this.consecutiveErrors = hadError ? this.consecutiveErrors + 1 : 0;
-    const { maxErrors, maxTokens, maxBudgetUsd } = this.limits;
+    const { maxErrors, maxTokens } = this.limits;
     if (maxErrors && this.consecutiveErrors >= maxErrors) {
       throw new LimitError("errors", `${this.consecutiveErrors} consecutive errors (limit ${maxErrors})`);
     }
     if (maxTokens && this.inputTokens + this.outputTokens > maxTokens) {
       throw new LimitError("tokens", `${this.inputTokens + this.outputTokens} tokens (limit ${maxTokens})`);
-    }
-    if (maxBudgetUsd && this.costUsd > maxBudgetUsd) {
-      throw new LimitError("budget", `$${this.costUsd.toFixed(4)} spent (limit $${maxBudgetUsd})`);
     }
   }
 
@@ -96,10 +93,6 @@ export class LimitGuard {
       costUsd: this.costUsd,
       durationMs: Date.now() - this.start,
     };
-  }
-
-  remainingBudgetUsd(): number | undefined {
-    return this.limits.maxBudgetUsd === undefined ? undefined : this.limits.maxBudgetUsd - this.costUsd;
   }
 
   remainingTimeoutMs(): number | undefined {
