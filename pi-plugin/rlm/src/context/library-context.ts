@@ -150,18 +150,95 @@ export function namespaceLibraryFiles(
   return namespaceLibraryFilesWithChars(payload, sourceId).files;
 }
 
+/** The one `lib/<id>/` matcher. Never re-declare this regex; use the helpers below. */
+const LIB_PREFIX_RE = /^(lib\/[^/]+\/)/;
+
+/** Narrow an unknown context entry to a ContextFile. Type guard, never a cast. */
+export function isContextFile(entry: unknown): entry is ContextFile {
+  if (entry === null || typeof entry !== "object") return false;
+  return "path" in entry && typeof entry.path === "string"
+    && "content" in entry && typeof entry.content === "string";
+}
+
+/** `path` of a context entry, or undefined when the entry is not file-shaped. */
+export function contextEntryPath(entry: unknown): string | undefined {
+  return isContextFile(entry) ? entry.path : undefined;
+}
+
+/** The `lib/<id>/` prefix owning this path, or undefined. Skips the legacy catch-all. */
+function libPrefixOf(path: string): string | undefined {
+  const prefix = LIB_PREFIX_RE.exec(path)?.[1];
+  // `lib/unknown/` is the legacy catch-all: never treat it as an identity.
+  return prefix === undefined || prefix === LEGACY_UNKNOWN_PREFIX ? undefined : prefix;
+}
+
 /** First `lib/<id>/` prefix found in the payload, or undefined. Skips `lib/unknown/`. */
 export function payloadPrefix(payload: readonly unknown[]): string | undefined {
   for (let i = 0; i < payload.length; i++) {
-    const item = payload[i];
-    if (item === null || typeof item !== "object") continue;
-    const path = (item as { path?: unknown }).path;
-    if (typeof path !== "string") continue;
-    const m = /^(lib\/[^/]+\/)/.exec(path);
-    // `lib/unknown/` is the legacy catch-all: never treat it as an identity.
-    if (m?.[1] !== undefined && m[1] !== LEGACY_UNKNOWN_PREFIX) return m[1];
+    const path = contextEntryPath(payload[i]);
+    if (path === undefined) continue;
+    const prefix = libPrefixOf(path);
+    if (prefix !== undefined) return prefix;
   }
   return undefined;
+}
+
+/**
+ * Every distinct `lib/<id>/` prefix present in a context payload.
+ *
+ * The loaded-prefix set in bridge/library.ts is a CACHE of this — derived state, never
+ * independent state, so it may only be cleared by re-deriving it from the live payload.
+ */
+export function libraryPrefixesIn(context: unknown): readonly string[] {
+  if (!Array.isArray(context)) return Object.freeze([]);
+  const seen = new Set<string>();
+  for (let i = 0; i < context.length; i++) {
+    const path = contextEntryPath(context[i]);
+    if (path === undefined) continue;
+    const prefix = libPrefixOf(path);
+    if (prefix !== undefined) seen.add(prefix);
+  }
+  return Object.freeze(Array.from(seen));
+}
+
+export interface FilteredContext {
+  readonly files: readonly ContextFile[];
+  /** Prefixes that selected zero files — the caller decides whether that is fatal. */
+  readonly unmatched: readonly string[];
+}
+
+/**
+ * Narrow a context payload to entries under any of `prefixes` (plain prefix match, no globs).
+ *
+ * Backs `rlm_query(prompt, paths=[…])`. Prefix-only is deliberate: the sandbox's own filters use
+ * Python `fnmatch`, which has no host-side equivalent here, and a subtree prefix is what callers
+ * actually want — the child can still `search()` inside the slice.
+ */
+export function filterContextByPaths(context: unknown, prefixes: readonly string[]): FilteredContext {
+  if (!Array.isArray(context) || prefixes.length === 0) {
+    return Object.freeze({ files: Object.freeze([]), unmatched: Object.freeze(Array.from(prefixes)) });
+  }
+  const hit = new Array<boolean>(prefixes.length).fill(false);
+  const out = new Array<ContextFile>(context.length); // pre-allocated, trimmed once below
+  let n = 0;
+  for (let i = 0; i < context.length; i++) {
+    const entry: unknown = context[i];
+    if (!isContextFile(entry)) continue;
+    for (let p = 0; p < prefixes.length; p++) {
+      if (!entry.path.startsWith(prefixes[p])) continue;
+      hit[p] = true;
+      out[n++] = entry;
+      break;
+    }
+  }
+  out.length = n;
+  const unmatched = new Array<string>(prefixes.length); // pre-allocated, no .push()
+  let u = 0;
+  for (let p = 0; p < prefixes.length; p++) {
+    if (!hit[p]) unmatched[u++] = prefixes[p];
+  }
+  unmatched.length = u;
+  return Object.freeze({ files: Object.freeze(out), unmatched: Object.freeze(unmatched) });
 }
 
 /**
@@ -175,12 +252,8 @@ export function mergeLibraryIntoContext(base: unknown, libraryPayload: unknown):
     const prefix = payloadPrefix(libraryPayload);
     if (prefix !== undefined) {
       for (let i = 0; i < base.length; i++) {
-        const item = base[i];
-        if (item !== null && typeof item === "object"
-          && typeof (item as { path?: unknown }).path === "string"
-          && (item as { path: string }).path.startsWith(prefix)) {
-          return base; // already present
-        }
+        const path = contextEntryPath(base[i]);
+        if (path !== undefined && path.startsWith(prefix)) return base; // already present
       }
     }
     const merged = new Array<unknown>(base.length + libraryPayload.length);

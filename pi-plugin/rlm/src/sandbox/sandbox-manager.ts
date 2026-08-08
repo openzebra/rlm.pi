@@ -6,6 +6,7 @@
 
 import { PythonSandbox, type SubLlmHandlers } from "./sandbox.ts";
 import type { ReplResult } from "./protocol.ts";
+import { mergeLibraryIntoContext } from "../context/library-context.ts";
 
 /** Static configuration for sandbox creation — set once, reused across getOrCreate calls. */
 export interface SandboxManagerConfig {
@@ -33,6 +34,18 @@ export class SandboxManager {
   private contextLoaded = false;
 
   constructor(private readonly config: SandboxManagerConfig) {}
+
+  /**
+   * Append a library payload to the context this manager replays on death-recreate.
+   *
+   * The live worker has ALREADY appended it in-process (worker.py `_append_library`), so this
+   * deliberately does not reload — it only keeps the host's replay copy truthful. Without it a
+   * recreate silently rolls the sandbox back to a repo-only context, and any child inheriting
+   * this payload would never see the library. Dedups by `lib/<id>/` prefix.
+   */
+  appendLibrary(payload: unknown): void {
+    this.contextPayload = mergeLibraryIntoContext(this.contextPayload, payload);
+  }
 
   /**
    * Lazy get-or-create the sandbox. On first call, spawns PythonSandbox with the

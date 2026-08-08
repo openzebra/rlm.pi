@@ -74,6 +74,8 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (requestTimeoutMs !== undefined) out.requestTimeoutMs = requestTimeoutMs;
   const maxConcurrentSubcalls = validateNumber(r.maxConcurrentSubcalls, 1);
   if (maxConcurrentSubcalls !== undefined) out.maxConcurrentSubcalls = maxConcurrentSubcalls;
+  const maxConcurrentChildren = validateNumber(r.maxConcurrentChildren, 1);
+  if (maxConcurrentChildren !== undefined) out.maxConcurrentChildren = maxConcurrentChildren;
   const maxPromptChars = validateNumber(r.maxPromptChars, 1000);
   if (maxPromptChars !== undefined) out.maxPromptChars = maxPromptChars;
   const maxBudgetUsd = validateNumber(r.maxBudgetUsd, 0.01);

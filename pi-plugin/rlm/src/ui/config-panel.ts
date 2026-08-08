@@ -10,6 +10,7 @@ const CHOICES = Object.freeze({
   maxIterations: Object.freeze(["10", "20", "30", "50"]),
   execTimeoutS: Object.freeze(["30", "60", "120", "300"]),
   maxConcurrentSubcalls: Object.freeze(["2", "4", "8", "16"]),
+  maxConcurrentChildren: Object.freeze(["1", "2", "3", "4", "6"]),
   maxBudgetUsd: Object.freeze(["none", "0.50", "1", "5"]),
   maxTimeoutMs: Object.freeze(["none", "60", "120", "300"]),
   maxTokens: Object.freeze(["none", "10000", "50000", "100000"]),
@@ -43,6 +44,7 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("maxIterations", "Max iterations", String(config.maxIterations), CHOICES.maxIterations, "Maximum root REPL turns before RLM asks the model for a final answer."),
     item("execTimeoutS", "REPL block timeout (s)", String(config.execTimeoutS), CHOICES.execTimeoutS, "Wall-clock limit for one model-authored Python REPL block."),
     item("maxConcurrentSubcalls", "Max concurrent sub-calls", String(config.maxConcurrentSubcalls), CHOICES.maxConcurrentSubcalls, "Concurrency pool size for llm_query_batched and rlm_query_batched."),
+    item("maxConcurrentChildren", "Max concurrent children", String(config.maxConcurrentChildren), CHOICES.maxConcurrentChildren, "Concurrent rlm_query child engines per depth. Each is a Python process holding its own copy of the inherited context."),
     item("maxBudgetUsd", "Budget ceiling (USD)", config.maxBudgetUsd != null ? String(config.maxBudgetUsd) : "none", CHOICES.maxBudgetUsd, "Total spend cap for the whole recursive tree; none disables the cap."),
     item("maxTimeoutMs", "Wall-clock ceiling (min)", config.maxTimeoutMs != null ? String(Math.round(config.maxTimeoutMs / 60_000)) : "none", CHOICES.maxTimeoutMs, "Total runtime cap for the whole recursive tree; none disables the cap."),
     item("maxTokens", "Token ceiling", config.maxTokens != null ? String(config.maxTokens) : "none", CHOICES.maxTokens, "Total input+output token cap for the whole recursive tree."),
@@ -101,6 +103,7 @@ export function applySetting(config: RlmConfig, id: string, value: string): RlmC
     case "maxIterations": return Object.freeze({ ...config, maxIterations: Number(value) });
     case "execTimeoutS": return Object.freeze({ ...config, execTimeoutS: Number(value) });
     case "maxConcurrentSubcalls": return Object.freeze({ ...config, maxConcurrentSubcalls: Number(value) });
+    case "maxConcurrentChildren": return Object.freeze({ ...config, maxConcurrentChildren: Number(value) });
     case "maxBudgetUsd": return Object.freeze({ ...config, maxBudgetUsd: optionalNumber(value) });
     case "maxTimeoutMs": return Object.freeze({ ...config, maxTimeoutMs: optionalNumber(value, 60_000) });
     case "maxTokens": return Object.freeze({ ...config, maxTokens: optionalNumber(value) });

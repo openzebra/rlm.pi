@@ -21,6 +21,8 @@ export interface SystemPromptOptions {
   readonly pipeline?: boolean;
   readonly maxPromptChars?: number;
   readonly libraryLoader?: boolean;
+  /** depth > 0 — this run is an rlm_query child and its `context` is the parent's world. */
+  readonly child?: boolean;
 }
 
 export type ContextKind = "files" | "text";
@@ -89,6 +91,35 @@ const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "  hits = [f for f in context if \"TODO\" in f[\"content\"]]   # overlaps with the sub-agents",
   "  reports = rlm_await_all(tasks)",
   "  ```",
+]);
+
+/**
+ * What a parent must know about the child it is about to spawn. Without this the model writes
+ * referential prompts ("read lib/x/src/…") on the assumption the child can go fetch them, which
+ * is what made a missing child context degrade silently instead of failing (issue #4).
+ */
+const RECURSION_CONTEXT_LINES: readonly string[] = Object.freeze([
+  "",
+  "  **What a child sees:** it inherits YOUR `context` — the repository plus every library you",
+  "  loaded (`lib/<id>/…`) — and runs `search` / `grep_context` / `outline` / `map_files` over the",
+  "  same paths. So send instructions, never file bodies: pasting content you already share costs",
+  "  your tokens twice and buys nothing. Your prompt becomes the child's question.",
+  "  Narrow its world with `rlm_query(prompt, paths=['src/auth/', 'lib/x-9f3a/'])` — path PREFIXES,",
+  "  not globs. Omit `paths` to hand over everything.",
+  "  Inheritance is one-way: libraries the child loads, and its whole REPL, die with it — only its",
+  "  final answer string returns.",
+  "  At the depth cap `rlm_query` degrades to a plain sub-LLM call with NO context, which is why",
+  "  this section disappears at the last recursive depth.",
+]);
+
+/**
+ * Sub-RLM orientation. Emitted only at depth > 0, where `context` is the parent's world rather
+ * than a repository the run packed for itself.
+ */
+const CHILD_CONTEXT_LINES: readonly string[] = Object.freeze([
+  "  You are a sub-RLM. This `context` is your parent's world — the repository plus every library",
+  "  it loaded (paths under `lib/<id>/…`). Answer only the question above; your REPL and anything",
+  "  you load die with you, and only your final answer string returns to the parent.",
 ]);
 
 /** Why a file the user mentioned may be missing from `context`. */
@@ -191,6 +222,7 @@ function replGlossary(
   todo: boolean,
   pipeline: boolean,
   libraryLoader: boolean,
+  child: boolean,
 ): string {
   const lines = ["Available in the REPL:"];
   if (kind === "text") {
@@ -206,6 +238,9 @@ function replGlossary(
       "  For large repos, chunk `context` into batches and delegate to sub-LLMs — never dump raw file",
       "  bodies into your own output.",
       CONTEXT_EXCLUSION_NOTE,
+    );
+    if (child) lines.push(...CHILD_CONTEXT_LINES);
+    lines.push(
       "",
       "  Worked example — find the slice, then delegate it:",
       "  ```python",
@@ -279,6 +314,7 @@ function replGlossary(
       "    execution (e.g. a sub-context large enough to need its own chunking, or a multi-step",
       "    reasoning chain). It is slower and more expensive — reserve it for cases `llm_query` cannot",
       "    handle. Avoid excessive recursive sub-calls when a batched one-shot would suffice.",
+      ...RECURSION_CONTEXT_LINES,
     );
   }
   if (pipeline) {
@@ -343,7 +379,7 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
     "",
     replGlossary(
       kind, recursion, opts.askUserQuestion ?? false, opts.todo ?? false,
-      opts.pipeline ?? false, opts.libraryLoader ?? false,
+      opts.pipeline ?? false, opts.libraryLoader ?? false, opts.child ?? false,
     ),
     "",
     "REPL stdout over ~800 characters is truncated to a short excerpt — large results stay in your",
@@ -386,7 +422,7 @@ function nativeReplGlossary(): string {
     "- `llm_query(prompt, model=None) -> str` — one-shot sub-LLM. Use for extraction, summarization, Q&A over a chunk.",
     "- `llm_query_batched(prompts, model=None) -> list[str]` — concurrent sub-LLM calls; output order matches input order.",
     CHUNKED_GLOSSARY_LINE_NATIVE,
-    "- `rlm_query(prompt, model=None) -> str` — recursive RLM with its own REPL for complex sub-tasks needing iterative reasoning. Prefer llm_query — rlm_query is slower and costlier.",
+    "- `rlm_query(prompt, model=None, paths=None) -> str` — recursive RLM with its own REPL for complex sub-tasks needing iterative reasoning. Prefer llm_query — rlm_query is slower and costlier. The child inherits your `context` (repo + loaded libraries) and takes your prompt as its question, so describe the task; never paste file text. `paths=['src/auth/']` narrows its context by prefix.",
     "- `rlm_query_batched(prompts, model=None) -> list[str]` — concurrent recursive RLM calls.",
     "- `spawn(fn, *args) -> Task` / `rlm_await(t)` / `rlm_await_all(ts)` — start `llm_query`, `llm_query_batched`, `llm_query_chunked`, `map_files`, `rlm_query` or `rlm_query_batched` without waiting (NOT `llm_map_reduce`); collect later, order preserved. Tasks outlive the repl() call, so spawn slow work early and await when you need it.",
     "",

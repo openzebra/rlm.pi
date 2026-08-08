@@ -117,6 +117,11 @@ async function main() {
     NATIVE_PROMPT_STATIC.length < NATIVE_PROMPT_BUDGET,
     `(${NATIVE_PROMPT_STATIC.length.toLocaleString()} chars; budget ${NATIVE_PROMPT_BUDGET.toLocaleString()})`,
   );
+  check(
+    "native prompt states what an rlm_query child inherits",
+    NATIVE_PROMPT_STATIC.includes("child inherits your `context`")
+      && NATIVE_PROMPT_STATIC.includes("paths="),
+  );
 
   // ── repl output cap ──
   const replCapped = capReplResultText("y".repeat(10_000));

@@ -21,11 +21,37 @@ export function estimateMessageTokens(messages: { content: string }[]): number {
   return estimateTokens(chars);
 }
 
-/** Total character length of a context payload (string or list of strings). */
+/**
+ * Character length of one context entry. `ContextFile`-shaped entries report their content
+ * length; anything else falls back to its serialized form.
+ *
+ * Deliberately does NOT import `isContextFile` from context/library-context.ts: that module
+ * imports `estimateTokens` from here, so the reverse import would be a cycle. `in`-narrowing
+ * needs no type guard and no cast.
+ */
+function entryLength(entry: unknown): number {
+  if (typeof entry === "string") return entry.length;
+  if (entry !== null && typeof entry === "object" && "content" in entry) {
+    const content: unknown = entry.content;
+    if (typeof content === "string") return content.length;
+  }
+  return JSON.stringify(entry ?? "").length;
+}
+
+/**
+ * Total character length of a context payload (string, file bundle, or arbitrary value).
+ *
+ * The array branch must read each entry's `content`: `String(fileEntry)` yields
+ * "[object Object]" (15 chars), which under-reported a packed repository by ~200x. This number
+ * is what buildMetadataLine tells the model to size its batches against, and it is replayed
+ * into the rebuilt system prompt on resume, so it has to be real.
+ */
 export function contextLength(context: unknown): number {
   if (typeof context === "string") return context.length;
-  if (Array.isArray(context)) return context.reduce<number>((n, x) => n + String(x).length, 0);
-  return JSON.stringify(context ?? "").length;
+  if (!Array.isArray(context)) return JSON.stringify(context ?? "").length;
+  let total = 0; // running sum — no intermediate array, no per-entry closure
+  for (let i = 0; i < context.length; i++) total += entryLength(context[i]);
+  return total;
 }
 
 /** Human label for a context payload's type, used in the metadata prompt. */

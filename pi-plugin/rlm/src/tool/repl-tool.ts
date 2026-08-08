@@ -22,6 +22,7 @@ import type { Model, Usage, Api } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { buildInteractiveHandlers } from "../bridge/interactive.ts";
 import { buildLibraryHandler } from "../bridge/library.ts";
+import { libraryPrefixesIn } from "../context/library-context.ts";
 import { createPiInteractiveDeps } from "../bridge/pi-interactive.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
 import { LimitGuard, limitsFromConfig } from "../core/limits.ts";
@@ -234,6 +235,10 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     signal,
     onUsage,
     runChild,
+    // The session sandbox's context is the child's world. Read lazily so a load_library from an
+    // earlier repl() reaches a child spawned in a later one. Populated before any interrupt can
+    // fire: execute() awaits ensureContext() before getOrCreate().
+    getChildContext: () => sandboxManager.contextPayload ?? undefined,
     trackDetached: (task) => background.track(task),
   });
 
@@ -241,12 +246,23 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     ? buildLibraryHandler({
         getCwd: () => sessionCwd,
         getEmitter: () => bridgeState.currentEmitter,
+        // Refuse pre-flight whatever the worker would reject, so host idempotency is never
+        // committed for an append that did not happen.
+        getContext: () => sandboxManager.contextPayload,
         parentId: undefined,
         signal,
         startIndex: 1,
+        // Keep the manager's replay copy in step with the worker's live `context`, and with it
+        // whatever a child spawned after this load will inherit.
+        onLoaded: (_index, payload) => { sandboxManager.appendLibrary(payload); },
       })
     : undefined;
-  if (libraryBundle) deps.registerDiscardHook?.(libraryBundle.reset);
+  if (libraryBundle) {
+    // Re-derive the loaded-prefix cache from the payload that will actually be replayed —
+    // clearing it outright would make the host re-clone a library the recreated worker already has.
+    const bundle = libraryBundle;
+    deps.registerDiscardHook?.(() => bundle.reset(libraryPrefixesIn(sandboxManager.contextPayload)));
+  }
 
   return {
     name: "repl",

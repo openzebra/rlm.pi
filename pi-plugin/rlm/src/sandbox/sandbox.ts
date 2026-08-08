@@ -8,8 +8,7 @@
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { writeFile, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { once } from "node:events";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -24,6 +23,7 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "./protocol.ts";
+import { pinContext, writeContextTempFile, type PinnedContext } from "./context-file.ts";
 import { errorMessage, formatError } from "../util/errors.ts";
 import { trace, traceEnabled } from "../util/trace.ts";
 
@@ -48,6 +48,11 @@ export interface LibraryLoadResult {
 export interface SubcallOpts {
   /** Started via `spawn()` — route to session-scoped state, not the current invocation. */
   readonly detached: boolean;
+  /**
+   * `rlm_query(paths=[…])` — path prefixes narrowing the child's inherited context.
+   * Absent on every other path; `llm_query` never carries it.
+   */
+  readonly paths?: readonly string[];
 }
 
 /** Handlers the bridge installs to service sub-LLM interrupts. Return the reply payload. */
@@ -94,6 +99,8 @@ export interface SandboxOptions {
 
 const WORKER_PATH = join(dirname(fileURLToPath(import.meta.url)), "worker.py");
 const STDERR_TAIL_CHARS = 8_192;
+/** How long dispose() waits for a clean worker exit before escalating to SIGKILL. */
+const SHUTDOWN_GRACE_MS = 50;
 const TODO_PROTO_KEYS = new Set(["type", "rid", "depth", "action"]);
 
 // The sandbox runs untrusted model-authored code; it must never inherit provider secrets.
@@ -105,6 +112,19 @@ function sanitizedEnv(): NodeJS.ProcessEnv {
     if (v !== undefined && !SENSITIVE_ENV.test(k)) env[k] = v;
   }
   return env;
+}
+
+/** Narrow an unknown JSON value to a frozen string array. Non-strings and blanks are dropped. */
+function toStringArray(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = new Array<string>(value.length);
+  let n = 0;
+  for (let i = 0; i < value.length; i++) {
+    const item: unknown = value[i];
+    if (typeof item === "string" && item.trim() !== "") out[n++] = item;
+  }
+  out.length = n;
+  return n > 0 ? Object.freeze(out) : undefined;
 }
 
 const REJECT: SubLlmHandlers = {
@@ -191,11 +211,30 @@ export class PythonSandbox {
     this.proc.stdout.on("data", (chunk: string) => this.onData(chunk));
     this.proc.stderr.setEncoding("utf8");
     this.proc.stderr.on("data", (chunk: string) => this.appendStderr(chunk));
+
+    // A dead worker's pipe fails the write ASYNCHRONOUSLY: node emits 'error' on the stream, and
+    // an EventEmitter 'error' with no listener is an uncaughtException — which no try/catch
+    // around send() and no `await dispose().catch()` can intercept. Without these three
+    // listeners a worker dying mid-exec took the entire pi process down with it (EPIPE from the
+    // shutdown frame dispose() writes after the watchdog SIGKILLs).
+    // Record and swallow: the real reason is already surfaced by failAll on 'exit'.
+    const swallowPipeError = (stream: string) => (err: NodeJS.ErrnoException): void => {
+      this.appendStderr(`[rlm] worker ${stream} ${err.code ?? "error"}: ${err.message}\n`);
+    };
+    this.proc.stdin.on("error", swallowPipeError("stdin"));
+    this.proc.stdout.on("error", swallowPipeError("stdout"));
+    this.proc.stderr.on("error", swallowPipeError("stderr"));
+
     this.proc.on("error", (err: NodeJS.ErrnoException) => {
       const hint = err.code === "ENOENT" ? ` ('${python}' not found — is Python installed and on PATH?)` : "";
       this.failAll(new Error(`failed to start sandbox${hint}: ${err.message}`));
     });
-    this.proc.on("exit", () => this.failAll(new Error(`worker exited; stderr=${this.stderr.trim()}`)));
+    // Name the cause: a SIGKILL (watchdog, abort, OOM killer) reads very differently from a
+    // Python-level crash, and this message is what reaches the user as `REPL error: …`.
+    this.proc.on("exit", (code, signal) => this.failAll(new Error(
+      `worker exited (${signal !== null ? `signal ${signal}` : `code ${code}`}); `
+      + `stderr=${this.stderr.trim()}`,
+    )));
 
     this.ready = this.waitForInit();
 
@@ -224,31 +263,27 @@ export class PythonSandbox {
     return sandbox;
   }
 
+  /**
+   * Load a payload whose pin this sandbox does not own — it acquires and releases one itself.
+   * Used by SandboxManager and tests; the engine owns its run's pin and calls the pinned form.
+   */
   async loadContext(payload: unknown): Promise<number> {
-    const isJson = typeof payload !== "string";
-    let path: string | undefined;
+    const pinned = await pinContext(payload);
     try {
-      path = await this.writeContextFile(payload, isJson);
-      const res = await this.request({ type: "load_context", path, json: isJson });
-      if (!res.ok) throw new Error(res.error ?? "load_context failed");
-      return res.index ?? 0;
+      return await this.loadContextPinned(pinned);
     } finally {
-      if (path) await unlink(path).catch(() => {});
+      await pinned.release();
     }
   }
 
-  private async writeContextFile(payload: unknown, isJson: boolean): Promise<string> {
-    const file = join(
-      tmpdir(),
-      `rlm-ctx-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${isJson ? "json" : "txt"}`,
-    );
-    try {
-      await writeFile(file, isJson ? JSON.stringify(payload) : (payload as string));
-    } catch (e) {
-      await unlink(file).catch(() => {});
-      throw e;
-    }
-    return file;
+  /**
+   * Load from a pin the CALLER owns and will release. Keeping ownership outside means a run and
+   * every child that inherits its payload share one serialization and one file.
+   */
+  async loadContextPinned(pinned: PinnedContext): Promise<number> {
+    const res = await this.request({ type: "load_context", path: pinned.path, json: pinned.json });
+    if (!res.ok) throw new Error(res.error ?? "load_context failed");
+    return res.index ?? 0;
   }
 
   async exec(code: string, signal?: AbortSignal): Promise<ReplResult> {
@@ -268,12 +303,18 @@ export class PythonSandbox {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    try {
+    // Handshake only a live worker. The watchdog SIGKILLs before SandboxManager's catch calls
+    // dispose(), and writing the shutdown frame to a process that is already dead is exactly
+    // what produced the EPIPE that killed the host. Skipping it also drops a pointless 50ms
+    // wait from every dead-worker teardown.
+    if (this.workerAlive) {
       this.send({ id: "_shutdown", type: "shutdown" });
-    } catch {
-      /* pipe may already be gone */
+      // Wait for the worker to actually go rather than sleeping a fixed 50ms: this returns the
+      // instant it exits (the common case) and still gives up promptly if it never will, in
+      // which case the SIGKILL below finishes the job.
+      await once(this.proc, "exit", { signal: AbortSignal.timeout(SHUTDOWN_GRACE_MS) })
+        .catch(() => { /* did not exit in time — SIGKILL below */ });
     }
-    await new Promise((r) => setTimeout(r, 50));
     if (this.proc.exitCode === null) this.proc.kill("SIGKILL");
     this.failAll(new Error("sandbox disposed"));
   }
@@ -320,6 +361,13 @@ export class PythonSandbox {
   private request(payload: RequestBody, signal?: AbortSignal): Promise<WorkerResponse> {
     if (this.disposed) return Promise.reject(new Error("sandbox disposed"));
     if (signal?.aborted) return Promise.reject(new Error("repl execution aborted"));
+    // Reject before registering the pending entry: `send` no-ops for a dead worker, so a request
+    // queued here would otherwise sit until the watchdog fired instead of failing now.
+    if (!this.workerAlive) {
+      return Promise.reject(new Error(
+        `worker is not running (${this.exitDescription()}); request '${payload.type}' not sent`,
+      ));
+    }
     const id = `r${++this.seq}`;
     return new Promise<WorkerResponse>((resolve, reject) => {
       const timer = this.createWatchdog(id, payload.type, reject);
@@ -375,7 +423,45 @@ export class PythonSandbox {
         rid: "rid" in msg ? msg.rid : undefined,
       });
     }
+    // Never write to a corpse. The write would fail asynchronously and, historically, take the
+    // host process with it; even with the stdin 'error' listener in place there is nothing to
+    // gain. MUST NOT throw — `reply()` calls this from serviceInterrupt's catch, where a throw
+    // would become an unhandled rejection, trading one crash for another.
+    if (!this.workerAlive) {
+      this.appendStderr(`[rlm] dropped '${msg.type}' frame: worker ${this.exitDescription()}\n`);
+      return;
+    }
     this.proc.stdin.write(`${JSON.stringify(msg)}\n`);
+  }
+
+  /**
+   * Listener counts on the worker's stdio pipes. Exposed for tests.
+   *
+   * The `'error'` listener on each is load-bearing: an EventEmitter `'error'` with no listener is
+   * an uncaughtException, so a failed write to a dead worker's stdin kills the HOST process. That
+   * cannot be behaviour-tested reliably — whether the write reaches the syscall depends on
+   * whether node has reaped the child yet — so the invariant is asserted structurally.
+   */
+  get pipeErrorListenerCounts(): Readonly<Record<"stdin" | "stdout" | "stderr", number>> {
+    return Object.freeze({
+      stdin: this.proc.stdin.listenerCount("error"),
+      stdout: this.proc.stdout.listenerCount("error"),
+      stderr: this.proc.stderr.listenerCount("error"),
+    });
+  }
+
+  /** False once the worker is gone — exited, signalled, or its stdin torn down. */
+  private get workerAlive(): boolean {
+    return this.proc.exitCode === null
+      && this.proc.signalCode === null
+      && this.proc.stdin.writable;
+  }
+
+  /** How the worker went away, for diagnostics. */
+  private exitDescription(): string {
+    if (this.proc.signalCode !== null) return `killed by ${this.proc.signalCode}`;
+    if (this.proc.exitCode !== null) return `exited with code ${this.proc.exitCode}`;
+    return "stdin closed";
   }
 
   private onData(chunk: string): void {
@@ -432,7 +518,13 @@ export class PythonSandbox {
   private async serviceInterrupt(msg: WorkerInterrupt): Promise<void> {
     const h = this.handlers;
     const d = msg.depth;
-    const opts: SubcallOpts = { detached: msg.detached === true };
+    const opts: SubcallOpts = Object.freeze({
+      detached: msg.detached === true,
+      // Only the recursive kinds carry a context slice; the value crossed JSON, so guard it.
+      paths: msg.type === "rlm_query" || msg.type === "rlm_query_batched"
+        ? toStringArray(msg.paths)
+        : undefined,
+    });
     try {
       if (msg.type === "llm_query") {
         const response = await h.llmQuery(msg.prompt ?? "", msg.model ?? null, d, opts);
@@ -474,8 +566,7 @@ export class PythonSandbox {
             path_prefix: lib.pathPrefix,
           });
         } else {
-          const isJson = typeof lib.payload !== "string";
-          const path = await this.writeContextFile(lib.payload, isJson);
+          const { path, json: isJson } = await writeContextTempFile(lib.payload);
           // Worker reads then unlinks (worker._load_library). Host must not unlink here —
           // if the worker is SIGKILLed before os.remove, the temp file leaks in tmpdir (acceptable).
           this.reply(msg.rid, {

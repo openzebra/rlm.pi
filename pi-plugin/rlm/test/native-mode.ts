@@ -8,6 +8,7 @@
 
 import { check, fail, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
+import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { formatForLLM } from "../src/context/repomix-context.ts";
 import { buildNativeSystemPrompt } from "../src/prompts/system.ts";
 import { buildReplResultText, collectReplWarnings } from "../src/tool/repl-tool.ts";
@@ -162,13 +163,107 @@ async function testSandboxManager() {
   const alive = await mgr.exec("print(callable(llm_query), callable(SHOW_VARS), callable(load_library))");
   check("SandboxManager — core REPL surface intact", !alive.raised && alive.stdout.includes("True True True"));
 
-  // Idempotent dispose
+  // ── appendLibrary keeps the replay copy truthful across a death-recreate ──
+  // Before this, contextPayload was written once and never grew, so a recreate silently rolled
+  // the sandbox back to a repo-only context and any child inheriting it never saw the library.
+  mgr.contextPayload = [{ path: "repo.ts", content: "r", tokens: 1 }];
+  mgr.appendLibrary([{ path: "lib/x-9f3a/a.ts", content: "lib content", tokens: 1 }]);
+  check(
+    "SandboxManager — appendLibrary grows the replay payload",
+    Array.isArray(mgr.contextPayload) && mgr.contextPayload.length === 2,
+    Array.isArray(mgr.contextPayload) ? `len=${mgr.contextPayload.length}` : "not array",
+  );
+  mgr.appendLibrary([{ path: "lib/x-9f3a/a.ts", content: "lib content", tokens: 1 }]);
+  check(
+    "SandboxManager — appendLibrary dedups by lib/<id>/ prefix",
+    Array.isArray(mgr.contextPayload) && mgr.contextPayload.length === 2,
+    Array.isArray(mgr.contextPayload) ? `len=${mgr.contextPayload.length}` : "not array",
+  );
+
+  // Kill the worker so the next getOrCreate recreates it, then prove the library came back.
+  const discardsBeforeKill = discardedCount;
+  await mgr.exec("import os; os._exit(1)").catch(() => {});
+  check(
+    "SandboxManager — worker death fires the discard hook",
+    discardedCount === discardsBeforeKill + 1,
+    String(discardedCount),
+  );
+  await mgr.getOrCreate({});
+  const replayed = await mgr.exec(
+    "print(len(context), any(f['path'].startswith('lib/x-9f3a/') for f in context))",
+  );
+  check(
+    "SandboxManager — recreate replays the merged payload, library included",
+    replayed.stdout.includes("2 True"),
+    replayed.stdout.trim() || replayed.stderr.slice(0, 80),
+  );
+
+  // Idempotent dispose. Counted as a delta: the death-recreate above legitimately discards too.
+  const discardsBeforeDispose = discardedCount;
   await mgr.dispose();
   check("SandboxManager — not alive after dispose", !mgr.isAlive);
-  check("SandboxManager — discard callback fires on dispose", discardedCount === 1, String(discardedCount));
+  check("SandboxManager — discard callback fires on dispose",
+    discardedCount === discardsBeforeDispose + 1, String(discardedCount));
   await mgr.dispose(); // second dispose should not throw
   check("SandboxManager — double dispose safe", true);
-  check("SandboxManager — double dispose does not double discard", discardedCount === 1, String(discardedCount));
+  check("SandboxManager — double dispose does not double discard",
+    discardedCount === discardsBeforeDispose + 1, String(discardedCount));
+}
+
+/**
+ * A failed write to a dead worker's stdin fails ASYNCHRONOUSLY: node emits 'error' on the stream,
+ * and an EventEmitter 'error' with no listener is an uncaughtException — it killed the whole host
+ * process (EPIPE from the shutdown frame dispose() writes after the watchdog SIGKILLs).
+ *
+ * This is asserted structurally, not behaviourally, and deliberately so: whether the write ever
+ * reaches the syscall depends on whether node has reaped the child yet, so a behavioural test
+ * passes with or without the fix and proves nothing. The listeners are the invariant.
+ */
+async function testPipeErrorListeners() {
+  const sb = await PythonSandbox.spawn({ python: "python3", execTimeoutS: 30 });
+  try {
+    const counts = sb.pipeErrorListenerCounts;
+    check("stdin has an 'error' listener (else a dead pipe kills the host)", counts.stdin > 0,
+      `stdin=${counts.stdin}`);
+    check("stdout has an 'error' listener", counts.stdout > 0, `stdout=${counts.stdout}`);
+    check("stderr has an 'error' listener", counts.stderr > 0, `stderr=${counts.stderr}`);
+  } finally {
+    await sb.dispose();
+  }
+}
+
+/**
+ * The watchdog SIGKILLs the worker, then SandboxManager's catch disposes it and the next call
+ * recreates. Covers the reporting and recovery half of that path — see testPipeErrorListeners
+ * for the crash-safety half.
+ */
+async function testWatchdogKillRecovers() {
+  const wd = new SandboxManager({
+    execTimeoutS: 30,
+    requestTimeoutMs: 400,
+    python: "python3",
+    sandboxInitTimeoutMs: 30_000,
+    maxPromptChars: 400_000,
+    awaitTimeoutS: 10,
+  });
+  await wd.getOrCreate({});
+
+  let killMsg = "";
+  try {
+    await wd.exec("import time; time.sleep(10)");
+  } catch (e: unknown) {
+    killMsg = e instanceof Error ? e.message : String(e);
+  }
+  check(
+    "watchdog reports why the worker was killed",
+    killMsg.includes("exceeded") && killMsg.includes("worker killed"),
+    killMsg.slice(0, 90),
+  );
+
+  await wd.getOrCreate({});
+  const revived = await wd.exec("print('recreated')");
+  check("sandbox recreates after a watchdog kill", revived.stdout.includes("recreated"));
+  await wd.dispose();
 }
 
 // ── Main ──
@@ -188,6 +283,8 @@ async function main() {
   console.log("\n─── SandboxManager ───");
   try {
     await testSandboxManager();
+    await testPipeErrorListeners();
+    await testWatchdogKillRecovers();
   } catch (err) {
     console.error("SandboxManager tests failed:", err instanceof Error ? err.message : String(err));
     fail();

@@ -376,6 +376,19 @@ def _stall_alarm(exec_timeout_s: float, stall_timeout_s: float):
                 signal.setitimer(signal.ITIMER_REAL, remaining)
 
 
+def _clean_paths(paths: Any) -> list[str] | None:
+    """Normalize a `paths=` argument to a non-empty list of prefixes, or None.
+
+    Shared by the single and batched rlm_query builders so the accepted shapes stay identical.
+    A bare string is treated as one prefix — the most common typo, and harmless to allow.
+    """
+    if paths is None:
+        return None
+    seq = [paths] if isinstance(paths, str) else list(paths)
+    out = [str(p).strip() for p in seq if str(p).strip()]
+    return out or None
+
+
 def _surfaced_error(message: str) -> str:
     """The "Error: …" contract value, ALSO written to the cell's stderr.
 
@@ -667,17 +680,21 @@ class Worker:
 
     # ---- spawn / await ---------------------------------------------------------------------
 
-    def _start_prompt(self, kind: str, prompt, model) -> Task:
+    def _start_prompt(self, kind: str, prompt, model, paths=None) -> Task:
         text = str(prompt)
         # A sub-LLM asked nothing answers something: the confabulation then sits in `answers`
         # looking exactly like data. Refuse instead of spending a call on it.
         if not text.strip():
             return Task.resolved(self, kind, _surfaced_error(
                 f"{kind}() got an empty prompt — a sub-LLM would confabulate an answer to nothing"))
-        rid = self._post(kind, {"prompt": text, "model": model})
+        payload: dict[str, Any] = {"prompt": text, "model": model}
+        clean = _clean_paths(paths)
+        if clean is not None:
+            payload["paths"] = clean
+        rid = self._post(kind, payload)
         return Task(self, kind, (rid,), _reduce_one, text[:40])
 
-    def _start_prompts(self, kind: str, prompts, model) -> Task:
+    def _start_prompts(self, kind: str, prompts, model, paths=None) -> Task:
         prompts = [str(p) for p in prompts]
         if not prompts:
             return Task.resolved(self, kind, [])
@@ -686,20 +703,26 @@ class Worker:
             return Task.resolved(self, kind, [
                 _surfaced_error(f"{kind}() got only empty prompts")
             ] * len(prompts))
-        rid = self._post(kind, {"prompts": prompts, "model": model})
+        payload: dict[str, Any] = {"prompts": prompts, "model": model}
+        # One prefix set for the whole batch: a per-prompt aligned list is an API nobody uses
+        # correctly, and every prompt in a batch is asking about the same slice anyway.
+        clean = _clean_paths(paths)
+        if clean is not None:
+            payload["paths"] = clean
+        rid = self._post(kind, payload)
         return Task(self, kind, (rid,), _reduce_batch(len(prompts)), f"×{len(prompts)}")
 
     def _start_llm_query(self, prompt, model: str | None = None) -> Task:
         return self._start_prompt("llm_query", prompt, model)
 
-    def _start_rlm_query(self, prompt, model: str | None = None) -> Task:
-        return self._start_prompt("rlm_query", prompt, model)
+    def _start_rlm_query(self, prompt, model: str | None = None, paths=None) -> Task:
+        return self._start_prompt("rlm_query", prompt, model, paths)
 
     def _start_llm_query_batched(self, prompts, model: str | None = None) -> Task:
         return self._start_prompts("llm_query_batched", prompts, model)
 
-    def _start_rlm_query_batched(self, prompts, model: str | None = None) -> Task:
-        return self._start_prompts("rlm_query_batched", prompts, model)
+    def _start_rlm_query_batched(self, prompts, model: str | None = None, paths=None) -> Task:
+        return self._start_prompts("rlm_query_batched", prompts, model, paths)
 
     def _start_llm_query_chunked(self, text, prompt: str, model: str | None = None) -> Task:
         """Split oversized text into cap-sized chunks and post EVERY batch at once.
@@ -1020,8 +1043,8 @@ class Worker:
         return self._await_task(self._start_llm_query_chunked(text, prompt, model))
 
     @_spawnable("rlm_query")
-    def _rlm_query(self, prompt: str, model: str | None = None) -> str:
-        return self._await_task(self._start_rlm_query(prompt, model))
+    def _rlm_query(self, prompt: str, model: str | None = None, paths=None) -> str:
+        return self._await_task(self._start_rlm_query(prompt, model, paths))
 
     def _ask_user_question(self, questions: list[dict]) -> list[dict]:
         """Present structured questions to the user; blocks until answered.
@@ -1124,7 +1147,13 @@ class Worker:
         return self._append_library(str(source), payload, r)
 
     def _append_library(self, source: str, payload: Any, meta: dict[str, Any]) -> dict[str, Any] | str:
-        """Append host-packed library files into `context` (idempotent by path prefix)."""
+        """Append host-packed library files into `context` (idempotent by path prefix).
+
+        The two refusals below are pre-flighted host-side by LIST_CONTEXT_REQUIRED /
+        NO_FILES_PRODUCED in src/bridge/library.ts, so the host never commits a sidecar index or
+        loaded-prefix for an append that fails here. Reaching either one means host and worker
+        disagree about `context`; keep the wording identical to its twin.
+        """
         ctx = self.ns.get("context")
         if not isinstance(ctx, list):
             kind = type(ctx).__name__ if ctx is not None else "None"
@@ -1229,8 +1258,8 @@ class Worker:
         return response if isinstance(response, str) else "ok"
 
     @_spawnable("rlm_query_batched")
-    def _rlm_query_batched(self, prompts, model: str | None = None) -> list[str]:
-        return self._await_task(self._start_rlm_query_batched(prompts, model))
+    def _rlm_query_batched(self, prompts, model: str | None = None, paths=None) -> list[str]:
+        return self._await_task(self._start_rlm_query_batched(prompts, model, paths))
 
     # ---- context + execution --------------------------------------------------------------
 

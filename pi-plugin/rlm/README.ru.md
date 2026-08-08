@@ -34,6 +34,9 @@
 - **Модель-оркестратор** управляет постоянным Python REPL пошагово.
 - Работа с длинным контекстом **делегируется** дешевым worker-моделям через `llm_query` / `llm_query_batched`.
 - Сложные подзадачи **рекурсивно** передаются в дочерние RLM через `rlm_query` (с ограничением глубины).
+  Дочерний RLM наследует `context` родителя — репозиторий и все библиотеки, загруженные через
+  `load_library()`, — и работает с теми же путями. Наследование не стоит дополнительных токенов:
+  содержимое живёт в песочнице, модель видит только строку с размером.
 - Все работает **in-process** — единственным внешним процессом является локальный worker `python3`.
 
 > This is a Pi-plugin reimplementation of the RLM method (see the [RLM paper](https://arxiv.org/abs/2512.24601)).
@@ -107,8 +110,8 @@ rm -rf ~/.pi/agent/extensions/rlm
 | `llm_query` | `(prompt, model=None) -> str` | Одноразовый вызов sub-LLM (worker-модель) |
 | `llm_query_batched` | `(prompts, model=None) -> list[str]` | Параллельные вызовы sub-LLM (с ограничением пула) |
 | `llm_query_chunked` | `(text, prompt, model=None) -> list[str]` | Дробит большой текст на части по лимиту и обрабатывает через sub-LLM |
-| `rlm_query` | `(prompt, model=None) -> str` | Рекурсивный дочерний RLM со своей песочницей (с ограничением глубины) |
-| `rlm_query_batched` | `(prompts, model=None) -> list[str]` | Параллельные рекурсивные дочерние RLM |
+| `rlm_query` | `(prompt, model=None, paths=None) -> str` | Рекурсивный дочерний RLM со своей песочницей (с ограничением глубины). Наследует ваш `context`; `paths` сужает его по префиксу |
+| `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | Параллельные рекурсивные дочерние RLM с общим срезом `paths` |
 | `todo` | `(action, **kwargs) -> str` | Список задач: `create`/`update`/`list`/`get`/`delete`/`clear` |
 | `ask_user_question` | `(questions) -> list[dict]` | Задать пользователю структурированные вопросы (только на глубине 0) |
 | `SHOW_VARS` | `() -> str` | Список текущих переменных и их типов |

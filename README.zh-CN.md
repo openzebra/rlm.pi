@@ -33,7 +33,9 @@
 
 - **根编排器**模型逐轮驱动一个**持久化的 Python REPL**。
 - 长上下文工作通过 `llm_query` / `llm_query_batched` **委派**给廉价的工作模型。
-- 困难的子问题通过 `rlm_query` **递归**到子 RLM 中（设有深度限制）。
+- 困难的子问题通过 `rlm_query` **递归**到子 RLM 中（设有深度限制）。子 RLM 继承父级的 `context`
+  ——仓库以及通过 `load_library()` 加载的所有库——因此可以在相同的路径上使用相同的检索原语。
+  继承不消耗额外的 token：内容存放在沙箱中，模型只看到一行大小信息。
 - 所有内容均**在进程内**运行 —— 唯一的外部进程是一个本地的 `python3` worker。
 
 > 这是 RLM 方法的 Pi 插件重新实现（参见 [RLM 论文](https://arxiv.org/abs/2512.24601)）。
@@ -113,8 +115,8 @@ rm -rf ~/.pi/agent/extensions/rlm
 | `context` | `list[dict]` | 打包为 `[{"path","content","tokens"}, ...]` 的仓库 —— 完整的代码库 |
 | `llm_query` | `(prompt, model=None) -> str` | 单次子 LLM 调用 (worker 模型) |
 | `llm_query_batched` | `(prompts, model=None) -> list[str]` | 并发子 LLM 调用 (池上限) |
-| `rlm_query` | `(prompt, model=None) -> str` | 具有自有沙箱的递归子 RLM (设有深度限制) |
-| `rlm_query_batched` | `(prompts, model=None) -> list[str]` | 并发递归子 RLM |
+| `rlm_query` | `(prompt, model=None, paths=None) -> str` | 具有自有沙箱的递归子 RLM (设有深度限制)。继承父级的 `context`；`paths` 按前缀缩小范围 |
+| `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | 并发递归子 RLM，共享同一个 `paths` 切片 |
 | `todo` | `(action, **kwargs) -> str` | 任务列表：`create`/`update`/`list`/`get`/`delete`/`clear` |
 | `ask_user_question` | `(questions) -> list[dict]` | 向用户提出结构化问题 (仅限深度 0) |
 | `SHOW_VARS` | `() -> str` | 列出当前定义的变量及其类型 |

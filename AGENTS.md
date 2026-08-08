@@ -53,6 +53,11 @@ implementation of `llm_query` / `llm_query_batched` / `rlm_query` / `rlm_query_b
 
 5. **The subcall emit pattern** (create → execute → update status/cost/tokens) — the `emitting()` helper in `subcall-handlers.ts` for leaf sub-calls; `childRun` emits its own node for recursive ones (never wrap it, or the node is reported twice). `interactive.ts` follows the same shape by hand. Adding a new subcall handler? Reuse these — don't invent a new pattern.
 
+6. **Child context inheritance** — `getChildContext` on `SubcallHandlerDeps` is the ONE seam by
+   which a child RLM receives its parent's world (repo pack + loaded libraries). `childRun` is the
+   only place an `RlmInput` for a child is constructed. A second path here is how issue #4
+   happened: whichever path forgets to grow leaves the child blind, and it degrades silently.
+
 **Callers differ only in `resolve`.** The engine binds one `Invocation` for a whole run; the
 repl() tool swaps one per turn and routes `spawn()`ed (detached) work to the session-scoped
 `BackgroundTasks` registry. If you find yourself adding a second construction path, add a
