@@ -7,7 +7,8 @@ import { registerRlmConfigCommand } from "./commands/rlm-config.ts";
 import { createRlmTool } from "./tool/rlm-tool.ts";
 import { createReplTool } from "./tool/repl-tool.ts";
 import { loadSettings, mergeConfig, resolveModelId } from "./config/settings.ts";
-import { RlmController, cheapestModel } from "./mode/rlm-mode.ts";
+import { RlmController } from "./mode/rlm-mode.ts";
+import { cheapestModel } from "./mode/worker-model.ts";
 import { postRlmGuide } from "./ui/intro.ts";
 import { setRlmModeStatus } from "./ui/status.ts";
 import { markdownTheme } from "./ui/theme-adapter.ts";
@@ -15,7 +16,7 @@ import { SandboxManager } from "./sandbox/sandbox-manager.ts";
 import { createSubcallGates } from "./util/concurrency.ts";
 import { BackgroundTasks } from "./tool/background-tasks.ts";
 import { packRepository, formatForLLM, serializeForSandbox } from "./context/repomix-context.ts";
-import { buildNativeSystemPrompt, NATIVE_TURN_REMINDER } from "./prompts/system.ts";
+import { buildNativeSystemPrompt, NATIVE_TURN_REMINDER } from "./prompts/native.ts";
 import { bashCommandFromInput, isFileReadingCommand, capToolResultText, BASH_BLOCK_REASON } from "./mode/native-guards.ts";
 import { errorMessage } from "./util/errors.ts";
 
@@ -119,6 +120,17 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     // An explicit --rlm flag wins over the persisted setting for this session.
     const flag = pi.getFlag("rlm");
     if (typeof flag === "boolean") controller.setConfig(Object.freeze({ ...controller.config, enabled: flag }));
+
+    // Reload the catalog before the worker-model pick below reads it. Newer pi builds make
+    // `getAvailable()` an async-populated snapshot that starts empty, and picking from an empty
+    // catalog silently falls back to the root model. Called with no arguments and awaited so it
+    // is valid whether `refresh` returns void (current) or a promise (newer); fail-soft, because
+    // a refresh error must not abort session start.
+    try {
+      await ctx.modelRegistry.refresh();
+    } catch (err) {
+      console.warn(`[rlm] model registry refresh failed: ${errorMessage(err)}`);
+    }
 
     if (controller.savedWorkerRef) {
       const resolved = resolveModelId(ctx.modelRegistry, controller.savedWorkerRef);

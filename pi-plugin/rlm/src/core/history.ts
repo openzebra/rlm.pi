@@ -1,4 +1,4 @@
-/** Shared history mutation helpers used by both the engine loop and the resume fold. */
+/** Shared history mutation helpers for the engine loop. */
 
 import type { ChatMsg } from "../bridge/model.ts";
 

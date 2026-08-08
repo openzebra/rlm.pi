@@ -2,7 +2,8 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { modelRef } from "../config/settings.ts";
-import { cheapestModel, type RlmController } from "../mode/rlm-mode.ts";
+import type { RlmController } from "../mode/rlm-mode.ts";
+import { cheapestModel } from "../mode/worker-model.ts";
 import { setRlmModeStatus } from "../ui/status.ts";
 import { showConfigPanel } from "../ui/config-panel.ts";
 import { selectModel } from "../ui/model-picker.ts";
@@ -21,19 +22,24 @@ export async function runRlmConfig(controller: RlmController, ctx: ExtensionCont
 
   controller.setConfig(await showConfigPanel(ctx, controller.config));
 
-  if (worker === null) {
-    controller.savedWorkerRef = undefined;
-  } else {
-    const effectiveWorker = controller.workerModel ?? cheapestModel(ctx.modelRegistry);
-    controller.savedWorkerRef = modelRef(controller.workerModel) ?? modelRef(effectiveWorker);
-  }
+  // Only an explicit choice touches the persisted pin. ESC (`undefined`) used to fall through
+  // here and freeze whatever cheapest resolved to at that moment, which silently ended
+  // "cheapest (auto)" for every later session — including once a cheaper model appeared.
+  if (worker === null) controller.savedWorkerRef = undefined;          // "⟳ cheapest (auto)"
+  else if (worker !== undefined) controller.savedWorkerRef = modelRef(worker.model);
+
   const persisted = await controller.persist();
   if (!persisted) ctx.ui.notify("RLM: failed to save settings to ~/.pi/agent/rlm.json", "error");
   setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
 
-  const w = controller.workerModel;
+  // Name the model that actually resolved, not "(cheapest)" — otherwise there is no way to
+  // tell whether the free model in the catalog was the one picked.
+  const pinned = controller.workerModel;
+  const effective = pinned ?? cheapestModel(ctx.modelRegistry);
+  const reasoning = controller.config.subSampling.reasoning;
   ctx.ui.notify(
-    `RLM: worker=${w ? `${w.provider}/${w.id}` : "(cheapest)"}${controller.config.subSampling.reasoning ? `/${controller.config.subSampling.reasoning}` : ""}`,
+    `RLM: worker=${modelRef(effective) ?? "(none available)"}`
+    + `${pinned ? "" : " (cheapest, auto)"}${reasoning ? `/${reasoning}` : ""}`,
     "info",
   );
   return worker !== undefined;

@@ -44,7 +44,7 @@ function entryLength(entry: unknown): number {
  * The array branch must read each entry's `content`: `String(fileEntry)` yields
  * "[object Object]" (15 chars), which under-reported a packed repository by ~200x. This number
  * is what buildMetadataLine tells the model to size its batches against, and it is replayed
- * into the rebuilt system prompt on resume, so it has to be real.
+ * into the system prompt, so it has to be real.
  */
 export function contextLength(context: unknown): number {
   if (typeof context === "string") return context.length;

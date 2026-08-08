@@ -14,59 +14,17 @@ import { fileURLToPath } from "node:url";
 import {
   isInterrupt,
   isWorkerMessage,
-  type AskAnswer,
-  type AskQuestion,
   type ParentMessage,
   type ReplResult,
-  type WorkerInterrupt,
   type WorkerMessage,
   type WorkerRequest,
   type WorkerResponse,
 } from "./protocol.ts";
-import { pinContext, writeContextTempFile, type PinnedContext } from "./context-file.ts";
-import { errorMessage, formatError } from "../util/errors.ts";
+import { pinContext, type PinnedContext } from "./context-file.ts";
+import { REJECT, serviceInterrupt, type ReplyBody, type SubLlmHandlers } from "./interrupts.ts";
 import { trace, traceEnabled } from "../util/trace.ts";
 
-/** Result of a host-side library pack requested by `load_library`. */
-export interface LibraryLoadResult {
-  readonly payload: unknown;     // always ContextFile[] under lib/<id>/
-  readonly index: number;        // resume-sidecar index (not a REPL var name); -1 if alreadyLoaded
-  readonly files?: number;
-  readonly chars: number;
-  readonly sourceId: string;
-  readonly pathPrefix: string;
-  /** Host already has this library — no pack, no sidecar, empty payload. */
-  readonly alreadyLoaded?: boolean;
-}
-
-/**
- * Per-interrupt routing context for the sub-LLM handlers.
- *
- * Only the four sub-call kinds can be spawned, so only they carry it; the interactive and
- * pipeline handlers are always synchronous within one exec.
- */
-export interface SubcallOpts {
-  /** Started via `spawn()` — route to session-scoped state, not the current invocation. */
-  readonly detached: boolean;
-  /**
-   * `rlm_query(paths=[…])` — path prefixes narrowing the child's inherited context.
-   * Absent on every other path; `llm_query` never carries it.
-   */
-  readonly paths?: readonly string[];
-}
-
-/** Handlers the bridge installs to service sub-LLM interrupts. Return the reply payload. */
-export interface SubLlmHandlers {
-  llmQuery(prompt: string, model: string | null, depth: number, opts: SubcallOpts): Promise<string>;
-  llmQueryBatched(prompts: readonly string[], model: string | null, depth: number, opts: SubcallOpts): Promise<string[]>;
-  rlmQuery(prompt: string, model: string | null, depth: number, opts: SubcallOpts): Promise<string>;
-  rlmQueryBatched(prompts: readonly string[], model: string | null, depth: number, opts: SubcallOpts): Promise<string[]>;
-  advancePhase(phase: string, summary: string | undefined, depth: number): Promise<string>;
-  saveArtifact(kind: string, content: string, depth: number): Promise<string>;
-  askUserQuestion(questions: readonly AskQuestion[], depth: number): Promise<AskAnswer[]>;
-  todo(action: string, params: Record<string, unknown>, depth: number): Promise<string>;
-  loadLibrary(source: string, depth: number): Promise<LibraryLoadResult>;
-}
+export type { LibraryLoadResult, SubcallOpts, SubLlmHandlers } from "./interrupts.ts";
 
 export interface SandboxOptions {
   /** Sandbox recursion depth label (passed to the worker, used in interrupt routing). */
@@ -86,22 +44,16 @@ export interface SandboxOptions {
   /** Sub-LLM prompt cap (chars) — sizes llm_query_chunked chunks inside the worker. */
   readonly maxPromptChars?: number;
   /**
-   * When true, the worker rejects open() write modes (pipeline read-only runs).
-   * Native repl() data work leaves this false so scratch-file writes still work.
-   */
-  readonly readOnly?: boolean;
-  /**
    * Max seconds the worker will wait for a host reply while parked in `_drain_until`
    * (rlm_await / sync sub-call). Defaults to the worker's own RLM_AWAIT_TIMEOUT_S (600).
    */
   readonly awaitTimeoutS?: number;
 }
 
-const WORKER_PATH = join(dirname(fileURLToPath(import.meta.url)), "worker.py");
+const WORKER_PATH = join(dirname(fileURLToPath(import.meta.url)), "py", "worker.py");
 const STDERR_TAIL_CHARS = 8_192;
 /** How long dispose() waits for a clean worker exit before escalating to SIGKILL. */
 const SHUTDOWN_GRACE_MS = 50;
-const TODO_PROTO_KEYS = new Set(["type", "rid", "depth", "action"]);
 
 // The sandbox runs untrusted model-authored code; it must never inherit provider secrets.
 const SENSITIVE_ENV = /API[_-]?KEY|ACCESS[_-]?KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|ANTHROPIC|OPENAI|_KEY$/i;
@@ -113,35 +65,6 @@ function sanitizedEnv(): NodeJS.ProcessEnv {
   }
   return env;
 }
-
-/** Narrow an unknown JSON value to a frozen string array. Non-strings and blanks are dropped. */
-function toStringArray(value: unknown): readonly string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const out = new Array<string>(value.length);
-  let n = 0;
-  for (let i = 0; i < value.length; i++) {
-    const item: unknown = value[i];
-    if (typeof item === "string" && item.trim() !== "") out[n++] = item;
-  }
-  out.length = n;
-  return n > 0 ? Object.freeze(out) : undefined;
-}
-
-const REJECT: SubLlmHandlers = {
-  llmQuery: async () => formatError("sub-LLM bridge not configured"),
-  llmQueryBatched: async (p) => p.map(() => formatError("sub-LLM bridge not configured")),
-  rlmQuery: async () => formatError("sub-LLM bridge not configured"),
-  rlmQueryBatched: async (p) => p.map(() => formatError("sub-LLM bridge not configured")),
-  advancePhase: async () => formatError("phase advancement not available"),
-  saveArtifact: async () => formatError("save_artifact not available"),
-  askUserQuestion: async (questions) => questions.map((q) => ({
-    question: q.question,
-    selected: [],
-    custom: formatError("ask_user_question not configured"),
-  })),
-  todo: async () => formatError("todo not configured"),
-  loadLibrary: async () => { throw new Error("load_library not configured"); },
-};
 
 /** Distributive omit so each union member keeps its own fields (plain Omit collapses to shared keys). */
 type RequestBody = WorkerRequest extends infer T ? (T extends { id: string } ? Omit<T, "id"> : never) : never;
@@ -194,9 +117,6 @@ export class PythonSandbox {
     ];
     if (opts.maxPromptChars !== undefined) {
       workerArgs.push("--max-prompt-chars", String(opts.maxPromptChars));
-    }
-    if (opts.readOnly) {
-      workerArgs.push("--read-only");
     }
     if (opts.awaitTimeoutS !== undefined) {
       workerArgs.push("--await-timeout", String(opts.awaitTimeoutS));
@@ -317,28 +237,6 @@ export class PythonSandbox {
     }
     if (this.proc.exitCode === null) this.proc.kill("SIGKILL");
     this.failAll(new Error("sandbox disposed"));
-  }
-
-  /** Pickle the worker's user namespace atomically to path (rename .tmp \u2192 final inside worker). */
-  async snapshot(path: string, nonce: string): Promise<boolean> {
-    try {
-      const res = await this.request({ type: "snapshot", path, nonce });
-      if (!res.ok) return false;
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  /** Restore user variables. Worker verifies session nonce before deserializing. */
-  async restore(path: string, nonce: string): Promise<boolean> {
-    try {
-      const res = await this.request({ type: "restore", path, nonce });
-      if (!res.ok) return false;
-      return res.ok;
-    } catch {
-      return false;
-    }
   }
 
   // ---- internals ------------------------------------------------------------------------
@@ -505,7 +403,7 @@ export class PythonSandbox {
     }
     if (isInterrupt(msg)) {
       this.touchPending();
-      void this.serviceInterrupt(msg);
+      void serviceInterrupt(msg, this.handlers, (rid, body) => this.reply(rid, body));
       return;
     }
     const p = this.pending.get(msg.id);
@@ -515,90 +413,7 @@ export class PythonSandbox {
     p.resolve(msg);
   }
 
-  private async serviceInterrupt(msg: WorkerInterrupt): Promise<void> {
-    const h = this.handlers;
-    const d = msg.depth;
-    const opts: SubcallOpts = Object.freeze({
-      detached: msg.detached === true,
-      // Only the recursive kinds carry a context slice; the value crossed JSON, so guard it.
-      paths: msg.type === "rlm_query" || msg.type === "rlm_query_batched"
-        ? toStringArray(msg.paths)
-        : undefined,
-    });
-    try {
-      if (msg.type === "llm_query") {
-        const response = await h.llmQuery(msg.prompt ?? "", msg.model ?? null, d, opts);
-        this.reply(msg.rid, { response });
-      } else if (msg.type === "rlm_query") {
-        const response = await h.rlmQuery(msg.prompt ?? "", msg.model ?? null, d, opts);
-        this.reply(msg.rid, { response });
-      } else if (msg.type === "llm_query_batched") {
-        const responses = await h.llmQueryBatched(msg.prompts ?? [], msg.model ?? null, d, opts);
-        this.reply(msg.rid, { responses });
-      } else if (msg.type === "rlm_query_batched") {
-        const responses = await h.rlmQueryBatched(msg.prompts ?? [], msg.model ?? null, d, opts);
-        this.reply(msg.rid, { responses });
-      } else if (msg.type === "advance_phase") {
-        const response = await h.advancePhase(msg.phase ?? "", msg.summary, d);
-        this.reply(msg.rid, { response });
-      } else if (msg.type === "save_artifact") {
-        const response = await h.saveArtifact(msg.artifactKind ?? "", msg.content ?? "", d);
-        this.reply(msg.rid, { response });
-      } else if (msg.type === "ask_user_question") {
-        const answers = await h.askUserQuestion(msg.questions ?? [], d);
-        this.reply(msg.rid, { answers });
-      } else if (msg.type === "todo") {
-        const params = Object.fromEntries(
-          Object.entries(msg).filter(([key]) => !TODO_PROTO_KEYS.has(key)),
-        );
-        const response = await h.todo(msg.action ?? "list", params, d);
-        this.reply(msg.rid, { response });
-      } else if (msg.type === "load_library") {
-        const lib = await h.loadLibrary(msg.source ?? "", d);
-        if (lib.alreadyLoaded) {
-          // No temp file — worker short-circuits on already_loaded.
-          this.reply(msg.rid, {
-            already_loaded: true,
-            index: lib.index,
-            files: 0,
-            chars: lib.chars,
-            source_id: lib.sourceId,
-            path_prefix: lib.pathPrefix,
-          });
-        } else {
-          const { path, json: isJson } = await writeContextTempFile(lib.payload);
-          // Worker reads then unlinks (worker._load_library). Host must not unlink here —
-          // if the worker is SIGKILLed before os.remove, the temp file leaks in tmpdir (acceptable).
-          this.reply(msg.rid, {
-            path,
-            json: isJson,
-            index: lib.index,
-            files: lib.files,
-            chars: lib.chars,
-            source_id: lib.sourceId,
-            path_prefix: lib.pathPrefix,
-          });
-        }
-      }
-    } catch (err) {
-      this.reply(msg.rid, { error: errorMessage(err) });
-    }
-  }
-
-  private reply(rid: string, body: {
-    response?: string;
-    responses?: string[];
-    answers?: AskAnswer[];
-    path?: string;
-    json?: boolean;
-    index?: number;
-    files?: number;
-    chars?: number;
-    source_id?: string;
-    path_prefix?: string;
-    already_loaded?: boolean;
-    error?: string;
-  }): void {
+  private reply(rid: string, body: ReplyBody): void {
     if (!this.disposed) this.send({ type: "llm_reply", rid, ...body });
   }
 

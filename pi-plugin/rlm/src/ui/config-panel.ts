@@ -16,15 +16,12 @@ const CHOICES = Object.freeze({
   maxTokens: Object.freeze(["none", "10000", "50000", "100000"]),
   maxErrors: Object.freeze(["3", "5", "10", "none"]),
   orchestrator: Object.freeze(["on", "off"]),
-  pipeline: Object.freeze(["on", "off"]),
-  maxBackwardJumps: Object.freeze(["0", "1", "2", "3"]),
   compaction: Object.freeze(["on", "off"]),
   compactionThresholdPct: Object.freeze(["50", "65", "80", "90"]),
   rootSamplingMaxTokens: Object.freeze(["4096", "8192", "16384", "32768"]),
   sandboxInitTimeoutMs: Object.freeze(["10000", "30000", "60000", "120000"]),
   requestTimeoutMs: Object.freeze(["2", "5", "10", "20"]),
   askUserQuestion: Object.freeze(["on", "off"]),
-  todo: Object.freeze(["on", "off"]),
   libraryLoader: Object.freeze(["on", "off"]),
 });
 
@@ -50,15 +47,12 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("maxTokens", "Token ceiling", config.maxTokens != null ? String(config.maxTokens) : "none", CHOICES.maxTokens, "Total input+output token cap for the whole recursive tree."),
     item("maxErrors", "Max consecutive errors", config.maxErrors != null ? String(config.maxErrors) : "none", CHOICES.maxErrors, "Stop after this many consecutive failing turns; none disables the guard."),
     item("orchestrator", "Orchestrator addendum", config.orchestrator ? "on" : "off", CHOICES.orchestrator, "Append extra divide-and-conquer guidance to the root model system prompt."),
-    item("pipeline", "Phase pipeline", config.pipeline ? "on" : "off", CHOICES.pipeline, "Enable artifact-gated phases: clarify→research→blueprint→validate (read-only plan pipeline; clarify needs Ask user on)."),
-    item("maxBackwardJumps", "Max validate→blueprint loops", String(config.maxBackwardJumps), CHOICES.maxBackwardJumps, "Bounded corrective re-entries when validation reports blockers_count > 0."),
     item("compaction", "Trajectory compaction", config.compaction ? "on" : "off", CHOICES.compaction, "Summarize old turns when history approaches the model context window."),
     item("compactionThresholdPct", "Compaction threshold (%)", String(Math.round(config.compactionThresholdPct * 100)), CHOICES.compactionThresholdPct, "Compact once estimated history tokens reach this share of the root model's context window."),
     item("rootSamplingMaxTokens", "Root model output cap (tok)", String(config.rootSampling?.maxTokens ?? 16384), CHOICES.rootSamplingMaxTokens, "Max output tokens per root-model turn. Lower values keep each turn lean."),
     item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
     item("requestTimeoutMs", "Sandbox request timeout (min)", String(Math.round(config.requestTimeoutMs / 60_000)), CHOICES.requestTimeoutMs, "Parent-side watchdog per sandbox request; on breach the Python worker is killed."),
     item("askUserQuestion", "[Interactive] Ask user", config.askUserQuestion ? "on" : "off", CHOICES.askUserQuestion, "Allow root REPL code to present structured ask_user_question dialogs."),
-    item("todo", "[Interactive] Todo", config.todo ? "on" : "off", CHOICES.todo, "Allow REPL code to manage a visible todo task list."),
     item("libraryLoader", "Library loader", config.libraryLoader ? "on" : "off", CHOICES.libraryLoader,
       "Allow load_library() to pull an external dir, file, or git repo into the shared context list."),
     item("__save__", "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
@@ -109,8 +103,6 @@ export function applySetting(config: RlmConfig, id: string, value: string): RlmC
     case "maxTokens": return Object.freeze({ ...config, maxTokens: optionalNumber(value) });
     case "maxErrors": return Object.freeze({ ...config, maxErrors: optionalNumber(value) });
     case "orchestrator": return Object.freeze({ ...config, orchestrator: value === "on" });
-    case "pipeline": return Object.freeze({ ...config, pipeline: value === "on" });
-    case "maxBackwardJumps": return Object.freeze({ ...config, maxBackwardJumps: Number(value) });
     case "compaction": return Object.freeze({ ...config, compaction: value === "on" });
     case "compactionThresholdPct": return Object.freeze({ ...config, compactionThresholdPct: Number(value) / 100 });
     case "rootSamplingMaxTokens":
@@ -118,7 +110,6 @@ export function applySetting(config: RlmConfig, id: string, value: string): RlmC
     case "sandboxInitTimeoutMs": return Object.freeze({ ...config, sandboxInitTimeoutMs: Number(value) });
     case "requestTimeoutMs": return Object.freeze({ ...config, requestTimeoutMs: Number(value) * 60_000 });
     case "askUserQuestion": return Object.freeze({ ...config, askUserQuestion: value === "on" });
-    case "todo": return Object.freeze({ ...config, todo: value === "on" });
     case "libraryLoader": return Object.freeze({ ...config, libraryLoader: value === "on" });
     default: return config;
   }

@@ -31,7 +31,7 @@ const execFileP = promisify(execFile);
 /** Single-file sources above this must use open() + llm_query_chunked in the REPL. */
 export const MAX_LIBRARY_FILE_BYTES = 8 * 1024 * 1024;
 
-/** Legacy catch-all prefix for pre-namespace string sidecars — never an identity key. */
+/** Catch-all prefix for a raw string payload with no namespace — never an identity key. */
 const LEGACY_UNKNOWN_PREFIX = "lib/unknown/";
 
 export interface LibrarySource {
@@ -242,8 +242,8 @@ export function filterContextByPaths(context: unknown, prefixes: readonly string
 }
 
 /**
- * Append a library payload into an existing list context (host-side resume merge).
- * Skips a payload whose path prefix is already present (resume-safe dedup).
+ * Append a library payload into an existing list context.
+ * Skips a payload whose path prefix is already present, so a repeat load is a no-op.
  */
 export function mergeLibraryIntoContext(base: unknown, libraryPayload: unknown): unknown {
   if (!Array.isArray(base)) return base;
@@ -262,7 +262,7 @@ export function mergeLibraryIntoContext(base: unknown, libraryPayload: unknown):
     return merged;
   }
   if (typeof libraryPayload === "string") {
-    // Legacy string sidecars: wrap once under an unknown prefix.
+    // Raw string payload: wrap once under the unknown prefix.
     return mergeLibraryIntoContext(base, namespaceLibraryFiles(libraryPayload, "unknown"));
   }
   return base;

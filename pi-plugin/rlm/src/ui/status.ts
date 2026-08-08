@@ -23,7 +23,3 @@ export function formatRlmStateLine(controller: RlmController, contextUsage?: Con
 export function setRlmModeStatus(ui: ExtensionUIContext, controller: RlmController, contextUsage?: ContextUsage): void {
   ui.setStatus(KEY, formatRlmStateLine(controller, contextUsage));
 }
-
-export function clearRlmStatus(ui: ExtensionUIContext): void {
-  ui.setStatus(KEY, undefined);
-}

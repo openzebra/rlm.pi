@@ -13,8 +13,9 @@ import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { SubcallStore } from "../src/tool/subcall-store.ts";
 import { BackgroundTasks } from "../src/tool/background-tasks.ts";
 import { renderCollapsedSubcallTree } from "../src/tool/subcall-render.ts";
-import { buildReplResultText } from "../src/tool/repl-tool.ts";
-import { NATIVE_PROMPT_BUDGET, NATIVE_PROMPT_STATIC, buildRlmSystemPrompt } from "../src/prompts/system.ts";
+import { buildReplResultText } from "../src/tool/repl-result.ts";
+import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
+import { NATIVE_PROMPT_BUDGET, NATIVE_PROMPT_STATIC } from "../src/prompts/native.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, Math.max(0, ms)));
@@ -91,10 +92,10 @@ print(rlm_await("not a task"))
     check("an all-blank batch is refused per prompt",
       blank.stdout.includes("only empty prompts"), "");
 
-    // A Task holds a worker back-reference; snapshotting it must be skipped, not fatal.
+    // A Task left unawaited must not wedge the worker for the next exec.
     await sb.exec(`leftover = spawn(llm_query, "3")`);
-    const snapOk = await sb.snapshot("/tmp/rlm-phase-async-snap.pkl", "nonce-async");
-    check("snapshot succeeds with a live Task in the namespace", snapOk, "");
+    const afterSpawn = await sb.exec(`print("still alive")`);
+    check("an unawaited Task does not block the next exec", afterSpawn.stdout.includes("still alive"), afterSpawn.stderr.slice(0, 120));
     await sb.exec(`rlm_await(leftover)`);
   } finally {
     await sb.dispose();

@@ -6,7 +6,8 @@
 
 import { check, failureCount } from "./helpers.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
-import { buildRlmSystemPrompt, NATIVE_PROMPT_STATIC } from "../src/prompts/system.ts";
+import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
+import { NATIVE_PROMPT_STATIC } from "../src/prompts/native.ts";
 
 async function main() {
   // 1. Chunking + cap: spawn with a small cap; the fake batched handler records every sub-prompt.

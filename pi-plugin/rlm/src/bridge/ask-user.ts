@@ -1,8 +1,17 @@
+/**
+ * `ask_user_question` — the sandbox's only interactive escape hatch.
+ *
+ * Two halves of one seam: `createPiInteractiveDeps` turns a Pi ExtensionContext into the
+ * callback the engine/tool carries around, and `buildInteractiveHandlers` wraps that callback
+ * in the sub-call emit pattern the sandbox handler surface expects.
+ */
+
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { InteractiveDeps } from "../core/types.ts";
 import type { AskAnswer, AskQuestion } from "../sandbox/protocol.ts";
+import type { SubLlmHandlers } from "../sandbox/sandbox.ts";
+import type { RlmEmitter } from "../tool/rlm-events.ts";
 import { formatError } from "../util/errors.ts";
-import { createTodoFallback } from "./fallback-todo.ts";
 
 async function askViaUi(ctx: ExtensionContext, questions: readonly AskQuestion[]): Promise<AskAnswer[]> {
   if (!ctx.hasUI) throw new Error("ask_user_question requires UI");
@@ -32,10 +41,45 @@ async function askViaUi(ctx: ExtensionContext, questions: readonly AskQuestion[]
 }
 
 export function createPiInteractiveDeps(ctx: ExtensionContext): InteractiveDeps {
-  const fallbackTodo = createTodoFallback();
   return Object.freeze({
     onAskUserQuestion: (questions: readonly AskQuestion[]): Promise<AskAnswer[]> => askViaUi(ctx, questions),
-    onTodo: (action: string, params: Record<string, unknown>): Promise<string> =>
-      Promise.resolve(fallbackTodo(action, params)),
   });
+}
+
+export interface InteractiveBridgeOpts {
+  readonly onAskUserQuestion?: (questions: readonly AskQuestion[]) => Promise<AskAnswer[]>;
+  readonly emitter?: RlmEmitter;
+  readonly depth: number;
+  readonly parentId?: string;
+}
+
+export function buildInteractiveHandlers(opts: InteractiveBridgeOpts): {
+  askUserQuestion: SubLlmHandlers["askUserQuestion"];
+} {
+  return {
+    async askUserQuestion(questions, depth) {
+      if (depth > 0) return questions.map((q) => ({
+        question: q.question,
+        selected: [],
+        custom: formatError("ask_user_question not available inside rlm_query sub-calls"),
+      }));
+
+      const id = opts.emitter?.emitSubcallCreated({
+        kind: "tool", parentId: opts.parentId,
+        label: "ask_user_question",
+        args: `${questions.length} question(s)`,
+        depth,
+      });
+      try {
+        const cb = opts.onAskUserQuestion;
+        if (!cb) throw new Error("ask_user_question not configured (no onAskUserQuestion callback)");
+        const answers = await cb(questions);
+        if (id) opts.emitter?.emitSubcallUpdated({ id, status: "done" });
+        return answers;
+      } catch (err) {
+        if (id) opts.emitter?.emitSubcallUpdated({ id, status: "error", detail: String(err) });
+        throw err;
+      }
+    },
+  };
 }

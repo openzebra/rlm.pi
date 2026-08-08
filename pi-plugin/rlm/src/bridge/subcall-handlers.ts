@@ -61,7 +61,7 @@ export function limitsFromRemaining(
  *
  * Captured at interrupt entry and threaded down, never re-read: once handlers can outlive
  * their exec, re-reading mutable tool state after an await would attribute a sub-call to
- * whichever turn happens to be current when it resumes.
+ * whichever turn happens to be current when it settles.
  */
 export interface Invocation {
   readonly emitter: RlmEmitter;

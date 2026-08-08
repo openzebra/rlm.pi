@@ -6,12 +6,12 @@ This is NOT a security sandbox: __import__ and open are available, so code can i
 
 Protocol (parent -> worker):  {"id","type":"exec"|"load_context"|"shutdown", ...}
 Protocol (worker -> parent):  {"id","ok",...result}            # response to a request
-                              {"type":"llm_query"|"llm_query_batched"|"rlm_query"|...
-                               "advance_phase"|"save_artifact"|"ask_user_question"|"todo","rid",...}
+                              {"type":"llm_query"|"llm_query_batched"|"rlm_query"|
+                               "rlm_query_batched"|"ask_user_question"|"load_library","rid",...}
                                                                 # mid-exec helper request
-When sandbox code calls llm_query/rlm_query/advance_phase/save_artifact/ask_user_question/todo, the worker writes a request line
-and BLOCKS reading stdin until the matching {"type":"llm_reply","rid",...} arrives. The parent
-services the request in-process (it holds API keys).
+When sandbox code calls llm_query/rlm_query/ask_user_question/load_library, the worker writes a
+request line and BLOCKS reading stdin until the matching {"type":"llm_reply","rid",...} arrives.
+The parent services the request in-process (it holds API keys).
 
 Requests and replies are decoupled: `_post` writes a request and returns its rid without
 waiting, and replies are parked in `_inbox` keyed by rid until something asks for them. That
@@ -19,18 +19,12 @@ is what makes `spawn()` / `rlm_await()` / `rlm_await_all()` possible — many re
 in flight at once (the parent already services interrupts concurrently), and a task may be
 awaited in a LATER exec than the one that started it.
 """
-
 from __future__ import annotations
 
 import argparse
-import fnmatch
-import heapq
 import io
 import json
-import math
 import os
-import pickle
-import re
 import signal
 import sys
 import time
@@ -38,283 +32,39 @@ import traceback
 from contextlib import contextmanager
 from typing import Any
 
-# Capture the REAL stdio before exec() redirects sys.stdout/sys.stderr into buffers.
-# All protocol writes must go to the real stdout even while user code's prints are captured.
-_REAL_STDOUT = sys.stdout
-_REAL_STDIN = sys.stdin
-_REAL_STDERR = sys.stderr
-
-
-def _builtin(name: str):
-    return __builtins__[name] if isinstance(__builtins__, dict) else getattr(__builtins__, name, None)
-
-
-# Restricted builtins: enough for real data work, minus the dangerous reflection escapes.
-_SAFE_BUILTINS = {
-    name: _builtin(name)
-    for name in (
-        "abs", "all", "any", "ascii", "bin", "bool", "bytearray", "bytes", "callable",
-        "chr", "classmethod", "complex", "dict", "dir", "divmod", "enumerate", "filter",
-        "float", "format", "frozenset", "getattr", "hasattr", "hash", "hex", "id", "int",
-        "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next",
-        "object", "oct", "ord", "pow", "print", "property", "range", "repr", "reversed",
-        "round", "set", "setattr", "slice", "sorted", "staticmethod", "str", "sum", "super",
-        "tuple", "type", "vars", "zip", "delattr", "memoryview", "__import__", "__build_class__",
-        "Exception", "BaseException", "ValueError", "TypeError", "KeyError", "IndexError",
-        "AttributeError", "FileNotFoundError", "OSError", "IOError", "RuntimeError",
-        "NameError", "ImportError", "StopIteration", "AssertionError", "NotImplementedError",
-        "ArithmeticError", "ZeroDivisionError", "LookupError", "Warning", "True", "False", "None",
-    )
-}
-# `open` is allowed for data work; eval/exec/compile/input/globals/locals are not.
-# When read_only=True (pipeline runs), write modes raise PermissionError via
-# builtins.open, io.open (pathlib), and os.open. Steering, not a security sandbox.
-_WRITE_MODE_CHARS = frozenset("wax+")
-_OS_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
-
-_REAL_IO_OPEN = io.open
-_REAL_OS_OPEN = os.open
-
-
-def _install_read_only_guards():
-    """Route every common file-open path through the read-only check.
-
-    Steering, not a sandbox: closes builtins.open, io.open (hence pathlib), and
-    os.open. A determined model can still reach the filesystem via ctypes or a
-    subprocess — the goal is that ACCIDENTAL writes cannot pass silently.
-    Worker-internal I/O keeps using _REAL_IO_OPEN / _REAL_OS_OPEN.
-    """
-    def guarded_io_open(file, mode="r", *args, **kwargs):
-        if _WRITE_MODE_CHARS & set(str(mode)):
-            raise PermissionError(
-                f"read-only RLM run: refusing to open {file!r} with mode {mode!r}. "
-                "This pipeline produces a plan; file changes go through the host edit tool."
-            )
-        return _REAL_IO_OPEN(file, mode, *args, **kwargs)
-
-    def guarded_os_open(path, flags, *args, **kwargs):
-        if flags & _OS_WRITE_FLAGS:
-            raise PermissionError(
-                f"read-only RLM run: refusing os.open({path!r}) with write flags."
-            )
-        return _REAL_OS_OPEN(path, flags, *args, **kwargs)
-
-    io.open = guarded_io_open
-    os.open = guarded_os_open
-    return guarded_io_open
-
-
-# _builtin()'s getattr(..., None) fallback would silently inject None for a name this
-# interpreter lacks, surfacing much later as "'NoneType' object is not callable" inside model
-# code. Fail at startup instead. Note "None" is legitimately None, and the block-list below is
-# deliberate — which is why this check runs BEFORE it.
-_MISSING = sorted(name for name, value in _SAFE_BUILTINS.items() if value is None and name != "None")
-if _MISSING:
-    raise RuntimeError(f"unsupported Python interpreter: missing builtins {_MISSING}")
-
-def _blocked_builtin(name: str):
-    """Bind a disabled builtin to a callable that explains itself.
-
-    Binding these to None made `eval(...)` fail with a bare "'NoneType' object is not callable",
-    which reads as a broken sandbox rather than a deliberate block: an audit session spent six
-    execs on it and filed a phantom "namespace corruption" bug. Saying so at the point of failure
-    fixes it for every model without spending native-prompt budget on a rule most runs never hit.
-    """
-    def blocked(*_args, **_kwargs):
-        raise PermissionError(
-            f"{name}() is disabled in the RLM sandbox by design — it is not missing and the "
-            "namespace is not corrupt. Names are already bound, so reference them directly; "
-            "inspect `context` with search() / grep_context() / outline()."
-        )
-    blocked.__name__ = name
-    return blocked
-
-
-# Blocked on purpose (NOT missing) — see _blocked_builtin. The _MISSING check above runs first,
-# so a genuinely absent builtin is still a startup failure rather than a silent None.
-for _blocked in ("eval", "exec", "compile", "input", "globals", "locals"):
-    _SAFE_BUILTINS[_blocked] = _blocked_builtin(_blocked)
-
-RESERVED = frozenset(
-    {
-        "llm_query", "llm_query_batched", "llm_query_chunked",
-        "rlm_query", "rlm_query_batched",
-        "spawn", "rlm_await", "rlm_await_all",
-        "map_files", "llm_map_reduce",
-        "search", "grep_context", "outline",
-        "advance_phase", "save_artifact",
-        "ask_user_question", "todo",
-        "load_library",
-        "SHOW_VARS", "answer", "context",
-    }
+# Sibling modules: Python puts this file's directory on sys.path[0], so these resolve without
+# any packaging step. They ship inside `src/` like everything else.
+from guards import (
+    _SAFE_BUILTINS,
+    _CONTEXT_NAME,
+    _send,
+    _stall_alarm,
+    _surfaced_error,
+    RESERVED,
+    REAL_STDERR as _REAL_STDERR,
+    REAL_STDIN as _REAL_STDIN,
 )
-# NOTE: `answers` and `plan` are deliberately NOT reserved. They are seeded by the scaffold but
-# owned by the model, so they must appear in SHOW_VARS and be captured by snapshots — losing a
-# memoized answer across a resume is exactly the failure the memo exists to prevent.
-# Only the single name `context` is the packed world. Legacy context_N names are filtered out.
-_CONTEXT_NAME = re.compile(r"context(_\d+)?\Z")
-
-# Sizing for llm_query_chunked: leave room for the instruction and the chunk header.
-_CHUNK_HEADER_OVERHEAD = 64
-_MAX_CHUNK_BATCH = 20          # fan-out per llm_query_batched call (matches prompt guidance)
-_MAX_CHUNKS = 500              # ceiling: above this, force pre-filtering in Python
-_NUDGE_CHARS = 500_000         # str/bytes vars above this trigger a one-time stdout hint
-
-
-def _chunk_text(text: str, chunk_chars: int) -> list[str]:
-    """Split text into <=chunk_chars pieces, preferring newline boundaries."""
-    chunks: list[str] = []
-    n = len(text)
-    start = 0
-    while start < n:
-        end = min(start + chunk_chars, n)
-        if end < n:
-            nl = text.rfind("\n", start, end)
-            if nl > start:
-                end = nl + 1
-        chunks.append(text[start:end])
-        start = end
-    return chunks
-
-
-# ---- deterministic retrieval over `context` -----------------------------------------------
-#
-# The RLM paper's trajectories retrieve by having the root model hand-write regex over the
-# context (App. E.1). Frontier models do that well; small/fast models guess keywords badly and
-# the first decomposition attempt disproportionately decides the outcome (paper §5, Fig. 4a).
-# These primitives make retrieval deterministic and token-free: no sub-LLM call, no root tokens
-# spent on printed file bodies — the model gets ranked pointers and decides what to delegate.
-
-_INDEX_WINDOW_LINES = 40       # a window is the retrieval unit: big enough to carry meaning
-_INDEX_MAX_WINDOWS = 20_000    # ceiling so a huge load_library() cannot exhaust worker memory
-_SNIPPET_CHARS = 400
-_GREP_HARD_CAP = 200           # absolute ceiling on returned grep hits, whatever k asks for
-_BM25_K1 = 1.2
-_BM25_B = 0.75
-
-_TOKEN_SPLIT = re.compile(r"[^0-9A-Za-z]+")     # also splits snake_case and paths
-_CAMEL_SPLIT = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
-
-# Definition-ish lines across the languages this plugin is likely to meet. Deliberately
-# lexical: an outline is an orientation aid, not a parse tree.
-_OUTLINE_LINE = re.compile(
-    r"^\s*(?:"
-    r"(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|enum|struct|impl|trait|namespace)\s+\w+"
-    r"|(?:export\s+)?(?:const|let|var)\s+\w+\s*[:=]\s*(?:async\s*)?(?:function|\(|<)"
-    r"|(?:pub\s+)?(?:async\s+)?fn\s+\w+"
-    r"|def\s+\w+|class\s+\w+"
-    r"|func\s+\w+"
-    r"|#{1,4}\s+\S"
-    r")"
+from retrieval import (
+    _Bm25Index,
+    _chunk_text,
+    _context_entries,
+    _CHUNK_HEADER_OVERHEAD,
+    _MAX_CHUNK_BATCH,
+    _MAX_CHUNKS,
+    _NUDGE_CHARS,
+    grep_context as _grep_context_impl,
+    outline as _outline_impl,
+    search as _search_impl,
 )
-
-
-def _tokenize(text: str) -> list[str]:
-    """Lowercased alphanumeric runs, plus camelCase parts so `resolveModelId` matches `model id`."""
-    out: list[str] = []
-    for raw in _TOKEN_SPLIT.split(text):
-        if not raw:
-            continue
-        lowered = raw.lower()
-        out.append(lowered)
-        if len(raw) > 3:
-            parts = _CAMEL_SPLIT.split(raw)
-            if len(parts) > 1:
-                for part in parts:
-                    piece = part.lower()
-                    if piece and piece != lowered:
-                        out.append(piece)
-    return out
-
-
-def _context_entries(context: Any) -> list[tuple[str, str]]:
-    """(path, content) pairs for either context shape: list[dict] bundles or a raw string."""
-    if isinstance(context, str):
-        return [("<context>", context)]
-    if not isinstance(context, list):
-        return []
-    out: list[tuple[str, str]] = []
-    for i, item in enumerate(context):
-        if isinstance(item, dict):
-            content = item.get("content", "")
-            out.append((
-                str(item.get("path", f"<context[{i}]>")),
-                content if isinstance(content, str) else str(content),
-            ))
-        elif isinstance(item, str):
-            out.append((f"<context[{i}]>", item))
-    return out
-
-
-class _Bm25Index:
-    """Okapi BM25 over fixed-line windows of `context`. Built lazily, discarded on change."""
-
-    __slots__ = ("paths", "starts", "texts", "postings", "doc_len", "avg_len", "truncated")
-
-    def __init__(self, entries: list[tuple[str, str]]) -> None:
-        self.paths: list[str] = []
-        self.starts: list[int] = []
-        self.texts: list[str] = []
-        self.postings: dict[str, list[tuple[int, int]]] = {}
-        self.doc_len: list[int] = []
-        self.truncated = False
-
-        for path, content in entries:
-            if not content:
-                continue
-            lines = content.split("\n")
-            for start in range(0, len(lines), _INDEX_WINDOW_LINES):
-                if len(self.texts) >= _INDEX_MAX_WINDOWS:
-                    self.truncated = True
-                    break
-                window = "\n".join(lines[start:start + _INDEX_WINDOW_LINES])
-                idx = len(self.texts)
-                self.paths.append(path)
-                self.starts.append(start + 1)
-                self.texts.append(window)
-                terms = _tokenize(window)
-                self.doc_len.append(len(terms))
-                freq: dict[str, int] = {}
-                for term in terms:
-                    freq[term] = freq.get(term, 0) + 1
-                for term, tf in freq.items():
-                    self.postings.setdefault(term, []).append((idx, tf))
-            if self.truncated:
-                break
-
-        total = len(self.doc_len)
-        self.avg_len = (sum(self.doc_len) / total) if total else 1.0
-
-    def query(self, terms: list[str], k: int, path_glob: str | None) -> list[dict[str, Any]]:
-        total = len(self.texts)
-        if total == 0:
-            return []
-        scores: dict[int, float] = {}
-        for term in set(terms):
-            posting = self.postings.get(term)
-            if not posting:
-                continue
-            df = len(posting)
-            idf = math.log(1.0 + (total - df + 0.5) / (df + 0.5))
-            for idx, tf in posting:
-                norm = _BM25_K1 * (1.0 - _BM25_B + _BM25_B * self.doc_len[idx] / self.avg_len)
-                scores[idx] = scores.get(idx, 0.0) + idf * (tf * (_BM25_K1 + 1.0)) / (tf + norm)
-        if path_glob:
-            scores = {i: s for i, s in scores.items() if fnmatch.fnmatch(self.paths[i], path_glob)}
-        if not scores:
-            return []
-        top = heapq.nlargest(k, scores.items(), key=lambda kv: kv[1])
-        out: list[dict[str, Any]] = [None] * len(top)  # type: ignore[list-item]
-        for i, (idx, score) in enumerate(top):
-            text = self.texts[idx]
-            out[i] = {
-                "path": self.paths[idx],
-                "line": self.starts[idx],
-                "score": round(score, 3),
-                "snippet": text[:_SNIPPET_CHARS],
-            }
-        return out
-
+from tasks import (
+    _clean_paths,
+    _reduce_batch,
+    _reduce_chunked,
+    _reduce_map_files,
+    _reduce_one,
+    _spawnable,
+    Task,
+)
 
 class _AnswerDict(dict):
     """`answer` dict; flipping `ready` True captures the final answer for the parent."""
@@ -331,170 +81,6 @@ class _AnswerDict(dict):
             self._on_ready(self.get("content", ""))
 
 
-def _send(obj: dict[str, Any]) -> None:
-    _REAL_STDOUT.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    _REAL_STDOUT.flush()
-
-
-class _StallTimeout(Exception):
-    """No frame from the host while a sub-call was pending."""
-
-
-@contextmanager
-def _stall_alarm(exec_timeout_s: float, stall_timeout_s: float):
-    """Swap the per-cell alarm for a stall alarm while blocked on the parent.
-
-    Sub-LLM latency is network time, not cell compute time, so it must not count against the
-    ```repl``` block timeout — but an unbounded wait is exactly how a lost reply turns into a
-    dead session. The yielded `rearm()` restarts the stall clock on every frame, so a healthy
-    long-running child never trips it.
-    """
-    use = hasattr(signal, "SIGALRM")
-    remaining = signal.getitimer(signal.ITIMER_REAL)[0] if (use and exec_timeout_s > 0) else 0.0
-
-    def _fire(signum, frame):  # noqa: ARG001
-        raise _StallTimeout(
-            f"sub-call stalled — no reply from the host for {stall_timeout_s:g}s "
-            "(the task may still be running; rlm_await it again in a later block)"
-        )
-
-    old = signal.signal(signal.SIGALRM, _fire) if use else None
-
-    def rearm() -> None:
-        if use and stall_timeout_s > 0:
-            signal.setitimer(signal.ITIMER_REAL, stall_timeout_s)
-
-    rearm()
-    try:
-        yield rearm
-    finally:
-        if use:
-            signal.setitimer(signal.ITIMER_REAL, 0)
-            if old is not None:
-                signal.signal(signal.SIGALRM, old)
-            if remaining > 0:                      # restore the cell's remaining budget
-                signal.setitimer(signal.ITIMER_REAL, remaining)
-
-
-def _clean_paths(paths: Any) -> list[str] | None:
-    """Normalize a `paths=` argument to a non-empty list of prefixes, or None.
-
-    Shared by the single and batched rlm_query builders so the accepted shapes stay identical.
-    A bare string is treated as one prefix — the most common typo, and harmless to allow.
-    """
-    if paths is None:
-        return None
-    seq = [paths] if isinstance(paths, str) else list(paths)
-    out = [str(p).strip() for p in seq if str(p).strip()]
-    return out or None
-
-
-def _surfaced_error(message: str) -> str:
-    """The "Error: …" contract value, ALSO written to the cell's stderr.
-
-    A spawn/await misuse whose only trace is the returned value reads to the model as a random
-    string much later — which is exactly how `tasks.items()` blew up on a str.
-    """
-    print(f"[rlm] {message}", file=sys.stderr)
-    return f"Error: {message}"
-
-
-# ---- reply reducers: raw parent replies -> the value the scaffold fn returns ----------------
-# One reducer per result shape, shared by the sync helpers and their spawned equivalents.
-
-
-def _reduce_one(replies: list[dict[str, Any]]) -> str:
-    r = replies[0]
-    return f"Error: {r['error']}" if r.get("error") else r.get("response", "")
-
-
-def _reduce_batch(n: int):
-    """Reducer for a single *_query_batched reply of n prompts."""
-    def reduce(replies: list[dict[str, Any]]) -> list[str]:
-        r = replies[0]
-        if r.get("error"):
-            return [f"Error: {r['error']}"] * n
-        out = r.get("responses")
-        if not isinstance(out, list) or len(out) != n:
-            return ["Error: malformed batched response"] * n
-        return [s if isinstance(s, str) else f"Error: {s}" for s in out]
-    return reduce
-
-
-def _reduce_chunked(sizes: list[int]):
-    """Concatenate several llm_query_batched replies back into one flat chunk list."""
-    per = [_reduce_batch(n) for n in sizes]
-
-    def reduce(replies: list[dict[str, Any]]) -> list[str]:
-        out: list[str] = []
-        for red, rep in zip(per, replies):
-            out.extend(red([rep]))
-        return out
-    return reduce
-
-
-def _reduce_map_files(sizes: list[int], spans: list[tuple[str, int]]):
-    """Flatten the batch replies (same as chunked), then regroup them per path.
-
-    A file larger than the per-prompt budget contributed several requests; its answers rejoin
-    in order, which is what makes map_files a {path: answer} dict rather than a flat list.
-    """
-    flatten = _reduce_chunked(sizes)
-
-    def reduce(replies: list[dict[str, Any]]) -> dict[str, str]:
-        responses = flatten(replies)
-        out: dict[str, str] = {}
-        cursor = 0
-        for path, count in spans:
-            part = responses[cursor:cursor + count]
-            cursor += count
-            out[path] = part[0] if count == 1 and part else "\n\n".join(part)
-        return out
-    return reduce
-
-
-def _spawnable(name: str):
-    """Tag a sync scaffold fn with the request kind spawn() should route it to."""
-    def mark(fn):
-        fn._rlm_name = name
-        return fn
-    return mark
-
-
-class Task:
-    """Handle for parent-side work in flight, returned by spawn().
-
-    Opaque to model code apart from `done` and repr. A Task may be awaited in a later
-    ```repl``` block than the one that created it.
-    """
-
-    __slots__ = ("kind", "label", "_worker", "_rids", "_reduce", "_value", "_settled")
-
-    def __init__(self, worker: "Worker", kind: str, rids, reduce, label: str = ""):
-        self.kind = kind
-        self.label = label
-        self._worker = worker
-        self._rids = tuple(rids)
-        self._reduce = reduce
-        self._value: Any = None
-        self._settled = False
-
-    @staticmethod
-    def resolved(worker: "Worker", kind: str, value: Any, label: str = "") -> "Task":
-        """A Task that never hit the wire — validation errors and empty inputs."""
-        task = Task(worker, kind, (), lambda _replies: value, label)
-        task._value = value
-        task._settled = True
-        return task
-
-    @property
-    def done(self) -> bool:
-        """True once every reply has landed — awaiting will not block."""
-        return self._settled or all(r in self._worker.inbox for r in self._rids)
-
-    def __repr__(self) -> str:
-        return f"<Task {self.kind} {'done' if self.done else 'running'} {self.label}>"
-
 
 class Worker:
     def __init__(
@@ -502,13 +88,11 @@ class Worker:
         depth: int,
         exec_timeout_s: float,
         max_prompt_chars: int,
-        read_only: bool = False,
         await_timeout_s: float = 600.0,
     ):
         self.depth = depth
         self.exec_timeout_s = exec_timeout_s
         self.max_prompt_chars = max_prompt_chars
-        self.read_only = read_only
         self.await_timeout_s = await_timeout_s
         self._rid = 0
         self._final_answer: str | None = None
@@ -518,7 +102,7 @@ class Worker:
         # rlm_await, which is strictly worse than the memory.
         self.inbox: dict[str, dict[str, Any]] = {}
         self._inflight: set[str] = set()
-        # Requests (exec/snapshot/shutdown) that arrived mid-exec; main() replays them.
+        # Requests (exec/shutdown) that arrived mid-exec; main() replays them.
         self._deferred: list[Any] = []
         # True only while spawn() runs a builder — marks requests that may outlive this exec.
         self._detached = False
@@ -527,10 +111,7 @@ class Worker:
 
     def _setup(self) -> None:
         builtins = _SAFE_BUILTINS.copy()
-        if self.read_only:
-            builtins["open"] = _install_read_only_guards()
-        else:
-            builtins["open"] = open
+        builtins["open"] = open
         self.ns = {"__builtins__": builtins, "__name__": "__main__"}
         self._context_payload: Any | None = None  # pristine restore for the single `context` var
         self._nudged: set[str] = set()
@@ -563,10 +144,7 @@ class Worker:
             ns["answers"] = {}
         if not isinstance(ns.get("plan"), dict):
             ns["plan"] = {}
-        ns["advance_phase"] = self._advance_phase
-        ns["save_artifact"] = self._save_artifact
         ns["ask_user_question"] = self._ask_user_question
-        ns["todo"] = self._todo
         ns["load_library"] = self._load_library
         ns["SHOW_VARS"] = self._show_vars
         if not isinstance(ns.get("answer"), _AnswerDict):
@@ -651,7 +229,7 @@ class Worker:
             return True
         if self.park_reply(msg):
             return True
-        # A request (exec/snapshot/shutdown) arriving mid-exec: main() replays it.
+        # A request (exec/shutdown) arriving mid-exec: main() replays it.
         self._deferred.append(msg)
         return True
 
@@ -848,17 +426,9 @@ class Worker:
     def _search(self, query: str, k: int = 10, path_glob: str | None = None) -> list[dict[str, Any]]:
         """Rank `context` windows against a natural-language query (BM25).
 
-        Returns [{path, line, score, snippet}] — pointers, not bodies. Follow up by slicing the
-        named files out of `context` and delegating them to llm_query / map_files.
+        Returns [{path, line, score, snippet}] — pointers, not bodies.
         """
-        terms = _tokenize(str(query))
-        if not terms:
-            return []
-        try:
-            limit = max(1, min(int(k), 100))
-        except (TypeError, ValueError):
-            limit = 10
-        return self._get_index().query(terms, limit, path_glob)
+        return _search_impl(self._entries(), self._get_index(), query, k, path_glob)
 
     def _grep_context(
         self,
@@ -868,71 +438,12 @@ class Worker:
         before: int = 0,
         after: int = 0,
     ) -> dict[str, Any]:
-        """Regex over `context`, capped and shaped.
-
-        Returns {"hits": [{path, line, text}], "counts": {path: n}, "total": n, "truncated": bool}.
-        `counts` is complete even when `hits` is capped, so a wide pattern reports its shape
-        instead of flooding stdout.
-        """
-        try:
-            rx = re.compile(pattern)
-        except re.error as e:
-            return {"hits": [], "counts": {}, "total": 0, "truncated": False, "error": f"bad regex: {e}"}
-        try:
-            limit = max(1, min(int(k), _GREP_HARD_CAP))
-        except (TypeError, ValueError):
-            limit = 50
-        pad_before = max(0, min(int(before or 0), 10))
-        pad_after = max(0, min(int(after or 0), 10))
-
-        hits: list[dict[str, Any]] = []
-        counts: dict[str, int] = {}
-        total = 0
-        for path, content in self._entries():
-            if path_glob and not fnmatch.fnmatch(path, path_glob):
-                continue
-            if not rx.search(content):
-                continue
-            lines = content.split("\n")
-            for i, line in enumerate(lines):
-                if not rx.search(line):
-                    continue
-                total += 1
-                counts[path] = counts.get(path, 0) + 1
-                if len(hits) >= limit:
-                    continue
-                lo = max(0, i - pad_before)
-                hi = min(len(lines), i + pad_after + 1)
-                hits.append({"path": path, "line": i + 1, "text": "\n".join(lines[lo:hi])[:_SNIPPET_CHARS]})
-        return {"hits": hits, "counts": counts, "total": total, "truncated": total > len(hits)}
+        """Regex over `context`, capped and shaped. See retrieval.grep_context."""
+        return _grep_context_impl(self._entries(), pattern, k, path_glob, before, after)
 
     def _outline(self, path: str) -> str:
-        """Definition/heading skeleton of one context file — orient in ~200 chars, not 20K.
-
-        `path` matches exactly, then by suffix, then as a glob.
-        """
-        target = str(path)
-        entries = self._entries()
-        content: str | None = None
-        for p, c in entries:
-            if p == target:
-                content = c
-                break
-        if content is None:
-            for p, c in entries:
-                if p.endswith(target) or fnmatch.fnmatch(p, target):
-                    content = c
-                    target = p
-                    break
-        if content is None:
-            return f"Error: no context file matching {path!r} — use search() or list paths from context"
-        out: list[str] = [f"# {target}"]
-        for i, line in enumerate(content.split("\n")):
-            if _OUTLINE_LINE.match(line):
-                out.append(f"{i + 1}: {line.strip()[:160]}")
-        if len(out) == 1:
-            return f"# {target}\n(no definition-like lines found)"
-        return "\n".join(out)
+        """Definition/heading skeleton of one context file. See retrieval.outline."""
+        return _outline_impl(self._entries(), path)
 
     # ---- one-line delegation (structural: orchestrating must be easier than solving) -------
 
@@ -1091,19 +602,6 @@ class Worker:
         answers = r.get("answers", [])
         return answers if isinstance(answers, list) else []
 
-    def _todo(self, action: str, **kwargs) -> str:
-        """Manage the run's task list.
-
-        action: "create" | "update" | "list" | "get" | "delete" | "clear"
-        kwargs: id, subject, description, status, activeForm, blockedBy, owner, filterStatus
-        Returns a human-readable string result.
-        """
-        params = {k: v for k, v in kwargs.items() if v is not None}
-        r = self._rpc("todo", {"action": str(action), **params})
-        if r.get("error"):
-            return f"Error: {r['error']}"
-        return str(r.get("response", "ok"))
-
     def _load_library(self, source: str) -> dict[str, Any] | str:
         """Pack an external dir/file/git-URL on the host and append it into `context`.
 
@@ -1136,8 +634,7 @@ class Worker:
         if not isinstance(path, str):
             return "Error: malformed load_library reply (no path)"
         try:
-            # Worker-internal read — use real io.open so read-only guards never block us.
-            with _REAL_IO_OPEN(path, "r") as f:
+            with io.open(path, "r") as f:
                 payload = json.load(f) if r.get("json") else f.read()
         finally:
             try:
@@ -1150,7 +647,7 @@ class Worker:
         """Append host-packed library files into `context` (idempotent by path prefix).
 
         The two refusals below are pre-flighted host-side by LIST_CONTEXT_REQUIRED /
-        NO_FILES_PRODUCED in src/bridge/library.ts, so the host never commits a sidecar index or
+        NO_FILES_PRODUCED in src/bridge/library.ts, so the host never commits a
         loaded-prefix for an append that fails here. Reaching either one means host and worker
         disagree about `context`; keep the wording identical to its twin.
         """
@@ -1222,40 +719,6 @@ class Worker:
             if isinstance(item, dict) and "path" in item and "content" in item:
                 out.append(item)
         return out
-
-    def _advance_phase(self, phase: str, summary: str | None = None) -> str:
-        """Transition the root RLM pipeline to a new phase.
-
-        Only callable at depth 0. The parent handler validates the transition
-        against the phase state machine (research → blueprint → validate)
-        and runs deterministic artifact gates before accepting the transition.
-        Returns a short confirmation, or an `Error: …` string the model can act on.
-        """
-        if self.depth > 0:
-            return "Error: advance_phase is only available at the root RLM depth"
-        r = self._rpc("advance_phase", {"phase": str(phase), "summary": summary})
-        if r.get("error"):
-            return f"Error: {r['error']}"
-        response = r.get("response", "ok")
-        if isinstance(response, str) and response.startswith("Error:"):
-            return response
-        return response if isinstance(response, str) else "ok"
-
-    def _save_artifact(self, kind: str, content: str) -> str:
-        """Persist a stage artifact (research/plan/validation) under .rlm/artifacts/.
-
-        Only callable at depth 0. The engine gates advance_phase against the latest
-        saved artifact for the current stage.
-        """
-        if self.depth > 0:
-            return "Error: save_artifact is only available at the root RLM depth"
-        r = self._rpc("save_artifact", {"artifactKind": str(kind), "content": str(content)})
-        if r.get("error"):
-            return f"Error: {r['error']}"
-        response = r.get("response", "ok")
-        if isinstance(response, str) and response.startswith("Error:"):
-            return response
-        return response if isinstance(response, str) else "ok"
 
     @_spawnable("rlm_query_batched")
     def _rlm_query_batched(self, prompts, model: str | None = None, paths=None) -> list[str]:
@@ -1360,65 +823,6 @@ class Worker:
             "var_names": self._user_var_names(),
         }
 
-    def _serializer(self):
-        try:
-            import dill as s
-            return s
-        except ImportError:
-            return pickle
-
-    def snapshot(self, path: str, nonce: str) -> dict:
-        """Pickle user variables atomically to path. Stores session nonce for restore verification.
-
-        Writes to path.tmp then os.rename — atomic on POSIX, so no .tmp leak and no
-        TypeScript-side finalize step needed. On resume (fresh session = different nonce),
-        restore fails — caller falls back to history-only replay.
-        """
-        s = self._serializer()
-        out, skipped = {}, []
-        MAX_VAR_BYTES = 50 * 1024 * 1024
-        for k, v in self.ns.items():
-            if k.startswith("_") or _CONTEXT_NAME.match(k) or k in RESERVED or k == "__builtins__":
-                continue
-            # A Task holds a back-reference to this Worker, so dill would happily pickle the
-            # whole process. Top-level guard only: a Task nested inside a list/dict still
-            # falls to the generic `except` below and skips the variable — which is why this
-            # guard is explicit rather than left to that fallback.
-            if isinstance(v, Task):
-                skipped.append(k)
-                continue
-            try:
-                blob = s.dumps(v)
-                if len(blob) > MAX_VAR_BYTES:
-                    skipped.append(k)
-                    continue
-                out[k] = v
-            except Exception:
-                skipped.append(k)
-        if skipped:
-            print(f"[rlm-sandbox] snapshot skipped {len(skipped)} unpicklable/oversized vars: {skipped}", file=_REAL_STDERR)
-        tmp = path + ".tmp"
-        with _REAL_IO_OPEN(tmp, "wb") as f:
-            s.dump({"nonce": nonce, "vars": out}, f)
-        os.rename(tmp, path)  # atomic rename
-        return {"skipped": skipped}
-
-    def restore(self, path: str, nonce: str) -> dict:
-        """Restore user variables from a pickle file. Verifies session nonce before deserializing.
-
-        SECURITY: pickle.load executes arbitrary code. The session nonce check ensures the
-        .pkl was written by THIS engine session. Cross-session resume falls back to
-        history-only replay (caller skips restore when sessionNonce is undefined).
-        """
-        s = self._serializer()
-        with _REAL_IO_OPEN(path, "rb") as f:
-            data = s.load(f)
-        if not isinstance(data, dict) or data.get("nonce") != nonce:
-            raise ValueError("snapshot nonce mismatch — not from this session")
-        self.ns.update(data.get("vars", {}))
-        self._restore_scaffold()
-        return {"restored": list(data.get("vars", {}).keys())}
-
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -1428,13 +832,10 @@ def main() -> None:
                     default=float(os.environ.get("RLM_AWAIT_TIMEOUT_S", "600")))
     ap.add_argument("--max-prompt-chars", type=int,
                     default=int(os.environ.get("RLM_MAX_PROMPT_CHARS", "400000")))
-    ap.add_argument("--read-only", action="store_true",
-                    default=os.environ.get("RLM_READ_ONLY", "").lower() in ("1", "true", "yes"),
-                    help="Reject open() write modes (pipeline runs)")
     args = ap.parse_args()
 
     worker = Worker(depth=args.depth, exec_timeout_s=args.timeout,
-                    max_prompt_chars=args.max_prompt_chars, read_only=args.read_only,
+                    max_prompt_chars=args.max_prompt_chars,
                     await_timeout_s=args.await_timeout)
     _send({"id": "_init", "ok": True})
 
@@ -1471,10 +872,6 @@ def main() -> None:
             elif kind == "shutdown":
                 _send({"id": rid, "ok": True})
                 return
-            elif kind == "snapshot":
-                _send({"id": rid, "ok": True, **worker.snapshot(req.get("path", ""), req.get("nonce", ""))})
-            elif kind == "restore":
-                _send({"id": rid, "ok": True, **worker.restore(req.get("path", ""), req.get("nonce", ""))})
             else:
                 _send({"id": rid, "ok": False, "error": f"unknown type: {kind!r}"})
         except BaseException as e:  # noqa: BLE001

@@ -6,14 +6,14 @@
  * getState(): RlmDetails for direct access (spinner loop, final return).
  *
  * Subcall storage and totals are delegated to SubcallStore. Root-level state
- * (status, prompt, turns, answer, warnings) is kept in the aggregator.
+ * (status, prompt, turns, answer) is kept in the aggregator.
  *
  * Replaces RlmToolBridge's internal state accumulation. The emitter is pure
  * dispatch; the aggregator is pure state. Separated for independent testing.
  */
 
 import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
-import type { RlmEmitter, TurnEvent, RootUsageEvent, AnswerEvent, StatusEvent, RootPromptEvent, WarningsEvent } from "./rlm-events.ts";
+import type { RlmEmitter, TurnEvent, RootUsageEvent, AnswerEvent, StatusEvent, RootPromptEvent } from "./rlm-events.ts";
 import type { RlmDetails, RlmRunStatus } from "./rlm-details.ts";
 import { EmitterListener } from "./emitter-listener.ts";
 import { SubcallStore } from "./subcall-store.ts";
@@ -27,7 +27,6 @@ export class RlmEventAggregator extends EmitterListener {
   private turnCurrent = 0;
   private turnMax = 0;
   private answer?: string;
-  private warnings?: readonly string[];
 
   constructor(
     emitter: RlmEmitter,
@@ -40,7 +39,6 @@ export class RlmEventAggregator extends EmitterListener {
       emitter.onTurn((e) => this.handleTurn(e)),
       emitter.onRootUsage((e) => this.handleRootUsage(e)),
       emitter.onAnswer((e) => this.handleAnswer(e)),
-      emitter.onWarnings((e) => this.handleWarnings(e)),
       emitter.onStatus((e) => this.handleStatus(e)),
       emitter.onRootPrompt((e) => this.handleRootPrompt(e)),
     ]);
@@ -61,11 +59,6 @@ export class RlmEventAggregator extends EmitterListener {
 
   private handleAnswer(event: AnswerEvent): void {
     this.answer = event.text;
-    this.notify();
-  }
-
-  private handleWarnings(event: WarningsEvent): void {
-    this.warnings = event.warnings;
     this.notify();
   }
 
@@ -90,7 +83,6 @@ export class RlmEventAggregator extends EmitterListener {
       subcalls: this.store.getSubcalls(),
       totals: this.store.getTotals(),
       answer: this.answer,
-      warnings: this.warnings,
     };
   }
 

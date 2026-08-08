@@ -1,13 +1,11 @@
 /**
  * Shared load_library handler for headless engine and native repl() mode.
  *
- * Host packs the source via resolveLibrarySource (namespaced under lib/<id>/),
- * assigns a resume-sidecar index, and returns the payload for the worker to
- * append into the single `context` list.
+ * Host packs the source via resolveLibrarySource (namespaced under lib/<id>/) and returns the
+ * payload for the worker to append into the single `context` list.
  *
- * Idempotency is host-side: re-loading a source that was already packed does
- * not consume an index, write a sidecar, or re-clone/pack. That keeps resume
- * trails free of duplicate library slots.
+ * Idempotency is host-side: re-loading a source that was already packed does not re-clone or
+ * re-pack, and the prefix set is the only state that decides it.
  *
  * Late-bound deps (getCwd / getEmitter) keep a single handler closure correct
  * across native repl() calls — getOrCreate only installs handlers at spawn.
@@ -31,29 +29,24 @@ export interface LibraryBridgeOpts {
   readonly getEmitter?: () => RlmEmitter | null | undefined;
   readonly parentId?: string;
   readonly signal?: AbortSignal;
-  /** First resume-sidecar index (slot 0 = repo). Resume passes 1 + max restored. */
-  readonly startIndex: number;
-  /**
-   * Prefixes already present in context (e.g. restored from sidecars).
-   * Seeded so re-load after resume is still a no-op without re-packing.
-   */
+  /** Prefixes already present in context — seeds host-side idempotency after a sandbox restart. */
   readonly loadedPrefixes?: readonly string[];
   /**
    * The live context this sandbox holds. Read to refuse pre-flight exactly what the worker's
-   * `_append_library` would reject, before any index or prefix is committed.
+   * `_append_library` would reject, before any prefix is committed.
    */
   readonly getContext?: () => unknown;
   /**
-   * Post-load hook. The engine writes the resume sidecar here and grows its live context;
-   * native mode grows SandboxManager.contextPayload.
+   * Post-load hook. The engine grows its live context here; native mode grows
+   * SandboxManager.contextPayload.
    */
-  readonly onLoaded?: (index: number, payload: unknown) => void | Promise<void>;
+  readonly onLoaded?: (payload: unknown) => void | Promise<void>;
 }
 
 export interface LibraryHandlerBundle {
   readonly handlers: Pick<SubLlmHandlers, "loadLibrary">;
   /**
-   * Reset the sidecar index counter and the loaded-prefix cache (call when the sandbox is
+   * Reset the loaded-prefix cache (call when the sandbox is
    * discarded and will re-spawn).
    *
    * `keep` re-seeds the cache from the payload that will be replayed into the fresh worker.
@@ -82,7 +75,7 @@ function pythonKindOf(value: unknown): string {
 
 /**
  * Refusal messages shared with worker.py `_append_library`. The worker is the backstop; the host
- * pre-flights the same two conditions so it never commits an index/prefix for an append that
+ * pre-flights the same two conditions so it never commits a prefix for an append that
  * will be rejected. Keep the wording identical — a comment in worker.py points back here.
  */
 const LIST_CONTEXT_REQUIRED = (kind: string): string =>
@@ -90,7 +83,6 @@ const LIST_CONTEXT_REQUIRED = (kind: string): string =>
 const NO_FILES_PRODUCED = "load_library produced no files";
 
 export function buildLibraryHandler(opts: LibraryBridgeOpts): LibraryHandlerBundle {
-  let nextIndex = opts.startIndex;
   /** Prefixes already loaded in this sandbox — mirrors the worker's context state. */
   const loaded = new Set<string>(opts.loadedPrefixes ?? []);
   return {
@@ -98,7 +90,6 @@ export function buildLibraryHandler(opts: LibraryBridgeOpts): LibraryHandlerBund
       const seed = keep ?? opts.loadedPrefixes ?? [];
       loaded.clear();
       for (const prefix of seed) loaded.add(prefix);
-      nextIndex = opts.startIndex + seed.length;
     },
     loadedPrefixes: () => loaded,
     handlers: {
@@ -116,7 +107,7 @@ export function buildLibraryHandler(opts: LibraryBridgeOpts): LibraryHandlerBund
         });
         try {
           // Pre-flight the worker's own refusal: a non-list context cannot be appended to, and
-          // committing an index/prefix for it would make the NEXT load lie with already_loaded.
+          // committing a prefix for it would make the NEXT load lie with already_loaded.
           const current = opts.getContext?.();
           if (current !== undefined && !Array.isArray(current)) {
             throw new Error(LIST_CONTEXT_REQUIRED(pythonKindOf(current)));
@@ -132,10 +123,8 @@ export function buildLibraryHandler(opts: LibraryBridgeOpts): LibraryHandlerBund
                 resultPreview: `already loaded (${prefix}*)`,
               });
             }
-            // No index consumed, no sidecar written — resume stays consistent.
             return {
               payload: Object.freeze([]),
-              index: -1,
               files: 0,
               chars: 0,
               sourceId: preId,
@@ -161,7 +150,6 @@ export function buildLibraryHandler(opts: LibraryBridgeOpts): LibraryHandlerBund
             }
             return {
               payload: Object.freeze([]),
-              index: -1,
               files: 0,
               chars: 0,
               sourceId,
@@ -170,12 +158,10 @@ export function buildLibraryHandler(opts: LibraryBridgeOpts): LibraryHandlerBund
             };
           }
 
-          // Increment only after a successful sidecar write (or when no hook is set).
-          const index = nextIndex;
+          // Mark loaded only after the host has grown its own copy of the context.
           if (opts.onLoaded) {
-            await opts.onLoaded(index, payload);
+            await opts.onLoaded(payload);
           }
-          nextIndex = index + 1;
           loaded.add(pathPrefix);
 
           if (id) {
@@ -188,7 +174,6 @@ export function buildLibraryHandler(opts: LibraryBridgeOpts): LibraryHandlerBund
           }
           return {
             payload,
-            index,
             files,
             chars,
             sourceId,

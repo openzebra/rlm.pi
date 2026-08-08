@@ -10,8 +10,6 @@
 export type WorkerRequest =
   | { readonly id: string; readonly type: "exec"; readonly code: string }
   | { readonly id: string; readonly type: "load_context"; readonly path: string; readonly index?: number; readonly json: boolean }
-  | { readonly id: string; readonly type: "snapshot"; readonly path: string; readonly nonce: string }
-  | { readonly id: string; readonly type: "restore"; readonly path: string; readonly nonce: string }
   | { readonly id: string; readonly type: "shutdown" };
 
 /** Reply the parent sends to satisfy a sub-LLM interrupt. */
@@ -21,10 +19,9 @@ export interface LlmReply {
   readonly response?: string;
   readonly responses?: readonly string[];
   readonly answers?: readonly AskAnswer[];
-  /** load_library reply: temp file with the packed payload (+ resume index / namespace). */
+  /** load_library reply: temp file with the packed payload (+ namespace metadata). */
   readonly path?: string;
   readonly json?: boolean;
-  readonly index?: number;
   readonly files?: number;
   readonly chars?: number;
   readonly source_id?: string;
@@ -60,10 +57,7 @@ export type InterruptKind =
   | "llm_query_batched"
   | "rlm_query"
   | "rlm_query_batched"
-  | "advance_phase"
-  | "save_artifact"
   | "ask_user_question"
-  | "todo"
   | "load_library";
 
 export interface AskOption {
@@ -115,37 +109,9 @@ interface BatchedPromptInterrupt extends InterruptBase {
   readonly paths?: readonly string[];
 }
 
-interface AdvancePhaseInterrupt extends InterruptBase {
-  readonly type: "advance_phase";
-  readonly phase?: string;
-  readonly summary?: string;
-}
-
-interface SaveArtifactInterrupt extends InterruptBase {
-  readonly type: "save_artifact";
-  readonly artifactKind?: string;
-  readonly content?: string;
-}
-
 export interface AskUserQuestionInterrupt extends InterruptBase {
   readonly type: "ask_user_question";
   readonly questions: readonly AskQuestion[];
-}
-
-export interface TodoInterrupt extends InterruptBase {
-  readonly type: "todo";
-  readonly action: "create" | "update" | "list" | "get" | "delete" | "clear";
-  readonly id?: number;
-  readonly subject?: string;
-  readonly description?: string;
-  readonly status?: "pending" | "in_progress" | "completed" | "deleted";
-  readonly activeForm?: string;
-  readonly blockedBy?: readonly number[];
-  readonly addBlockedBy?: readonly number[];
-  readonly removeBlockedBy?: readonly number[];
-  readonly owner?: string;
-  readonly filterStatus?: string;
-  readonly includeDeleted?: boolean;
 }
 
 export interface LoadLibraryInterrupt extends InterruptBase {
@@ -157,10 +123,7 @@ export interface LoadLibraryInterrupt extends InterruptBase {
 export type WorkerInterrupt =
   | PromptInterrupt
   | BatchedPromptInterrupt
-  | AdvancePhaseInterrupt
-  | SaveArtifactInterrupt
   | AskUserQuestionInterrupt
-  | TodoInterrupt
   | LoadLibraryInterrupt;
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
@@ -170,10 +133,7 @@ export const INTERRUPT_KINDS = Object.freeze(new Set<InterruptKind>([
   "llm_query_batched",
   "rlm_query",
   "rlm_query_batched",
-  "advance_phase",
-  "save_artifact",
   "ask_user_question",
-  "todo",
   "load_library",
 ]));
 

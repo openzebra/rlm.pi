@@ -97,9 +97,6 @@ sub-LLM calls, hence the name.
 | `/rlm` | `Ctrl+Shift+R` | Toggle persistent RLM mode (route plain prompts through the RLM engine) |
 | `/rlm-stop` | | Abort an in-progress run |
 | `/rlm-config` | | Pick smart + worker models and tune run settings |
-| `/rlm-resume` | | Resume an interrupted run (default `@latest`) |
-| `/rlm-runs` | | List recent runs |
-| `/rlm-help` | | Show the startup guide & cheatsheet |
 
 While a run is active, a **live tree** shows the root orchestrator and every sub-LLM /
 recursive child with status, model, cost, tokens, and duration. The final answer is posted
@@ -118,11 +115,8 @@ These functions are injected into the model's Python namespace inside the REPL:
 | `llm_query_chunked` | `(text, prompt, model=None) -> list[str]` | Split large text into cap-sized chunks and fan out via sub-LLMs |
 | `rlm_query` | `(prompt, model=None, paths=None) -> str` | Recursive child RLM with its own sandbox (depth-capped). Inherits your `context`; `paths` narrows it by prefix |
 | `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | Concurrent recursive child RLMs, sharing one `paths` slice |
-| `todo` | `(action, **kwargs) -> str` | Task list: `create`/`update`/`list`/`get`/`delete`/`clear` |
 | `ask_user_question` | `(questions) -> list[dict]` | Ask the user structured questions (depth 0 only) |
 | `load_library` | `(source) -> dict \| str` | Append an external dir, file, or git URL into `context` under `lib/<id>/` |
-| `save_artifact` | `(kind, content) -> str` | Persist a stage artifact (`clarification` / `research` / `plan` / `validation`) under `.rlm/artifacts/` (root depth only). Returns preflight gate critique. |
-| `advance_phase` | `(phase, summary=None) -> str` | Advance one step in order `clarify → research → blueprint → validate` (clarify skipped when `askUserQuestion` is off). **Engine-gated** on the latest artifact + interview rounds. Rejected transitions return the gate error. |
 | `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
 | `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
 
@@ -142,21 +136,7 @@ lib = [f for f in context if f["path"].startswith(info["path_prefix"])]
 
 There is no `context_1` / `context_2` — only `context`. Paths are namespaced so multiple
 libraries do not collide. Toggle via `/rlm-config` → **Library loader** (`libraryLoader`,
-default on). On headless runs with persistence, each load writes a resume sidecar
-(`context.<N>.json`) that is **merged back into `context`** on resume.
-
-### Artifact-gated pipeline (opt-in via `pipeline: true`)
-
-When enabled at root depth:
-
-1. **Goal capture** — the brief is written verbatim to `.rlm/artifacts/goal/goal-<ts>.md` with a pre-run dirty-tree baseline.
-2. **Stages** — `clarify → research → blueprint → validate` (**read-only** — produces a validated plan; does not write code). Each produces a durable markdown artifact with frontmatter contracts; chat history is **reset** at every phase boundary (artifacts are the only channel; REPL vars persist).
-3. **Clarify (intake)** — interviews the user via `ask_user_question` (intent first, then evidence-confirmed decisions). Writes `.rlm/artifacts/clarifications/*` with `decisions_count` / `open_questions_count`. Engine gate: **≥1 serviced ask round** + artifact contract. When **`askUserQuestion` is off**, clarify is skipped and the run starts at research.
-4. **Gates (TypeScript, never LLM judgment)** — `status: ready`; clarify structure; plan `phases:` ≡ fence-aware `## Phase N:` headings; every `file:line` citation resolves; validate carries `blockers_count` + `verdict`. Preflight critique runs on every `save_artifact`.
-5. **Validate** — adversarial plan review against the tree (not a post-implementation diff check). Final answer is the validated plan.
-6. **Corrective loop** — `blockers_count > 0` re-enters blueprint (superseded plan kept for context), bounded by `maxBackwardJumps` (default 2).
-
-Native RLM mode authors file changes with Pi's native `edit` / `write` tools. Sub-LLMs extract and locate; they never ship code.
+default on). A library loaded at any point is inherited by every child spawned afterwards.
 
 ## Settings (`/rlm-config`)
 
@@ -173,14 +153,11 @@ Native RLM mode authors file changes with Pi's native `edit` / `write` tools. Su
 | Token ceiling | none | total input+output token cap for the whole recursive tree |
 | Max consecutive errors | `5` | stop after N consecutive failing turns (none = off) |
 | Orchestrator addendum | on | divide-and-conquer guidance in the root system prompt |
-| Phase pipeline | off | artifact-gated clarify→research→blueprint→validate (read-only plan pipeline) |
-| Max validate→blueprint loops | `2` | bounded corrective re-entries when validation reports blockers |
-| Ask user question | on | when pipeline is on, enables clarify intake; when off, pipeline starts at research |
+| Ask user question | on | expose `ask_user_question()` to the model (root depth only) |
 | Trajectory compaction | on (0.65) | summarize old turns when history nears the context window |
 | Root model output cap (tok) | `16384` | max output tokens per root-model turn |
 | Sandbox init timeout | `30000` ms | how long to wait for the Python worker to start |
 | `askUserQuestion` | on | expose `ask_user_question()` to the model |
-| `todo` | on | expose `todo()` to the model |
 | Library loader | on | expose `load_library()` for external dirs/files/git repos |
 
 > **Concurrency note:** each `rlm_query` child spawns its own `python3` worker (~50–150 ms

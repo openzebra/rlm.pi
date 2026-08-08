@@ -103,9 +103,6 @@ Then run `/reload` or restart Pi. Verify with `pi list` that the package appears
 | `/rlm` | `Ctrl+Shift+R` | Toggle persistent RLM mode (route plain prompts through the RLM engine) |
 | `/rlm-stop` | | Abort an in-progress run |
 | `/rlm-config` | | Pick smart + worker models and tune run settings |
-| `/rlm-resume` | | Resume an interrupted run (default `@latest`) |
-| `/rlm-runs` | | List recent runs |
-| `/rlm-help` | | Show the startup guide & cheatsheet |
 
 While a run is active, a **live tree** shows the root orchestrator and every sub-LLM /
 recursive child with status, model, cost, tokens, and duration. The final answer is posted
@@ -123,10 +120,7 @@ These functions are injected into the model's Python namespace inside the REPL:
 | `llm_query_batched` | `(prompts, model=None) -> list[str]` | Concurrent sub-LLM calls (pool-bounded) |
 | `rlm_query` | `(prompt, model=None, paths=None) -> str` | Recursive child RLM with its own sandbox (depth-capped). Inherits your `context`; `paths` narrows it by prefix |
 | `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | Concurrent recursive child RLMs, sharing one `paths` slice |
-| `todo` | `(action, **kwargs) -> str` | Task list: `create`/`update`/`list`/`get`/`delete`/`clear` |
 | `ask_user_question` | `(questions) -> list[dict]` | Ask the user structured questions (depth 0 only) |
-| `stage_edit` | `(path, old_text, new_text) -> str` | Stage a file edit; relayed to the host's native edit flow |
-| `advance_phase` | `(phase, summary=None) -> str` | Move the root pipeline to a new phase |
 | `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
 | `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
 
@@ -149,7 +143,6 @@ These functions are injected into the model's Python namespace inside the REPL:
 | Root model output cap (tok) | `16384` | max output tokens per root-model turn |
 | Sandbox init timeout | `30000` ms | how long to wait for the Python worker to start |
 | `askUserQuestion` | on | expose `ask_user_question()` to the model |
-| `todo` | on | expose `todo()` to the model |
 
 > **Concurrency note:** each `rlm_query` child spawns its own `python3` worker (~50–150 ms
 > cold start). Worst-case concurrent interpreters ≈ `maxConcurrentSubcalls`^(depth−1); at

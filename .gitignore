@@ -8,10 +8,15 @@ dist/
 # Pi artifacts
 .rpiv/
 .rlm/
+.pi-glla/
 
 # E2E harness artifacts + local OpenRouter key (never commit)
 .rlm-e2e/
 pi-plugin/rlm/test/.env.e2e
+
+# Python bytecode from the sandbox worker package
+__pycache__/
+*.pyc
 
 # npm pack output
 *.tgz

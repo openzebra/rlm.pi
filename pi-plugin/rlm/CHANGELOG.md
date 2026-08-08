@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`/rlm-resume`, `/rlm-runs`, `/rlm-help`.** Resume existed for a headless engine root the
+  plugin no longer routes to, and `/rlm-help` duplicated the guide already posted at
+  `session_start`. `/rlm`, `/rlm-stop` and `/rlm-config` remain.
+- **The phase pipeline** (`clarify → research → blueprint → validate`), which shipped
+  `pipeline: false` and was never turned on. With it go `core/pipeline*.ts`, `core/gates.ts`,
+  `core/critique.ts`, `prompts/phases.ts`, the `save_artifact` / `advance_phase` sandbox
+  functions, and the `--read-only` worker mode that only existed to keep a plan run from
+  writing files.
+- **`core/artifacts.ts` / `save_artifact`.** Only ever reachable from the pipeline.
+- **`todo()`.** It was a per-session in-memory list wired to nothing outside the plugin — a
+  wrapper for a job that belongs to the main agent and its own tools, not to the RLM sandbox.
+  Following prime-agent: do not re-add non-native wrappers.
+- **The run trail, `.pkl` snapshots and `runLog` config** (`src/state/**`, `sandbox.snapshot` /
+  `restore`, the worker's snapshot RPC). With resume and `/rlm-runs` gone nothing in the tree
+  read any of it, so every run was paying for write-only disk I/O. **The engine now performs no
+  disk I/O at all.**
+
+### Fixed
+
+- **"Cheapest worker model" could not see a free model.** Pi's `ModelCost` is non-nullable, so
+  free is a literal `0` — but many catalog entries (subscription and token-plan providers,
+  anything composed with default costs) are also `0`, and `[...models].sort()[0]` is stable, so
+  the pick was simply whichever zero-cost model came first in catalog order. Ranking now lives in
+  `mode/worker-model.ts`: free first, then widest context window (a free 4K model is useless as a
+  bulk reader), then `maxTokens`, then `provider/id` so the choice is stable across sessions and
+  catalog reorderings. Pricing is weighted 3:1 toward input, matching what a sub-call actually
+  sends. Selection is a single pass — no array copy, no sort allocation.
+- **`/rlm-config` silently ended "cheapest (auto)".** Pressing ESC at the model picker fell into
+  the branch that resolves cheapest *once* and writes it to `~/.pi/agent/rlm.json`, after which
+  the auto pick was never consulted again — including once a cheaper model appeared. Only an
+  explicit choice now touches the pin, and the confirmation names the model that actually
+  resolved instead of printing `(cheapest)`.
+- **Worker-model selection could run against an empty catalog.** `session_start` now awaits
+  `modelRegistry.refresh()` before reading `getAvailable()`, which newer pi builds populate
+  asynchronously. Fail-soft: a refresh error is logged, never fatal.
+
+### Changed
+
+- Files split so none carries two jobs: `sandbox/worker.py` → `sandbox/py/{worker,guards,
+  retrieval,tasks}.py`; `prompts/system.ts` → `glossary` (the shared REPL vocabulary both
+  prompts are built from) + `system` + `native`; `tool/repl-tool.ts` → `repl-result` +
+  `repl-render` + the tool; `sandbox/sandbox.ts` → transport + `sandbox/interrupts.ts`.
+- `bridge/interactive.ts` and `bridge/pi-interactive.ts` merged into `bridge/ask-user.ts`:
+  with only `ask_user_question` left, two files for one handler was over-split.
+
 ### Fixed
 
 - **A dying Python worker could take the whole pi session down.** `PythonSandbox` attached

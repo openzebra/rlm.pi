@@ -16,14 +16,13 @@
  */
 
 import { Type } from "typebox";
-import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import type { Model, Usage, Api } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { buildInteractiveHandlers } from "../bridge/interactive.ts";
+import { buildInteractiveHandlers, createPiInteractiveDeps } from "../bridge/ask-user.ts";
 import { buildLibraryHandler } from "../bridge/library.ts";
 import { libraryPrefixesIn } from "../context/library-context.ts";
-import { createPiInteractiveDeps } from "../bridge/pi-interactive.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
 import { LimitGuard, limitsFromConfig } from "../core/limits.ts";
 import type { InteractiveDeps, RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
@@ -40,26 +39,13 @@ import { createEngine } from "../core/engine.ts";
 import { spinnerFrame } from "../ui/theme.ts";
 import { previewText } from "../text/preview.ts";
 import { errorMessage } from "../util/errors.ts";
-import {
-  cardHeader,
-  cardStatsLine,
-  renderCollapsedCard,
-  renderExpandedSubcallTree,
-} from "./subcall-render.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
-import { capReplResultText, replDelegationNudge } from "../mode/native-guards.ts";
+import { buildReplResultText, collectReplWarnings } from "./repl-result.ts";
+import { renderReplCollapsed, renderReplExpanded } from "./repl-render.ts";
 import { attachTracer, trace, traceEnabled } from "../util/trace.ts";
 
-/** Chars of code shown on the tool call line, and of stdout in the expanded view. */
+/** Chars of code shown on the tool call line. */
 const CALL_PREVIEW_CHARS = 80;
-const EXPANDED_STDOUT_CHARS = 2_000;
-const EXPANDED_STDERR_CHARS = 500;
-
-// ── Parameter schema ──
-
-export const ReplToolParams = Object.freeze(Type.Object({
-  code: Type.String({ description: "Python code to execute in the persistent REPL sandbox" }),
-}));
 
 /** Last non-empty line of a Python traceback — the `TypeError: …` line, not the frames. */
 function lastLine(text: string): string {
@@ -71,67 +57,11 @@ function lastLine(text: string): string {
   return "";
 }
 
-/** Model-visible text assembled from a repl() result. */
-export interface ReplResultText {
-  readonly text: string;
-}
+// ── Parameter schema ──
 
-/**
- * Assemble the model-visible text for a repl() result: cap stdout, append a zero-subcall
- * delegation nudge when a bulk read went undelegated, and report tasks still running.
- *
- * The pending line is the model's only signal that `spawn()`ed work is outstanding — without
- * it a model that spawned and moved on has no way to know it should still collect.
- *
- * `varNames` covers the opposite failure: a block that stores its results in `answers` and
- * prints nothing reads as a bare "(no output)", so the model concludes the block did nothing
- * and re-runs it — paying twice for the same sub-calls. The headless engine already answers
- * this with the same hint (core/answer.ts); native mode was the only path missing it.
- */
-export function buildReplResultText(
-  stdout: string,
-  finalAnswer: string | undefined,
-  subcalls: readonly RlmSubcall[],
-  backgroundPending = 0,
-  varNames: readonly string[] = [],
-): ReplResultText {
-  const answerSubmitted = finalAnswer !== undefined;
-  const noOutput = !answerSubmitted && !stdout;
-  const varsHint = noOutput && varNames.length > 0
-    ? ` — the block ran fine and these REPL vars are defined: ${varNames.join(", ")}. `
-      + "Do NOT re-run it; read them in the next block."
-    : "";
-  const rawText = answerSubmitted
-    ? `ANSWER_SUBMITTED (${finalAnswer.length} chars) — delivered to user. Do not restate it.`
-    : stdout || `(no output)${varsHint}`;
-  // Model-visible text is capped; the caller keeps full stdout in `details` for the TUI.
-  const cappedText = capReplResultText(rawText) ?? rawText;
-  const delegated = subcalls.some((s) => s.kind === "llm" || s.kind === "batch" || s.kind === "rlm");
-  const nudge = answerSubmitted ? undefined : replDelegationNudge(rawText.length, delegated);
-  const failedBg = subcalls.filter((s) => s.id.startsWith("bg") && s.status === "error").length;
-  const pendingLine = backgroundPending > 0
-    ? `\n\n[rlm] ${backgroundPending} background task(s) still running — rlm_await_all(tasks) to collect.`
-    : "";
-  const failedLine = failedBg > 0
-    ? `\n[rlm] ${failedBg} background sub-call(s) FAILED — their rlm_await value is an "Error: …" string, not data.`
-    : "";
-  return { text: cappedText + (nudge ?? "") + pendingLine + failedLine };
-}
-
-/** Advisory diagnostics derived from a completed invocation's sub-calls. */
-export function collectReplWarnings(subcalls: readonly RlmSubcall[]): readonly string[] | undefined {
-  let failed = 0;
-  let total = 0;
-  for (let i = 0; i < subcalls.length; i++) {
-    const call = subcalls[i];
-    if (call.status !== "error") continue;
-    // A batch subcall stands for many prompts; a single call stands for one.
-    failed += call.failedCount ?? 1;
-    total += call.totalCount ?? 1;
-  }
-  if (failed === 0) return undefined;
-  return Object.freeze([`${failed}/${total} sub-call(s) failed — results may be incomplete`]);
-}
+export const ReplToolParams = Object.freeze(Type.Object({
+  code: Type.String({ description: "Python code to execute in the persistent REPL sandbox" }),
+}));
 
 // ── Mutable bridge state (handler indirection) ──
 
@@ -142,7 +72,7 @@ export function collectReplWarnings(subcalls: readonly RlmSubcall[]): readonly s
  * calls rather than rebuilding handlers (which would lose REPL variable state). Handlers
  * capture the Invocation synchronously at interrupt entry and never re-read it — with
  * spawn() a sub-call can outlive its exec, and a later read would attribute it to whichever
- * turn happened to be current when it resumed.
+ * turn happened to be current when it settled.
  *
  * Detached work resolves to the session-scoped background Invocation instead, whose emitter
  * and LimitGuard are not torn down at the end of a turn.
@@ -219,7 +149,6 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     // the child's own root turns — so fold both roles into "sub" rather than casting.
     onUsage: onUsage === undefined ? undefined : (usage: Usage) => onUsage(usage, "sub"),
     limits: limitsFromConfig(getConfig()),
-    onTodo: bridgeState.interactive?.onTodo,
     onAskUserQuestion: bridgeState.interactive?.onAskUserQuestion,
   })(input);
 
@@ -251,10 +180,9 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         getContext: () => sandboxManager.contextPayload,
         parentId: undefined,
         signal,
-        startIndex: 1,
         // Keep the manager's replay copy in step with the worker's live `context`, and with it
         // whatever a child spawned after this load will inherit.
-        onLoaded: (_index, payload) => { sandboxManager.appendLibrary(payload); },
+        onLoaded: (payload) => { sandboxManager.appendLibrary(payload); },
       })
     : undefined;
   if (libraryBundle) {
@@ -274,7 +202,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       "semantic reading to map_files / llm_query / llm_query_batched / llm_query_chunked " +
       "(rlm_query for iterative sub-tasks) — stdout returned to you is hard-capped at 4K chars, " +
       "so printing file bodies is useless. Variables, imports, and the `answers`/`plan` memo " +
-      "persist across calls. Also supports todo, ask_user_question, and load_library.",
+      "persist across calls. Also supports ask_user_question and load_library.",
     promptSnippet:
       "repl: run Python in a persistent sandbox holding the whole repository in `context`; " +
       "search/grep_context/outline to locate, map_files/llm_query* to read.",
@@ -347,8 +275,6 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         const interactive = createPiInteractiveDeps(ctx);
         const interactiveHandlers = buildInteractiveHandlers({
           onAskUserQuestion: getConfig().askUserQuestion ? interactive.onAskUserQuestion : undefined,
-          onTodo: interactive.onTodo,
-          onTodoRow: undefined,
           emitter,
           depth: 0,
           parentId: undefined,
@@ -360,7 +286,6 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         await sandboxManager.getOrCreate({
           ...subcallHandlers,
           askUserQuestion: interactiveHandlers.askUserQuestion,
-          todo: interactiveHandlers.todo,
           ...(libraryBundle?.handlers ?? {}),
         });
 
@@ -495,52 +420,4 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       return renderReplCollapsed(details, theme);
     },
   };
-}
-
-// ── Collapsed view ──
-
-function replStats(details: ReplDetails, theme: Theme): string {
-  const elapsed = details.executionTimeMs > 0 ? `${details.executionTimeMs}ms` : undefined;
-  return cardStatsLine(details.totals, theme, elapsed, details.backgroundPending);
-}
-
-function renderReplCollapsed(details: ReplDetails, theme: Theme): Text {
-  return renderCollapsedCard("REPL", details.status, replStats(details, theme), details.subcalls, theme);
-}
-
-// ── Expanded view ──
-
-function renderReplExpanded(details: ReplDetails, theme: Theme): Container {
-  const container = new Container();
-
-  container.addChild(new Text(cardHeader("REPL", details.status, replStats(details, theme), theme), 0, 0));
-
-  // Output
-  if (details.output) {
-    container.addChild(new Spacer(1));
-    const out = details.output.length > EXPANDED_STDOUT_CHARS
-      ? `${details.output.slice(0, EXPANDED_STDOUT_CHARS)}…`
-      : details.output;
-    container.addChild(new Text(out, 0, 0));
-  }
-
-  if (details.warnings && details.warnings.length > 0) {
-    container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("muted", details.warnings.join("\n")), 0, 0));
-  }
-
-  // Stderr
-  if (details.stderr) {
-    container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("error", details.stderr.slice(0, EXPANDED_STDERR_CHARS)), 0, 0));
-  }
-
-  // Sub-call tree
-  if (details.subcalls.length > 0) {
-    container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("muted", "─── Sub-calls ───"), 0, 0));
-    container.addChild(renderExpandedSubcallTree(details.subcalls, theme));
-  }
-
-  return container;
 }

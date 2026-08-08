@@ -59,7 +59,7 @@ function rlmOnlyHandlers(opts: {
     onChildUsage: opts.onChildUsage,
   });
 }
-import { cheapestModel } from "../src/mode/rlm-mode.ts";
+import { cheapestModel } from "../src/mode/worker-model.ts";
 
 /** Deterministic, token-free check of the recursion depth-cap + ordering logic. */
 async function testRecursionBridge(): Promise<boolean> {
