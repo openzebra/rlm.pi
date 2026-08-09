@@ -24,7 +24,29 @@ const BLOCKED_NATIVE_TOOLS = Object.freeze(new Set(["read", "grep"]));
 const WATCHDOG_HEARTBEAT_MS = 30_000;
 const CAPPED_RESULT_TOOLS = Object.freeze(new Set(["bash", "find", "ls"]));
 
+// ── Subagent isolation ────────────────────────────────────────────────────────
+// pi-subagents spawns each child as a standalone pi process built around native
+// file tools (read/grep/bash). RLM's contract is the opposite: it blocks those
+// tools and routes reading through `repl`, which (a) needs the repo pre-packed
+// via repomix and (b) is not injected into the child's tool allowlist by
+// pi-subagents. Forcing RLM onto a subagent child therefore leaves it unable to
+// read anything. Bypass RLM entirely in children; the parent session keeps full
+// RLM behaviour. Set PI_RLM_FORCE_IN_SUBAGENT=1 to opt a child back in
+// (experimental — the child must then be able to pack its own cwd).
+const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
+const RLM_FORCE_IN_SUBAGENT_ENV = "PI_RLM_FORCE_IN_SUBAGENT";
+
+/** True inside a pi-subagents child that should NOT activate RLM. Exported for tests. */
+export function isSubagentChildBypass(): boolean {
+  return process.env[SUBAGENT_CHILD_ENV] === "1"
+    && process.env[RLM_FORCE_IN_SUBAGENT_ENV] !== "1";
+}
+
 export default function rlmExtension(pi: ExtensionAPI): void {
+  // Subagent children run pi-subagents' native tool flow; RLM is a parent-session
+  // optimisation that breaks the child's tool contract. See isSubagentChildBypass().
+  if (isSubagentChildBypass()) return;
+
   // Init synchronously with defaults — ensures commands/tools/handlers register before session_start
   const config = mergeConfig({});
   const controller = new RlmController(config);
