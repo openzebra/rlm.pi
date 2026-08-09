@@ -166,6 +166,24 @@ inherited by every child spawned afterwards.
 > each holds a full Python process and its own copy of the inherited context. Error and
 > wall-clock caps (above) still bound a runaway tree.
 
+## Subagents and environment
+
+RLM never confiscates native file tools (`read` / `grep` / bash readers) unless `repl` is in
+the **active** tool set — the paper's trade is all-or-nothing. Process-boundary subagents that
+spawn pi with a `--tools` allowlist without `repl` therefore keep ordinary file access.
+
+Optional env conventions (for packages that want an explicit full bypass):
+
+| Env | Meaning |
+|---|---|
+| `PI_SUBAGENT_CHILD=1` | Full RLM bypass in this process (no tools / hooks / flags). |
+| `PI_RLM_FORCE_IN_SUBAGENT=1` | Experimental: opt a child back into RLM. **Consumed on activate** (not inherited after). Refused when `PI_RLM_DEPTH >= maxDepth`. |
+| `PI_RLM_DEPTH` | Cross-process depth counter (default `0`). Bumped when force-in activates. |
+
+In-process recursion (`rlm_query`) still uses `maxDepth` from `/rlm-config` and is unrelated to
+these env vars. Set `RLM_TRACE_FILE` to a path for JSONL traces of bypass / force / block-skip
+decisions.
+
 ## Security
 
 - **Key isolation**: provider keys live only in TypeScript (`AuthStorage`); the sandbox

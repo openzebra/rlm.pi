@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Subagent / process-boundary children stay able to read files.** RLM's native mode
+  blocks `read`/`grep` and routes through `repl`. That trade is only valid when `repl` is
+  actually in the **active** tool set. Official pi subagent spawns (`--tools read,…` with no
+  env flag) previously inherited the extension, lost `repl` to the allowlist, and still had
+  readers blocked — a blind child. Two layers:
+  1. **Env fast path** (PR
+     [#9](https://github.com/openzebra/rlm.pi/pull/9)): `PI_SUBAGENT_CHILD=1` bypasses RLM
+     entirely. Experimental `PI_RLM_FORCE_IN_SUBAGENT=1` is now **depth-gated** via
+     `PI_RLM_DEPTH` against `maxDepth` and **consumed** on activate so env inheritance cannot
+     unbounded-recurse across process trees (paper §7 exploding costs).
+  2. **Capability gate**: even when RLM loads, native reader blocks / caps / prompt addenda
+     apply only when `repl` is active (`pi.getActiveTools()`). Fail-open otherwise.
+  `test/subagent-bypass.ts` is wired into the smoke harness.
+
 - **Windows/cp1252 sandbox transport (issue
   [#7](https://github.com/openzebra/rlm.pi/issues/7), thanks [@eglove](https://github.com/eglove)).**
   Node always speaks UTF-8 on the host↔worker pipe and in context temp files, but Python text

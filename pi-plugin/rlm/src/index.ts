@@ -21,35 +21,44 @@ import { formatContextListing } from "./context/listing.ts";
 import type { AddContextHandlerBundle } from "./bridge/add-context.ts";
 import { buildNativeSystemPrompt, NATIVE_TURN_REMINDER } from "./prompts/native.ts";
 import { bashCommandFromInput, isFileReadingCommand, capToolResultText, BASH_BLOCK_REASON } from "./mode/native-guards.ts";
+import {
+  isSubagentChildBypass,
+  commitSubagentForceActivation,
+  shouldEnforceNativeReaderBlock,
+  processRlmDepth,
+} from "./mode/subagent.ts";
 import { errorMessage } from "./util/errors.ts";
+import { trace, traceEnabled } from "./util/trace.ts";
+
+export {
+  isSubagentChildBypass,
+  commitSubagentForceActivation,
+  shouldEnforceNativeReaderBlock,
+  processRlmDepth,
+} from "./mode/subagent.ts";
 
 const BLOCKED_NATIVE_TOOLS = Object.freeze(new Set(["read", "grep"]));
 /** How often to keep the parent sandbox's request watchdog alive during detached work. */
 const WATCHDOG_HEARTBEAT_MS = 30_000;
 const CAPPED_RESULT_TOOLS = Object.freeze(new Set(["bash", "find", "ls"]));
 
-// ── Subagent isolation ────────────────────────────────────────────────────────
-// pi-subagents spawns each child as a standalone pi process built around native
-// file tools (read/grep/bash). RLM's contract is the opposite: it blocks those
-// tools and routes reading through `repl`, which (a) needs the repo pre-packed
-// via repomix and (b) is not injected into the child's tool allowlist by
-// pi-subagents. Forcing RLM onto a subagent child therefore leaves it unable to
-// read anything. Bypass RLM entirely in children; the parent session keeps full
-// RLM behaviour. Set PI_RLM_FORCE_IN_SUBAGENT=1 to opt a child back in
-// (experimental — the child must then be able to pack its own cwd).
-const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
-const RLM_FORCE_IN_SUBAGENT_ENV = "PI_RLM_FORCE_IN_SUBAGENT";
-
-/** True inside a pi-subagents child that should NOT activate RLM. Exported for tests. */
-export function isSubagentChildBypass(): boolean {
-  return process.env[SUBAGENT_CHILD_ENV] === "1"
-    && process.env[RLM_FORCE_IN_SUBAGENT_ENV] !== "1";
-}
-
 export default function rlmExtension(pi: ExtensionAPI): void {
-  // Subagent children run pi-subagents' native tool flow; RLM is a parent-session
-  // optimisation that breaks the child's tool contract. See isSubagentChildBypass().
-  if (isSubagentChildBypass()) return;
+  // Subagent children run a native tool flow; RLM's contract is the opposite
+  // (block read/grep, route through repl). Env fast path: full bypass when
+  // PI_SUBAGENT_CHILD=1 (unless force-in under the depth cap). See mode/subagent.ts.
+  if (isSubagentChildBypass()) {
+    if (traceEnabled) {
+      trace("subagent.bypass", {
+        reason: process.env.PI_RLM_FORCE_IN_SUBAGENT === "1" ? "force_depth_cap" : "child",
+        depth: processRlmDepth(),
+      });
+    }
+    return;
+  }
+  commitSubagentForceActivation();
+  if (traceEnabled && process.env.PI_SUBAGENT_CHILD === "1") {
+    trace("subagent.force", { depth: processRlmDepth() });
+  }
 
   // Init synchronously with defaults — ensures commands/tools/handlers register before session_start
   const config = mergeConfig({});
@@ -225,9 +234,16 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
   });
 
-  // ── System prompt: native RLM mode addendum (only when enabled) ──
+  /** True when the native-mode trade holds: enabled AND repl is in the active tool set. */
+  const nativeTradeHolds = (): boolean =>
+    shouldEnforceNativeReaderBlock({
+      enabled: controller.enabled,
+      activeToolNames: typeof pi.getActiveTools === "function" ? pi.getActiveTools() : undefined,
+    });
+
+  // ── System prompt: native RLM mode addendum (only when the trade holds) ──
   pi.on("before_agent_start", async (event) => {
-    if (!controller.enabled) return;
+    if (!nativeTradeHolds()) return;
     return { systemPrompt: event.systemPrompt + "\n\n" + buildNativeSystemPrompt() };
   });
 
@@ -240,7 +256,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
         !(message.role === "custom" && message.customType === "rlm-intro")
         && !(message.role === "user" && typeof message.content === "string" && message.content === NATIVE_TURN_REMINDER),
     );
-    if (!controller.enabled) return { messages: filtered };
+    if (!nativeTradeHolds()) return { messages: filtered };
 
     type PiMessage = (typeof filtered)[number];
 
@@ -278,8 +294,15 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // `edit`/`write` stay unblocked so the agent modifies files through Pi's native
   // tool flow (visible to all plugins, +/- diff preview). File reading/searching
   // belongs in the REPL, and bash output is capped as a backstop.
+  // Fail-open when repl is not active (e.g. --tools allowlist without repl): never
+  // confiscate readers without a working substitute (RLM paper §2 trade).
   pi.on("tool_call", async (event) => {
-    if (!controller.enabled) return;
+    if (!nativeTradeHolds()) {
+      if (traceEnabled && controller.enabled) {
+        trace("native.block_skip", { toolName: event.toolName, reason: "no_active_repl" });
+      }
+      return;
+    }
     if (BLOCKED_NATIVE_TOOLS.has(event.toolName)) {
       return {
         block: true,
@@ -293,7 +316,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_result", async (event) => {
-    if (!controller.enabled || !CAPPED_RESULT_TOOLS.has(event.toolName)) return;
+    if (!nativeTradeHolds() || !CAPPED_RESULT_TOOLS.has(event.toolName)) return;
     let changed = false;
     const content = event.content.map((c) => {
       if (c.type !== "text") return c;
