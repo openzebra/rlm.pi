@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows/cp1252 sandbox transport (issue
+  [#7](https://github.com/openzebra/rlm.pi/issues/7), thanks [@eglove](https://github.com/eglove)).**
+  Node always speaks UTF-8 on the host↔worker pipe and in context temp files, but Python text
+  I/O defaults to the locale encoding — cp1252 on a Western Windows install — so any non-ASCII
+  content raised `UnicodeDecodeError` in `load_context` / `add_context` before the REPL ran, and
+  REPL output with Cyrillic/CJK/emoji killed the worker mid-request via `UnicodeEncodeError` on
+  stdout. Fix is three layers: new `py/hostio.py` with `read_host_payload` (strict UTF-8) and
+  `pin_stdio_utf8()` (`.reconfigure()` so it beats `PYTHONIOENCODING`), both scaffold reads
+  collapsed onto that helper (DRY), and `-X utf8=1` on the worker spawn so model-written bare
+  `open()` is UTF-8 too. Declined `errors="replace"` on the read side — the host always writes
+  UTF-8, so a decode error is a transport bug and replacing would feed the model mojibake'd
+  source. Also sets `windowsHide: true` on the worker spawn (matches pi) so each sandbox does
+  not flash a console window on Windows.
+
 ## [0.3.0] - 2026-08-10
 
 ### Changed
