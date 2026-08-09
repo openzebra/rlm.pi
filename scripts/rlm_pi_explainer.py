@@ -152,10 +152,10 @@ def render_frame(frame_num: int, out_dir: str):
 
     elif scene_t < 2.0:
         q = ease(scene_t - 1.0)
-        text(draw, "Context is packed once, then patched", cx, 76, BLUE, 24)
+        text(draw, "Context seeds on first repl(), then grows", cx, 76, BLUE, 24)
         repo(draw, 80, 130, q)
-        node(draw, 340, 155, 180, 92, BLUE, "repomix", "packRepository()")
-        node(draw, 610, 150, 160, 105, GREEN, "Context", "cached bundle")
+        node(draw, 340, 155, 180, 92, BLUE, "walker", "resolveSource()")
+        node(draw, 610, 150, 160, 105, GREEN, "Context", "starts empty")
         arrow(draw, 245, 232, lerp(245, 335, q), 202, BLUE)
         arrow(draw, 525, 202, lerp(525, 605, q), 202, GREEN)
         if q > 0.55:
@@ -163,9 +163,9 @@ def render_frame(frame_num: int, out_dir: str):
                 x = 624 + i * 36
                 y = 275 + math.sin(t * 8 + i) * 4
                 round_rect(draw, (x, y, x + 86, y + 24), YELLOW, None, 1, 5)
-                text(draw, "edit patch", x + 43, y + 12, BLACK, 10)
+                text(draw, "add_context", x + 43, y + 12, BLACK, 10)
             arrow(draw, 675, 275, 675, 258, YELLOW, 2, 8)
-            text(draw, "no full repack", 675, 330, DIM, 14, bold=False)
+            text(draw, "docs → Markdown", 675, 330, DIM, 14, bold=False)
 
     elif scene_t < 3.0:
         q = ease(scene_t - 2.0)

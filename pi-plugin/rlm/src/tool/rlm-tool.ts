@@ -31,7 +31,7 @@ const CALL_PREVIEW_CHARS = 80;
 
 export const RlmToolParams = Object.freeze(Type.Object({
   prompt: Type.String({ description: "The task or question for the RLM engine" }),
-  context: Type.Optional(Type.String({ description: "Optional context. If omitted, repo is auto-packed via repomix." })),
+  context: Type.Optional(Type.String({ description: "Optional context. If omitted, the working directory is packed into context." })),
 }));
 
 // ── Rendering helpers ──

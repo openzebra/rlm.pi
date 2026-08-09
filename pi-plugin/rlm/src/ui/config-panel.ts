@@ -20,7 +20,8 @@ const CHOICES = Object.freeze({
   rootSamplingMaxTokens: Object.freeze(["4096", "8192", "16384", "32768"]),
   sandboxInitTimeoutMs: Object.freeze(["10000", "30000", "60000", "120000"]),
   requestTimeoutMs: Object.freeze(["2", "5", "10", "20"]),
-  libraryLoader: Object.freeze(["on", "off"]),
+  contextLoader: Object.freeze(["on", "off"]),
+  autoSeedCwd: Object.freeze(["on", "off"]),
 });
 
 function item(id: string, label: string, currentValue: string, values: readonly string[], description: string): SettingItem {
@@ -49,8 +50,10 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("rootSamplingMaxTokens", "Root model output cap (tok)", String(config.rootSampling?.maxTokens ?? 16384), CHOICES.rootSamplingMaxTokens, "Max output tokens per root-model turn. Lower values keep each turn lean."),
     item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
     item("requestTimeoutMs", "Sandbox request timeout (min)", String(Math.round(config.requestTimeoutMs / 60_000)), CHOICES.requestTimeoutMs, "Parent-side watchdog per sandbox request; on breach the Python worker is killed."),
-    item("libraryLoader", "Library loader", config.libraryLoader ? "on" : "off", CHOICES.libraryLoader,
-      "Allow load_library() to pull an external dir, file, or git repo into the shared context list."),
+    item("contextLoader", "Context loader", config.contextLoader ? "on" : "off", CHOICES.contextLoader,
+      "Allow add_context() to pull an external dir, file, document, or git repo into context."),
+    item("autoSeedCwd", "Auto-seed cwd", config.autoSeedCwd ? "on" : "off", CHOICES.autoSeedCwd,
+      "Seed the working directory into context on the first repl() call (otherwise starts empty)."),
     item("__save__", "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
   ];
 
@@ -104,7 +107,8 @@ export function applySetting(config: RlmConfig, id: string, value: string): RlmC
       return Object.freeze({ ...config, rootSampling: Object.freeze({ ...config.rootSampling, maxTokens: Number(value) }) });
     case "sandboxInitTimeoutMs": return Object.freeze({ ...config, sandboxInitTimeoutMs: Number(value) });
     case "requestTimeoutMs": return Object.freeze({ ...config, requestTimeoutMs: Number(value) * 60_000 });
-    case "libraryLoader": return Object.freeze({ ...config, libraryLoader: value === "on" });
+    case "contextLoader": return Object.freeze({ ...config, contextLoader: value === "on" });
+    case "autoSeedCwd": return Object.freeze({ ...config, autoSeedCwd: value === "on" });
     default: return config;
   }
 }

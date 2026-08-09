@@ -25,7 +25,7 @@ export function estimateMessageTokens(messages: { content: string }[]): number {
  * Character length of one context entry. `ContextFile`-shaped entries report their content
  * length; anything else falls back to its serialized form.
  *
- * Deliberately does NOT import `isContextFile` from context/library-context.ts: that module
+ * Deliberately does NOT import `isContextFile` from context/namespace.ts: that module
  * imports `estimateTokens` from here, so the reverse import would be a cycle. `in`-narrowing
  * needs no type guard and no cast.
  */
@@ -74,8 +74,8 @@ const isTokenizedEntry = (v: unknown): v is { readonly tokens: number } =>
   typeof v === "object" && v !== null && typeof (v as { readonly tokens?: unknown }).tokens === "number";
 
 /** Per-file token distribution for a context payload; `undefined` for plain strings or empty arrays.
- *  Handles both serialized ContextFile[] (flat array from serializeForSandbox) and raw ContextBundle
- *  objects ({ files: [...] }) so callers don't need to know which form they received. */
+ *  Handles both a flat ContextFile[] and a raw bundle object ({ files: [...] }) so callers
+ *  don't need to know which form they received. */
 export function contextSizeStats(context: unknown): ContextSizeStats | undefined {
   // Normalise to a flat entry list: accept either a direct array or an object with a .files array.
   const entries: readonly unknown[] = Array.isArray(context)

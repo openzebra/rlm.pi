@@ -2,50 +2,45 @@
  * Native RLM Mode integration tests.
  * Run: bun run pi-plugin/rlm/test/native-mode.ts
  *
- * Tests: SandboxManager lifecycle, formatForLLM(), buildNativeSystemPrompt(),
+ * Tests: SandboxManager lifecycle, formatContextListing(), buildNativeSystemPrompt(),
  * and ReplDetails type structure.
  */
 
 import { check, fail, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
-import { formatForLLM } from "../src/context/repomix-context.ts";
+import { formatContextListing } from "../src/context/listing.ts";
 import { buildNativeSystemPrompt } from "../src/prompts/native.ts";
 import { buildReplResultText, collectReplWarnings } from "../src/tool/repl-result.ts";
-import type { ContextBundle } from "../src/context/repomix-context.ts";
+import type { ContextFile } from "../src/context/types.ts";
 import type { RlmSubcall } from "../src/tool/rlm-details.ts";
 
 
-// ── formatForLLM tests ──
+// ── formatContextListing tests ──
 
-function testFormatForLLM() {
-  const empty: ContextBundle = { files: [], totalFiles: 0, totalTokens: 0, totalChars: 0 };
-  const out = formatForLLM(empty);
-  check("formatForLLM empty bundle — non-empty", out.length > 0);
-  check("formatForLLM empty bundle — shows 0 files", out.includes("0 files"));
-  check("formatForLLM empty bundle — includes hint", out.includes("pre-loaded in the REPL"));
+function testFormatContextListing() {
+  const out = formatContextListing([]);
+  check("formatContextListing empty — non-empty", out.length > 0);
+  check("formatContextListing empty — names EMPTY", out.includes("EMPTY"));
+  check("formatContextListing empty — names add_context for external sources", out.includes("add_context"));
+  check("formatContextListing empty — does not suggest add_context(\".\")", !out.includes('add_context(".")'));
 
-  const small: ContextBundle = {
-    files: [
-      { path: "a.ts", content: "const x = 1;", tokens: 5 },
-      { path: "b.ts", content: "const y = 2;", tokens: 5 },
-    ],
-    totalFiles: 2, totalTokens: 10, totalChars: 24,
-  };
-  const out2 = formatForLLM(small);
-  check("formatForLLM small bundle — shows file paths", out2.includes("a.ts") && out2.includes("b.ts"));
-  check("formatForLLM small bundle — shows token counts", out2.includes("5 tok"));
-  check("formatForLLM small bundle — shows char counts", out2.includes("chars"));
-  check("formatForLLM small bundle — no truncation", !out2.includes("truncated"));
+  const small: readonly ContextFile[] = Object.freeze([
+    { path: "a.ts", content: "const x = 1;", tokens: 5 },
+    { path: "b.ts", content: "const y = 2;", tokens: 5 },
+  ]);
+  const out2 = formatContextListing(small);
+  check("formatContextListing small — shows file paths", out2.includes("a.ts") && out2.includes("b.ts"));
+  check("formatContextListing small — shows token counts", out2.includes("5 tok"));
+  check("formatContextListing small — shows char counts", out2.includes("chars"));
+  check("formatContextListing small — no truncation", !out2.includes("truncated"));
 
-  // Large bundle simulation
   const files = Array.from({ length: 250 }, (_, i) => ({
     path: `src/file${i}.ts`, content: "x", tokens: 1,
   }));
-  const large: ContextBundle = { files, totalFiles: 250, totalTokens: 250, totalChars: 250 };
-  const out3 = formatForLLM(large);
-  check("formatForLLM large bundle — truncates", out3.includes("more files (truncated)"));
-  check("formatForLLM large bundle — shows total", out3.includes("250 files"));
+  const out3 = formatContextListing(files);
+  check("formatContextListing large — truncates", out3.includes("more files (truncated)"));
+  check("formatContextListing large — shows total", out3.includes("250 files"));
 }
 
 // ── buildNativeSystemPrompt tests ──
@@ -160,27 +155,25 @@ async function testSandboxManager() {
   check("SandboxManager — stage_edit removed (NameError)", gone.raised && gone.stderr.includes("NameError"));
 
   // Core surface still present (context is only set after loadContext)
-  const alive = await mgr.exec("print(callable(llm_query), callable(SHOW_VARS), callable(load_library))");
+  const alive = await mgr.exec("print(callable(llm_query), callable(SHOW_VARS), callable(add_context))");
   check("SandboxManager — core REPL surface intact", !alive.raised && alive.stdout.includes("True True True"));
 
-  // ── appendLibrary keeps the replay copy truthful across a death-recreate ──
-  // Before this, contextPayload was written once and never grew, so a recreate silently rolled
-  // the sandbox back to a repo-only context and any child inheriting it never saw the library.
+  // ── appendContext keeps the replay copy truthful across a death-recreate ──
   mgr.contextPayload = [{ path: "repo.ts", content: "r", tokens: 1 }];
-  mgr.appendLibrary([{ path: "lib/x-9f3a/a.ts", content: "lib content", tokens: 1 }]);
+  mgr.appendContext([{ path: "ctx/x-9f3a/a.ts", content: "lib content", tokens: 1 }]);
   check(
-    "SandboxManager — appendLibrary grows the replay payload",
+    "SandboxManager — appendContext grows the replay payload",
     Array.isArray(mgr.contextPayload) && mgr.contextPayload.length === 2,
     Array.isArray(mgr.contextPayload) ? `len=${mgr.contextPayload.length}` : "not array",
   );
-  mgr.appendLibrary([{ path: "lib/x-9f3a/a.ts", content: "lib content", tokens: 1 }]);
+  mgr.appendContext([{ path: "ctx/x-9f3a/a.ts", content: "lib content", tokens: 1 }]);
   check(
-    "SandboxManager — appendLibrary dedups by lib/<id>/ prefix",
+    "SandboxManager — appendContext dedups by ctx/<id>/ prefix",
     Array.isArray(mgr.contextPayload) && mgr.contextPayload.length === 2,
     Array.isArray(mgr.contextPayload) ? `len=${mgr.contextPayload.length}` : "not array",
   );
 
-  // Kill the worker so the next getOrCreate recreates it, then prove the library came back.
+  // Kill the worker so the next getOrCreate recreates it, then prove the source came back.
   const discardsBeforeKill = discardedCount;
   await mgr.exec("import os; os._exit(1)").catch(() => {});
   check(
@@ -190,10 +183,10 @@ async function testSandboxManager() {
   );
   await mgr.getOrCreate({});
   const replayed = await mgr.exec(
-    "print(len(context), any(f['path'].startswith('lib/x-9f3a/') for f in context))",
+    "print(len(context), any(f['path'].startswith('ctx/x-9f3a/') for f in context))",
   );
   check(
-    "SandboxManager — recreate replays the merged payload, library included",
+    "SandboxManager — recreate replays the merged payload, source included",
     replayed.stdout.includes("2 True"),
     replayed.stdout.trim() || replayed.stderr.slice(0, 80),
   );
@@ -269,8 +262,8 @@ async function testWatchdogKillRecovers() {
 // ── Main ──
 
 async function main() {
-  console.log("─── formatForLLM ───");
-  testFormatForLLM();
+  console.log("─── formatContextListing ───");
+  testFormatContextListing();
 
   console.log("\n─── buildNativeSystemPrompt ───");
   testNativeSystemPrompt();

@@ -35,7 +35,7 @@
 - Работа с длинным контекстом **делегируется** дешевым worker-моделям через `llm_query` / `llm_query_batched`.
 - Сложные подзадачи **рекурсивно** передаются в дочерние RLM через `rlm_query` (с ограничением глубины).
   Дочерний RLM наследует `context` родителя — репозиторий и все библиотеки, загруженные через
-  `load_library()`, — и работает с теми же путями. Наследование не стоит дополнительных токенов:
+  `add_context()`, — и работает с теми же путями. Наследование не стоит дополнительных токенов:
   содержимое живёт в песочнице, модель видит только строку с размером.
 - Все работает **in-process** — единственным внешним процессом является локальный worker `python3`.
 
@@ -154,7 +154,7 @@ src/
   text/       parsing (repl blocks) · tokens · preview
   tool/       repl-tool · repl-result · repl-render · rlm-tool · rlm-events · rlm-aggregator · subcall-store · background-tasks
   config/     defaults · settings (rlm.json persistence + validation)
-  context/    repomix repository packing + library context merge
+  context/    native walker + anydoc document conversion + add_context
   ui/         status · model-picker · config-panel · intro · theme
   commands/   rlm · rlm-config
   mode/       rlm-mode (controller) · worker-model (cheapest pick) · native-guards

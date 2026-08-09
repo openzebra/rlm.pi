@@ -84,8 +84,11 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (subSystemPrompt !== undefined) out.subSystemPrompt = subSystemPrompt;
   const sandboxInitTimeoutMs = validateNumber(r.sandboxInitTimeoutMs, 100);
   if (sandboxInitTimeoutMs !== undefined) out.sandboxInitTimeoutMs = sandboxInitTimeoutMs;
-  const libraryLoader = validateBoolean(r.libraryLoader);
-  if (libraryLoader !== undefined) out.libraryLoader = libraryLoader;
+  // `libraryLoader` is the pre-rename key — still read so an existing rlm.json survives the upgrade.
+  const contextLoader = validateBoolean(r.contextLoader) ?? validateBoolean(r.libraryLoader);
+  if (contextLoader !== undefined) out.contextLoader = contextLoader;
+  const autoSeedCwd = validateBoolean(r.autoSeedCwd);
+  if (autoSeedCwd !== undefined) out.autoSeedCwd = autoSeedCwd;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
     const ss = r.subSampling as Record<string, unknown>;
     const sampling: { maxTokens?: number; temperature?: number; reasoning?: ThinkingLevel } = {};

@@ -7,7 +7,7 @@
 import { check, failureCount } from "./helpers.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { NATIVE_PROMPT_STATIC, NATIVE_PROMPT_BUDGET, NATIVE_TURN_REMINDER } from "../src/prompts/native.ts";
-import { formatForLLM } from "../src/context/repomix-context.ts";
+import { formatContextListing } from "../src/context/listing.ts";
 import { buildReplResultText } from "../src/tool/repl-result.ts";
 import {
   bashCommandFromInput,
@@ -146,9 +146,9 @@ async function main() {
   check("per-turn reminder mentions the contract", NATIVE_TURN_REMINDER.includes("llm_query_chunked"));
 
   // ── context listing tail no longer contradicts ──
-  const listing = formatForLLM({ files: [], totalFiles: 0, totalTokens: 0, totalChars: 0 });
-  check("formatForLLM no longer points at file-reading tools", !listing.includes("use the file-reading tools"));
-  check("formatForLLM points at repl delegation", listing.includes("llm_query_batched"));
+  const listing = formatContextListing([]);
+  check("formatContextListing no longer points at file-reading tools", !listing.includes("use the file-reading tools"));
+  check("formatContextListing points at repl delegation", listing.includes("llm_query_batched"));
 
   // ── repl result assembly (exercises the real production function, not a hand-built concatenation) ──
   const bigStdout = "z".repeat(10_000);
@@ -183,7 +183,7 @@ async function main() {
       const probe = await sandbox.exec(`print(${name})`);
       check(`${name} is removed from the sandbox`, probe.raised && probe.stderr.includes("NameError"), probe.stderr.slice(0, 120));
     }
-    const alive = await sandbox.exec("print(callable(llm_query), callable(search), callable(load_library))");
+    const alive = await sandbox.exec("print(callable(llm_query), callable(search), callable(add_context))");
     check("retrieval + delegation surface intact", !alive.raised && alive.stdout.includes("True True True"), alive.stderr.slice(0, 120));
   } finally {
     await sandbox.dispose();

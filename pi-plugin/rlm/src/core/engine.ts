@@ -9,8 +9,8 @@
 
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { buildLibraryHandler } from "../bridge/library.ts";
-import { mergeLibraryIntoContext } from "../context/library-context.ts";
+import { buildAddContextHandler } from "../bridge/add-context.ts";
+import { mergeIntoContext } from "../context/merge.ts";
 import {
   createSubcallHandlers,
   type Invocation,
@@ -30,7 +30,6 @@ import { appendUserMessage } from "./history.ts";
 import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
 import type { RlmConfig, RlmInput, RlmResult, RunRlm, Sampling } from "./types.ts";
-import { serializeForSandbox, type ContextBundle } from "../context/repomix-context.ts";
 import { formatError } from "../util/errors.ts";
 import { createSubcallGates, type SubcallGates } from "../util/concurrency.ts";
 
@@ -128,7 +127,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
       getConfig: () => deps.config,
       signal: deps.signal,
       runChild: run,
-      // Read lazily: a library loaded on turn 3 must reach a child spawned on turn 4. Safe
+      // Read lazily: a source added on turn 3 must reach a child spawned on turn 4. Safe
       // despite being wired before liveContext is assigned — children can only spawn from an
       // interrupt during runTurn, which is strictly after loadContext below.
       getChildContext: () => liveContext,
@@ -153,19 +152,19 @@ export function createEngine(deps: EngineDeps): RunRlm {
     };
     let sandbox: PythonSandbox | undefined;
     /**
-     * This run's live context: the repo pack plus every library loaded so far. Children inherit
-     * it, so it must grow when load_library appends (see the library handler's onLoaded below).
+     * This run's live context: whatever was seeded plus every source added so far. Children
+     * inherit it, so it must grow when add_context appends (see the handler's onLoaded below).
      *
      * Run-scoped on purpose — recursion means N of these are live at once, and a module-level
      * "current context" would hand a depth-3 child its cousin's world.
      */
-    let liveContext: unknown = null;
+    let liveContext: unknown = [];
     /**
      * This run's hold on the serialized context file. Kept for the whole run so every child that
      * inherits the same payload reuses one file instead of re-serializing the repository.
      */
     let contextPin: PinnedContext | undefined;
-    /** Re-pin after the payload changes identity (mergeLibraryIntoContext returns a new array). */
+    /** Re-pin after the payload changes identity (mergeIntoContext returns a new array). */
     const repinLiveContext = async (): Promise<void> => {
       const previous = contextPin;
       contextPin = await pinContext(liveContext);
@@ -188,12 +187,12 @@ export function createEngine(deps: EngineDeps): RunRlm {
         orchestrator: deps.config.orchestrator,
         recursion: input.depth + 1 < deps.config.maxDepth,
         maxPromptChars: deps.config.maxPromptChars,
-        libraryLoader: deps.config.libraryLoader,
+        contextLoader: deps.config.contextLoader,
         child: input.depth > 0,
       });
 
-      const libraryHandlers = deps.config.libraryLoader
-        ? buildLibraryHandler({
+      const contextHandlers = deps.config.contextLoader
+        ? buildAddContextHandler({
             cwd: runCwd,
             emitter,
             parentId: selfReportId,
@@ -201,8 +200,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
             getContext: () => liveContext,
             onLoaded: async (payload) => {
               // The accumulator is what children inherit, which is what makes inheritance
-              // transitive — grandchildren see the library too.
-              liveContext = mergeLibraryIntoContext(liveContext, payload);
+              // transitive — grandchildren see the source too.
+              liveContext = mergeIntoContext(liveContext, payload);
               await repinLiveContext();
             },
           }).handlers
@@ -217,17 +216,14 @@ export function createEngine(deps: EngineDeps): RunRlm {
         initTimeoutMs: deps.config.sandboxInitTimeoutMs,
         maxPromptChars: deps.config.maxPromptChars,
         awaitTimeoutS: Math.round(deps.config.requestTimeoutMs / 1000),
-        handlers: { ...subcalls, ...libraryHandlers },
+        handlers: { ...subcalls, ...contextHandlers },
       });
 
       let history: ChatMsg[] = [{ role: "system", content: system }];
       let pendingReplOutputs: string | undefined;
 
-      // Context: serialize ContextBundle to sandbox-ready JSON array, pass raw strings through.
-      liveContext =
-        typeof input.context === "object" && input.context !== null && "files" in input.context
-          ? serializeForSandbox(input.context as ContextBundle)
-          : input.context;
+      // Context is already a sandbox-ready list (or a raw string for text children).
+      liveContext = input.context ?? [];
       contextPin = await pinContext(liveContext);
       await sandbox.loadContextPinned(contextPin);
       for (let i = 0; i < deps.config.maxIterations; i++) {

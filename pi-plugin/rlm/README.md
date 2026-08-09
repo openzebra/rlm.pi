@@ -59,9 +59,9 @@ sub-LLM calls, hence the name.
 - A **root orchestrator** model drives a **persistent Python REPL** turn-by-turn.
 - Long-context work is **delegated** to cheap worker models via `llm_query` / `llm_query_batched`.
 - Hard sub-problems **recurse** into child RLMs via `rlm_query` (depth-capped). A child inherits
-  its parent's `context` — the repository plus every library loaded with `load_library()` — so it
-  runs the same retrieval primitives over the same paths. Inheritance costs no extra tokens: the
-  content lives in the sandbox, and only a size line reaches the model.
+  its parent's `context` — every file loaded so far, including sources added with `add_context()` —
+  so it runs the same retrieval primitives over the same paths. Inheritance costs no extra tokens:
+  the content lives in the sandbox, and only a size line reaches the model.
 - Everything runs **in-process** — the only external process is one local `python3` worker.
 
 > This is a Pi-plugin reimplementation of the RLM method (see the [RLM paper](https://arxiv.org/abs/2512.24601)).
@@ -109,33 +109,36 @@ These functions are injected into the model's Python namespace inside the REPL:
 
 | Function | Signature | Description |
 |---|---|---|
-| `context` | `list[dict]` | Repository packed as `[{"path","content","tokens"}, ...]` — the full codebase |
+| `context` | `list[dict]` | Loaded files as `[{"path","content","tokens"}, …]` — starts empty; cwd seeds on first `repl()` |
 | `llm_query` | `(prompt, model=None) -> str` | One-shot sub-LLM call (worker model) |
 | `llm_query_batched` | `(prompts, model=None) -> list[str]` | Concurrent sub-LLM calls (pool-bounded) |
 | `llm_query_chunked` | `(text, prompt, model=None) -> list[str]` | Split large text into cap-sized chunks and fan out via sub-LLMs |
 | `rlm_query` | `(prompt, model=None, paths=None) -> str` | Recursive child RLM with its own sandbox (depth-capped). Inherits your `context`; `paths` narrows it by prefix |
 | `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | Concurrent recursive child RLMs, sharing one `paths` slice |
-| `load_library` | `(source) -> dict \| str` | Append an external dir, file, or git URL into `context` under `lib/<id>/` |
+| `add_context` | `(source) -> dict \| str` | Append a dir, file, document, or git URL into `context` under `ctx/<id>/` |
 | `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
 | `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
 
-### Loading external libraries
+### Adding context
 
-When the task needs an **external library, another source tree, or standalone docs** that are
-not in the packed repo `context`, the model calls `load_library(source)` mid-run:
+`context` starts empty. The working directory seeds automatically on the first `repl()` call
+(un-prefixed paths so `search()` hits remain real paths for `edit`/`write`). For an **external
+tree, document, or git URL**, call `add_context(source)`:
 
 ```python
-info = load_library("../some-lib")                # local directory → packed + appended
-info = load_library("docs/api.md")                # single file → one entry in context
-info = load_library("https://github.com/x/y.git") # shallow clone, then pack + append
-# Files land in the SAME `context` list under lib/<source_id>/…
-# info == {"source_id", "path_prefix", "files", "chars", "context_len", "already_loaded", …}
+info = add_context("../some-lib")                # local directory → packed + appended
+info = add_context("docs/api.md")                # single file → one entry in context
+info = add_context("report.pdf")                 # document → Markdown, then appended
+info = add_context("https://github.com/x/y.git") # shallow clone, then pack + append
+# Files land in the SAME `context` list under ctx/<source_id>/…
+# info == {"source_id", "path_prefix", "files", "chars", "context_len", "already_loaded", "converted", "skipped", …}
 lib = [f for f in context if f["path"].startswith(info["path_prefix"])]
 ```
 
 There is no `context_1` / `context_2` — only `context`. Paths are namespaced so multiple
-libraries do not collide. Toggle via `/rlm-config` → **Library loader** (`libraryLoader`,
-default on). A library loaded at any point is inherited by every child spawned afterwards.
+sources do not collide. Toggle via `/rlm-config` → **Context loader** (`contextLoader`,
+default on) and **Auto-seed cwd** (`autoSeedCwd`, default on). A source loaded at any point is
+inherited by every child spawned afterwards.
 
 ## Settings (`/rlm-config`)
 
@@ -155,7 +158,8 @@ default on). A library loaded at any point is inherited by every child spawned a
 | Trajectory compaction | on (0.65) | summarize old turns when history nears the context window |
 | Root model output cap (tok) | `16384` | max output tokens per root-model turn |
 | Sandbox init timeout | `30000` ms | how long to wait for the Python worker to start |
-| Library loader | on | expose `load_library()` for external dirs/files/git repos |
+| Context loader | on | expose `add_context()` for external dirs/files/documents/git repos |
+| Auto-seed cwd | on | seed the working directory into `context` on the first `repl()` |
 
 > **Concurrency note:** each `rlm_query` child spawns its own `python3` worker (~50–150 ms
 > cold start). Children are bounded separately (`maxConcurrentChildren`, default 6) because

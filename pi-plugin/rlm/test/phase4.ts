@@ -20,7 +20,7 @@ import { createSubcallGates } from "../src/util/concurrency.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import type { RlmInput, RunRlm } from "../src/core/types.ts";
 import type { SubcallOpts } from "../src/sandbox/sandbox.ts";
-import type { ContextFile } from "../src/context/repomix-context.ts";
+import type { ContextFile } from "../src/context/types.ts";
 import type { CompleteFn } from "../src/core/iteration.ts";
 import { emptyChildResult, MOCK_MODEL, MOCK_REGISTRY, repl, ZERO_USAGE } from "./helpers.ts";
 

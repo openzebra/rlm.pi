@@ -2,57 +2,61 @@
  * Native RLM Mode — integration smoke test on THIS project (rlm.pi).
  *
  * Tests the full pipeline without real LLM API calls:
- *   1. repomix packs the project → formatForLLM produces listing
+ *   1. resolveSource packs the project → formatContextListing produces listing
  *   2. SandboxManager loads context into Python REPL
- *   3. repl() tool executes code via the persistent sandbox
- *   4. REPL state persists across multiple repl() calls
- *   5. context variable is accessible in the sandbox (file paths, content)
- *   6. llm_query/rlm_query handlers are wired (but NOT invoked — no API cost)
+ *   3. REPL state persists across multiple calls
+ *   4. context variable is accessible in the sandbox
+ *   5. llm_query/rlm_query handlers are wired (but NOT invoked — no API cost)
  *
  * Run: bun run pi-plugin/rlm/test/native-smoke.ts
  */
 
 import { check, failureCount } from "./helpers.ts";
 import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
-import { packRepository, formatForLLM, serializeForSandbox } from "../src/context/repomix-context.ts";
+import { resolveSource } from "../src/context/resolve.ts";
+import { formatContextListing } from "../src/context/listing.ts";
 import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
 import { buildNativeSystemPrompt, NATIVE_PROMPT_BUDGET } from "../src/prompts/native.ts";
-import type { ContextBundle } from "../src/context/repomix-context.ts";
 import { contextLength, contextTypeLabel } from "../src/text/tokens.ts";
 
 
-// ── 1. repomix packs the project ──
+// ── 1. resolveSource packs the project ──
 
 const cwd = process.cwd();
 console.log(`\n─── Packing project: ${cwd} ───`);
 
-const packResult = await packRepository(cwd);
-check("repomix pack — ok", packResult.ok);
+const packResult = await resolveSource(cwd, { cwd, pathPrefix: "" });
+check("resolveSource pack — ok", packResult.ok);
 if (!packResult.ok) {
   console.error(`  Error: ${packResult.error}`);
   process.exit(1);
 }
 
-const bundle: ContextBundle = packResult.value;
-console.log(`  Files: ${bundle.totalFiles}, Tokens: ${bundle.totalTokens.toLocaleString()}, Chars: ${bundle.totalChars.toLocaleString()}`);
-check("repomix pack — has files", bundle.totalFiles > 0);
-check("repomix pack — has tokens", bundle.totalTokens > 0);
-check("repomix pack — files array matches count", bundle.files.length === bundle.totalFiles);
+const files = packResult.value.payload;
+const totalFiles = files.length;
+let totalTokens = 0;
+let totalChars = 0;
+for (let i = 0; i < files.length; i++) {
+  totalTokens += files[i].tokens;
+  totalChars += files[i].content.length;
+}
+console.log(`  Files: ${totalFiles}, Tokens: ${totalTokens.toLocaleString()}, Chars: ${totalChars.toLocaleString()}`);
+check("resolveSource pack — has files", totalFiles > 0);
+check("resolveSource pack — has tokens", totalTokens > 0);
 
-// ── 2. formatForLLM produces compact listing ──
+// ── 2. formatContextListing produces compact listing ──
 
-const listing = formatForLLM(bundle);
-console.log(`\n─── formatForLLM output (first 3 lines) ───`);
+const listing = formatContextListing(files);
+console.log(`\n─── formatContextListing output (first 3 lines) ───`);
 listing.split("\n").slice(0, 3).forEach(l => console.log(`  ${l.slice(0, 100)}`));
 
-check("formatForLLM — non-empty on real project", listing.length > 100);
-check("formatForLLM — contains 'Repository context'", listing.includes("Repository context"));
-check("formatForLLM — contains file paths", listing.includes(".ts") || listing.includes(".json"));
-check("formatForLLM — contains repl delegation hint", listing.includes("pre-loaded in the REPL"));
+check("formatContextListing — non-empty on real project", listing.length > 100);
+check("formatContextListing — contains 'Context:'", listing.includes("Context:"));
+check("formatContextListing — contains file paths", listing.includes(".ts") || listing.includes(".json"));
+check("formatContextListing — contains repl delegation hint", listing.includes("llm_query_batched"));
 
-// If project > 200 files, check truncation
-if (bundle.totalFiles > 200) {
-  check("formatForLLM — truncates large projects", listing.includes("more files"));
+if (totalFiles > 200) {
+  check("formatContextListing — truncates large projects", listing.includes("more files"));
 }
 
 // ── 3. System prompts ──
@@ -61,7 +65,7 @@ const nativePrompt = buildNativeSystemPrompt();
 check("native prompt — contains [NATIVE RLM MODE]", nativePrompt.includes("NATIVE RLM MODE"));
 check("native prompt — mentions repl", nativePrompt.includes("repl"));
 
-const meta = { contextType: contextTypeLabel(bundle), contextChars: contextLength(bundle) };
+const meta = { contextType: contextTypeLabel(files), contextChars: contextLength(files) };
 const fullPrompt = buildRlmSystemPrompt(meta, { orchestrator: true, recursion: true });
 check("rlm system prompt — non-empty", fullPrompt.length > 500);
 check("rlm system prompt — mentions llm_query", fullPrompt.includes("llm_query"));
@@ -83,14 +87,11 @@ const mgr = new SandboxManager({
   awaitTimeoutS: 30,
 });
 
-// Store context payload (same as index.ts does)
-mgr.contextPayload = serializeForSandbox(bundle);
+mgr.contextPayload = files;
 
-// Create sandbox — loads context on first getOrCreate
 await mgr.getOrCreate({});
 check("SandboxManager — alive after getOrCreate with context", mgr.isAlive);
 
-// Verify context is accessible in REPL
 const r1 = await mgr.exec(`
 print(f"context type: {type(context)}")
 print(f"context length: {len(context)}")
@@ -98,12 +99,11 @@ print(f"first file: {context[0]['path']}")
 print(f"first file tokens: {context[0]['tokens']}")
 `);
 check("REPL — context is a list", r1.stdout.includes("context type: <class 'list'>") || r1.stdout.includes("list"));
-check("REPL — context has items", r1.stdout.includes(`context length: ${bundle.totalFiles}`));
-const firstFile = bundle.files[0];
+check("REPL — context has items", r1.stdout.includes(`context length: ${totalFiles}`));
+const firstFile = files[0];
 check("REPL — first file path accessible", firstFile !== undefined && r1.stdout.includes(firstFile.path));
 check("REPL — first file tokens accessible", firstFile !== undefined && r1.stdout.includes(String(firstFile.tokens)));
 
-// Context content is accessible
 const r2 = await mgr.exec(`
 f = context[0]
 content_preview = f['content'][:100]
@@ -124,14 +124,12 @@ print(f"Total tokens computed: {total_tokens}")
 check("REPL — can compute over context", r3.stdout.includes("Total files counted:"));
 check("REPL — token computation works", r3.stdout.includes("Total tokens computed:"));
 
-// Verify variables persist
 const r4 = await mgr.exec(`print(f"file_count still here: {file_count}")`);
-check("REPL — state persists (file_count)", r4.stdout.includes(`file_count still here: ${bundle.totalFiles}`));
+check("REPL — state persists (file_count)", r4.stdout.includes(`file_count still here: ${totalFiles}`));
 
 // ── 6. llm_query handler is wired (not invoked — no API cost) ──
 
 const r5 = await mgr.exec(`
-# Verify llm_query function exists (don't call it — no API key in test)
 import inspect
 sig = inspect.signature(llm_query)
 print(f"llm_query signature: {sig}")
@@ -139,14 +137,12 @@ print(f"llm_query signature: {sig}")
 check("REPL — llm_query function exists", r5.stdout.includes("llm_query signature"));
 
 const r6 = await mgr.exec(`
-# Verify rlm_query function exists
 sig = inspect.signature(rlm_query)
 print(f"rlm_query signature: {sig}")
 `);
 check("REPL — rlm_query function exists", r6.stdout.includes("rlm_query signature"));
 
 const r7 = await mgr.exec(`
-# Verify ask_user_question was removed
 try:
     ask_user_question
     print("ask_user_question still present")
@@ -156,7 +152,6 @@ except NameError:
 check("REPL — ask_user_question removed", r7.stdout.includes("ask_user_question removed"));
 
 const r8 = await mgr.exec(`
-# Verify SHOW_VARS works
 result = SHOW_VARS()
 print(f"SHOW_VARS ok: len={len(result)}")
 print(f"SHOW_VARS sample: {result[:200]}")

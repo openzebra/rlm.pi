@@ -46,7 +46,7 @@ async function main() {
     { orchestrator: false, child: true },
   );
   check("child prompt orients the sub-RLM in its parent's world",
-    subRlmPrompt.includes("You are a sub-RLM") && subRlmPrompt.includes("lib/<id>/"));
+    subRlmPrompt.includes("You are a sub-RLM") && subRlmPrompt.includes("ctx/<id>/"));
   check("root prompt has no sub-RLM orientation",
     !buildRlmSystemPrompt({ contextType: "list[3]", contextChars: 5000 }, {}).includes("sub-RLM"));
 

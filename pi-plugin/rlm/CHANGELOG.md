@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Replaced `repomix` with a native walker + `@firecrawl/anydoc`.** Context packing no longer
+  pulls 28 transitive dependencies for gitignore + binary filtering. A native `git ls-files`
+  (with `walkFs` fallback) enumerates the tree; documents (PDF, DOCX, XLSX, PPTX, CSV, …) are
+  converted to Markdown via anydoc and cached under `$XDG_CACHE_HOME/pi-rlm/anydoc` keyed by
+  `(size, mtimeMs)`.
+- **`load_library` → `add_context`.** Same control flow; namespaces move from `lib/<id>/` to
+  `ctx/<id>/`. No alias — the prompt is the only teacher of the name.
+- **`context` starts empty.** The working directory seeds lazily on the first `repl()` call
+  (`autoSeedCwd: true`, un-prefixed paths so `search()` hits remain real paths). Config renames
+  `libraryLoader` → `contextLoader` (legacy key still read from `rlm.json`).
+
+### Added
+
+- **Document conversion** for binary containers that repomix dropped as opaque assets.
+- **`autoSeedCwd` config toggle** in `/rlm-config`.
+
 ## [0.2.2] - 2026-08-09
 
 ### Removed

@@ -42,8 +42,13 @@ export interface RlmConfig {
   readonly python: string;
   /** Worker startup wait before treating sandbox init as failed (ms). */
   readonly sandboxInitTimeoutMs: number;
-  /** Enable the load_library() REPL scaffold (external dirs/files/git repos as extra context slots). */
-  readonly libraryLoader: boolean;
+  /** Enable the add_context() REPL scaffold (external dirs/files/git repos/documents into context). */
+  readonly contextLoader: boolean;
+  /**
+   * When true, the first repl() call seeds `context` with the working directory
+   * (un-prefixed paths). When false, context stays empty until add_context is called.
+   */
+  readonly autoSeedCwd: boolean;
   /** ThinkingLevel for the root smart model (set via /rlm-config). */
   readonly smartReasoning?: ThinkingLevel;
   /** Output token cap + temperature for the root smart model per turn.
