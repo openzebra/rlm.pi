@@ -28,7 +28,7 @@ import { emptyChildResult, MOCK_MODEL, MOCK_REGISTRY, repl, ZERO_USAGE } from ".
 const ATTACHED: SubcallOpts = { detached: false };
 
 /** One-shot fallback used at the depth cap, standing in for a real llm_query. */
-type Degrade = (prompt: string, model: string | null, depth: number) => Promise<string>;
+type Degrade = (prompt: string, depth: number) => Promise<string>;
 
 /**
  * Recursion-only handlers: no registry or worker model is reachable on these paths,
@@ -81,12 +81,12 @@ async function testRecursionBridge(): Promise<boolean> {
   });
 
   // depth 0 -> child depth 1 < 2 -> recurse into engine
-  log("rlm_query at depth 0 recurses", (await handlers.rlmQuery("alpha", null, 0, ATTACHED)).startsWith("child("));
+  log("rlm_query at depth 0 recurses", (await handlers.rlmQuery("alpha", 0, ATTACHED)).startsWith("child("));
   // depth 1 -> child depth 2 >= maxDepth -> fall back to llm_query
-  const atCap = await handlers.rlmQuery("beta", null, 1, ATTACHED);
+  const atCap = await handlers.rlmQuery("beta", 1, ATTACHED);
   log("rlm_query at depth cap falls back to llm_query", atCap.startsWith("llm("));
   // batched preserves order
-  const batched = await handlers.rlmQueryBatched(["one", "two", "three"], null, 0, ATTACHED);
+  const batched = await handlers.rlmQueryBatched(["one", "two", "three"], 0, ATTACHED);
   const firstBatch = batched[0];
   const thirdBatch = batched[2];
   log("rlm_query_batched preserves order", batched.length === 3 && firstBatch !== undefined && thirdBatch !== undefined && firstBatch.includes("one") && thirdBatch.includes("three"));
@@ -119,7 +119,7 @@ async function testContextInheritance(): Promise<boolean> {
   };
 
   const inherit = rlmOnlyHandlers({ run: record, degrade, maxDepth: 2, childContext: () => files });
-  await inherit.rlmQuery("audit auth", null, 0, ATTACHED);
+  await inherit.rlmQuery("audit auth", 0, ATTACHED);
   const child = seen[0];
   log("#4: prompt becomes the child's rootPrompt", child?.rootPrompt === "audit auth");
   log("#4: child inherits the parent context by identity", child?.context === files);
@@ -129,12 +129,12 @@ async function testContextInheritance(): Promise<boolean> {
   // because a genuine text sub-task still has nothing else to be its world.
   seen.length = 0;
   const unwired = rlmOnlyHandlers({ run: record, degrade, maxDepth: 2 });
-  await unwired.rlmQuery("plain text task", null, 0, ATTACHED);
+  await unwired.rlmQuery("plain text task", 0, ATTACHED);
   log("#4: unwired falls back to prompt-as-context", seen[0]?.context === "plain text task");
 
   // paths= narrows by prefix.
   seen.length = 0;
-  await inherit.rlmQuery("only auth", null, 0, { detached: false, paths: ["src/auth/"] });
+  await inherit.rlmQuery("only auth", 0, { detached: false, paths: ["src/auth/"] });
   const narrowed = seen[0]?.context;
   log(
     "#4: paths= narrows the inherited context",
@@ -145,7 +145,7 @@ async function testContextInheritance(): Promise<boolean> {
 
   // A prefix that matches nothing must hand over everything AND say so — never blind the child.
   seen.length = 0;
-  await inherit.rlmQuery("typo", null, 0, { detached: false, paths: ["src/nope/"] });
+  await inherit.rlmQuery("typo", 0, { detached: false, paths: ["src/nope/"] });
   log("#4: unmatched paths fall back to the full context", seen[0]?.context === files);
   log(
     "#4: unmatched paths are reported in the child's prompt",
@@ -154,7 +154,7 @@ async function testContextInheritance(): Promise<boolean> {
 
   // Batched children share one prefix set.
   seen.length = 0;
-  await inherit.rlmQueryBatched(["a", "b"], null, 0, { detached: false, paths: ["lib/x-9f3a/"] });
+  await inherit.rlmQueryBatched(["a", "b"], 0, { detached: false, paths: ["lib/x-9f3a/"] });
   log(
     "#4: batched children each get the narrowed slice",
     seen.length === 2 && seen.every((s) => Array.isArray(s.context) && s.context.length === 1),
@@ -253,8 +253,8 @@ async function testChildCostPropagation(): Promise<boolean> {
   });
 
   // Run two sequential rlm_query children; both should debit.
-  await handlers.rlmQuery("alpha", null, 0, ATTACHED);
-  await handlers.rlmQuery("beta", null, 0, ATTACHED);
+  await handlers.rlmQuery("alpha", 0, ATTACHED);
+  await handlers.rlmQuery("beta", 0, ATTACHED);
 
   log(
     "R1b: child cost debited from parent after each rlm_query",
@@ -288,20 +288,20 @@ async function testPreSpawnGuard(): Promise<boolean> {
   // Timeout exhausted — should NOT spawn.
   spawnCount = 0;
   const hT = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ timeoutMs: 0 }) });
-  const rT = await hT.rlmQuery("x", null, 0, ATTACHED);
+  const rT = await hT.rlmQuery("x", 0, ATTACHED);
   log("F-spawn: timeout=0 refuses child spawn", rT === "Error: timeout exhausted", rT);
   log("F-spawn: no run() called when timeout exhausted", spawnCount === 0, `spawned ${spawnCount}`);
 
   // Timeout available — SHOULD spawn normally.
   spawnCount = 0;
   const hOk = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ timeoutMs: 60_000 }) });
-  const rOk = await hOk.rlmQuery("x", null, 0, ATTACHED);
+  const rOk = await hOk.rlmQuery("x", 0, ATTACHED);
   log("F-spawn: timeout>0 spawns child normally", rOk === "ok" && spawnCount === 1, `${rOk} spawned=${spawnCount}`);
 
   // No remaining callback — SHOULD spawn normally (no timeout cap).
   spawnCount = 0;
   const hNone = rlmOnlyHandlers({ run, degrade, maxDepth: 3 });
-  const rNone = await hNone.rlmQuery("x", null, 0, ATTACHED);
+  const rNone = await hNone.rlmQuery("x", 0, ATTACHED);
   log("F-spawn: no timeout cap spawns child normally", rNone === "ok" && spawnCount === 1, `${rNone} spawned=${spawnCount}`);
 
   return pass;
@@ -344,32 +344,10 @@ async function main() {
       getLlmModel: () => fallbackModel,
       getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 0 }),
     });
-    const guardedOut = await guardedLlm.llmQuery("must not call provider", null, 0, ATTACHED);
+    const guardedOut = await guardedLlm.llmQuery("must not call provider", 0, ATTACHED);
     const guardedOk = guardedOut === "Error: timeout exhausted";
     console.log(`${guardedOk ? "✓" : "✗"} F4: llm_query refuses exhausted timeout before completion`);
     if (!guardedOk) process.exit(1);
-
-    const model = cheapestModel(registry) ?? fallbackModel;
-    if (model === undefined) {
-      console.error("no fallback model available");
-      process.exit(1);
-    }
-    const overrideEngine = createEngine({
-    emitter: new RlmEmitter(),
-      model: model,
-      llmModel: model,
-      registry,
-      config: DEFAULT_CONFIG,
-    });
-    const badOverride = await overrideEngine({
-      rootPrompt: "unused",
-      context: "unused",
-      depth: 0,
-      modelOverride: "missing/model",
-    });
-    const ok = badOverride.answer === "Error: unknown model override 'missing/model'";
-    console.log(`${ok ? "✓" : "✗"} rlm_query unknown model override returns an error`);
-    if (!ok) process.exit(1);
   }
   if (process.env.RLM_TEST_LIVE !== "1") {
     console.log(`\navailable models: ${available.length}. Set RLM_TEST_LIVE=1 to run the engine live.`);

@@ -41,18 +41,18 @@ export const RETRIEVAL_GLOSSARY_LINES: readonly string[] = Object.freeze([
 
 /** One-line delegation helpers — orchestrating must be cheaper than solving. */
 export const DELEGATION_GLOSSARY_LINES: readonly string[] = Object.freeze([
-  "- `map_files(files, prompt, model=None) -> dict[path, str]`: ask `prompt` of every file and",
+  "- `map_files(files, prompt) -> dict[path, str]`: ask `prompt` of every file and",
   "  get back {path: answer}. Accepts context entries or paths, packs them into cap-sized",
   "  batched sub-calls, and splits oversized files automatically. **This is the default way to",
   "  read many files** — prefer it over hand-rolling a chunk loop.",
-  "- `llm_map_reduce(items, map_prompt, reduce_prompt, model=None) -> str`: map over items in",
+  "- `llm_map_reduce(items, map_prompt, reduce_prompt) -> str`: map over items in",
   "  one batch, then reduce the partial answers with a single call. The paper's canonical",
   "  strategy (query per chunk → aggregate the buffers) as one call.",
 ]);
 
 /** Shared glossary entry for the chunked-query helper (headless + native). */
 export const CHUNKED_GLOSSARY_LINES: readonly string[] = Object.freeze([
-  "- `llm_query_chunked(text: str, prompt: str, model=None) -> list[str]`: auto-splits `text` into",
+  "- `llm_query_chunked(text: str, prompt: str) -> list[str]`: auto-splits `text` into",
   "  chunks that fit the sub-LLM prompt cap, fans them out concurrently (order preserved), and",
   "  returns one answer per chunk. Use it for ANY text too large for a single `llm_query` — a file",
   "  you open()ed, an oversized sub-result, or several concatenated context files.",
@@ -126,7 +126,7 @@ export const LARGE_FILE_RULE_LINES: readonly string[] = Object.freeze([
 
 /** Concise native-mode glossary line for the chunked helper (native prompt has a 6K budget). */
 export const CHUNKED_GLOSSARY_LINE_NATIVE =
-  "- `llm_query_chunked(text, prompt, model=None) -> list[str]` — auto-splits oversized text into cap-sized chunks, fans out concurrently; one answer per chunk.";
+  "- `llm_query_chunked(text, prompt) -> list[str]` — auto-splits oversized text into cap-sized chunks, fans out concurrently; one answer per chunk.";
 
 /** Concise native-mode large-file rule (folds in the context-exclusion note; native 6K budget). */
 export const LARGE_FILE_RULE_NATIVE =
@@ -235,9 +235,9 @@ export function replGlossary(
   }
   lines.push(...RETRIEVAL_GLOSSARY_LINES);
   lines.push(
-    "- `llm_query(prompt: str, model=None) -> str`: a single sub-LLM completion. Use for extraction,",
-    "  summarization, or Q&A over a chunk of text.",
-    "- `llm_query_batched(prompts: list[str], model=None) -> list[str]`: run several sub-LLM calls",
+    "- `llm_query(prompt: str) -> str`: a single sub-LLM completion (configured RLM LLM). Use for",
+    "  extraction, summarization, or Q&A over a chunk of text. No per-call model override.",
+    "- `llm_query_batched(prompts: list[str]) -> list[str]`: run several sub-LLM calls",
     "  concurrently; output order matches input order.",
     ...CHUNKED_GLOSSARY_LINES,
     ...SPAWN_GLOSSARY_LINES,
@@ -264,7 +264,7 @@ export function replGlossary(
   }
   if (recursion) {
     lines.push(
-      "- `rlm_query(prompt, model=None)` / `rlm_query_batched(prompts, model=None)`: recursive RLM",
+      "- `rlm_query(prompt, paths=None)` / `rlm_query_batched(prompts, paths=None)`: recursive RLM",
       "  sub-calls. Each child runs a full REPL loop internally — its entire conversation is PRIVATE",
       "  and never enters your history. Only the final answer (a short string) is returned.",
       "",

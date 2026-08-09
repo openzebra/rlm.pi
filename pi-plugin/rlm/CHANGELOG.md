@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **No per-call model override on REPL sub-calls.** `llm_query`, `llm_query_batched`,
+  `llm_query_chunked`, `map_files`, `llm_map_reduce`, `rlm_query`, and `rlm_query_batched`
+  no longer accept a `model=` argument. Every leaf completion uses the configured RLM LLM
+  (`/rlm-config` / `rlm.json` pin, else cheapest). Recursive children inherit the parent root
+  model. Removes the `"unknown model override"` failure path when agents invent bare model IDs.
+
 ### Fixed
 
 - **Subagent / process-boundary children stay able to read files.** RLM's native mode

@@ -16,7 +16,6 @@ import {
   type Invocation,
 } from "../bridge/subcall-handlers.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
-import { resolveModelId } from "../config/settings.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
@@ -30,7 +29,6 @@ import { appendUserMessage } from "./history.ts";
 import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
 import type { RlmConfig, RlmInput, RlmResult, RunRlm, Sampling } from "./types.ts";
-import { formatError } from "../util/errors.ts";
 import { createSubcallGates, type SubcallGates } from "../util/concurrency.ts";
 
 /**
@@ -71,20 +69,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
       emitter.emitTurn(0, deps.config.maxIterations);
     }
 
-    const overrideModel = input.modelOverride ? resolveModelId(deps.registry, input.modelOverride) : undefined;
-    if (input.modelOverride && !overrideModel) {
-      if (selfReportId) emitter.emitSubcallUpdated({ id: selfReportId, status: "error", detail: "unknown model override" });
-      else emitter.emitStatus("error");
-      return {
-        answer: formatError(`unknown model override '${input.modelOverride}'`),
-        iterations: 0,
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        durationMs: 0,
-      };
-    }
-    const model = overrideModel ?? deps.model;
+    const model = deps.model;
 
     // Create LimitGuard BEFORE the bridge so sub-LLM usage feeds into it.
     // Children inherit the parent's remaining timeout (propagated as remaining amount, not

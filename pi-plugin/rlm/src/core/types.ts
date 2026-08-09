@@ -73,8 +73,6 @@ export interface RlmInput {
   readonly depth: number;
   /** AgentTree node to attach this run's node under (set when recursing). */
   readonly parentNodeId?: string;
-  /** "provider/id" — overrides the root model for this run (set by recursive rlm_query). */
-  readonly modelOverride?: string;
   /** Remaining timeout for this subtree (set by parent from its LimitGuard). */
   readonly remainingTimeoutMs?: number;
 }

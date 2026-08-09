@@ -257,21 +257,21 @@ class Worker:
 
     # ---- spawn / await ---------------------------------------------------------------------
 
-    def _start_prompt(self, kind: str, prompt, model, paths=None) -> Task:
+    def _start_prompt(self, kind: str, prompt, paths=None) -> Task:
         text = str(prompt)
         # A sub-LLM asked nothing answers something: the confabulation then sits in `answers`
         # looking exactly like data. Refuse instead of spending a call on it.
         if not text.strip():
             return Task.resolved(self, kind, _surfaced_error(
                 f"{kind}() got an empty prompt — a sub-LLM would confabulate an answer to nothing"))
-        payload: dict[str, Any] = {"prompt": text, "model": model}
+        payload: dict[str, Any] = {"prompt": text}
         clean = _clean_paths(paths)
         if clean is not None:
             payload["paths"] = clean
         rid = self._post(kind, payload)
         return Task(self, kind, (rid,), _reduce_one, text[:40])
 
-    def _start_prompts(self, kind: str, prompts, model, paths=None) -> Task:
+    def _start_prompts(self, kind: str, prompts, paths=None) -> Task:
         prompts = [str(p) for p in prompts]
         if not prompts:
             return Task.resolved(self, kind, [])
@@ -280,7 +280,7 @@ class Worker:
             return Task.resolved(self, kind, [
                 _surfaced_error(f"{kind}() got only empty prompts")
             ] * len(prompts))
-        payload: dict[str, Any] = {"prompts": prompts, "model": model}
+        payload: dict[str, Any] = {"prompts": prompts}
         # One prefix set for the whole batch: a per-prompt aligned list is an API nobody uses
         # correctly, and every prompt in a batch is asking about the same slice anyway.
         clean = _clean_paths(paths)
@@ -289,19 +289,19 @@ class Worker:
         rid = self._post(kind, payload)
         return Task(self, kind, (rid,), _reduce_batch(len(prompts)), f"×{len(prompts)}")
 
-    def _start_llm_query(self, prompt, model: str | None = None) -> Task:
-        return self._start_prompt("llm_query", prompt, model)
+    def _start_llm_query(self, prompt) -> Task:
+        return self._start_prompt("llm_query", prompt)
 
-    def _start_rlm_query(self, prompt, model: str | None = None, paths=None) -> Task:
-        return self._start_prompt("rlm_query", prompt, model, paths)
+    def _start_rlm_query(self, prompt, paths=None) -> Task:
+        return self._start_prompt("rlm_query", prompt, paths)
 
-    def _start_llm_query_batched(self, prompts, model: str | None = None) -> Task:
-        return self._start_prompts("llm_query_batched", prompts, model)
+    def _start_llm_query_batched(self, prompts) -> Task:
+        return self._start_prompts("llm_query_batched", prompts)
 
-    def _start_rlm_query_batched(self, prompts, model: str | None = None, paths=None) -> Task:
-        return self._start_prompts("rlm_query_batched", prompts, model, paths)
+    def _start_rlm_query_batched(self, prompts, paths=None) -> Task:
+        return self._start_prompts("rlm_query_batched", prompts, paths)
 
-    def _start_llm_query_chunked(self, text, prompt: str, model: str | None = None) -> Task:
+    def _start_llm_query_chunked(self, text, prompt: str) -> Task:
         """Split oversized text into cap-sized chunks and post EVERY batch at once.
 
         One answer per chunk, order preserved. No exceptions escape: errors come back as
@@ -334,10 +334,9 @@ class Worker:
                 f"{prompt}\n\n[chunk {i + j + 1}/{total} of the input]\n{c}"
                 for j, c in enumerate(chunks[i:i + _MAX_CHUNK_BATCH])
             ]
-            rids.append(self._post("llm_query_batched", {"prompts": batch, "model": model}))
+            rids.append(self._post("llm_query_batched", {"prompts": batch}))
             sizes.append(len(batch))
         return Task(self, "llm_query_chunked", tuple(rids), _reduce_chunked(sizes), f"{total} chunks")
-
     def _builder_for(self, name: str):
         # llm_map_reduce is deliberately absent: its reduce step is a SECOND sub-LLM call that
         # depends on its own map results, so it cannot be one (rids, pure reduce) Task.
@@ -446,7 +445,7 @@ class Worker:
 
     # ---- one-line delegation (structural: orchestrating must be easier than solving) -------
 
-    def _start_map_files(self, files: Any, prompt: str, model: str | None = None) -> Task:
+    def _start_map_files(self, files: Any, prompt: str) -> Task:
         """Post every batch map_files needs, WITHOUT waiting. Contract: see _map_files.
 
         All batches go on the wire together, so a 100-file map costs one round-trip of latency
@@ -489,27 +488,26 @@ class Worker:
         sizes: list[int] = []
         for i in range(0, len(requests), _MAX_CHUNK_BATCH):
             batch = requests[i:i + _MAX_CHUNK_BATCH]
-            rids.append(self._post("llm_query_batched", {"prompts": batch, "model": model}))
+            rids.append(self._post("llm_query_batched", {"prompts": batch}))
             sizes.append(len(batch))
         return Task(self, "map_files", tuple(rids),
                     _reduce_map_files(sizes, spans), f"{len(by_path)} files")
 
     @_spawnable("map_files")
-    def _map_files(self, files: Any, prompt: str, model: str | None = None) -> dict[str, str]:
+    def _map_files(self, files: Any, prompt: str) -> dict[str, str]:
         """Ask `prompt` of every given file, batched, and return {path: answer}.
 
         `files` accepts context entries (dicts), paths (strings), or a mix — the whole
         chunk/batch/collect loop the system prompt used to spell out, as one call.
         Oversized files are split and their per-chunk answers joined.
         """
-        return self._await_task(self._start_map_files(files, prompt, model))
+        return self._await_task(self._start_map_files(files, prompt))
 
     def _llm_map_reduce(
         self,
         items: Any,
         map_prompt: str,
         reduce_prompt: str,
-        model: str | None = None,
     ) -> str:
         """Map `map_prompt` over `items` in one batch, then reduce the answers with one call.
 
@@ -534,28 +532,27 @@ class Worker:
                 f"{map_prompt}\n\n[{labels[i + j]}]\n{t}"
                 for j, t in enumerate(texts[i:i + _MAX_CHUNK_BATCH])
             ]
-            mapped.extend(self._llm_query_batched(batch, model))
+            mapped.extend(self._llm_query_batched(batch))
         joined = "\n\n".join(f"[{labels[i]}]\n{a}" for i, a in enumerate(mapped))
-        return self._llm_query(f"{reduce_prompt}\n\nPartial answers:\n{joined}", model)
+        return self._llm_query(f"{reduce_prompt}\n\nPartial answers:\n{joined}")
 
     # ---- sync helpers: await(start(...)), so there is exactly one code path -----------------
 
     @_spawnable("llm_query")
-    def _llm_query(self, prompt: str, model: str | None = None) -> str:
-        return self._await_task(self._start_llm_query(prompt, model))
+    def _llm_query(self, prompt: str) -> str:
+        return self._await_task(self._start_llm_query(prompt))
 
     @_spawnable("llm_query_batched")
-    def _llm_query_batched(self, prompts, model: str | None = None) -> list[str]:
-        return self._await_task(self._start_llm_query_batched(prompts, model))
+    def _llm_query_batched(self, prompts) -> list[str]:
+        return self._await_task(self._start_llm_query_batched(prompts))
 
     @_spawnable("llm_query_chunked")
-    def _llm_query_chunked(self, text, prompt: str, model: str | None = None) -> list[str]:
-        return self._await_task(self._start_llm_query_chunked(text, prompt, model))
+    def _llm_query_chunked(self, text, prompt: str) -> list[str]:
+        return self._await_task(self._start_llm_query_chunked(text, prompt))
 
     @_spawnable("rlm_query")
-    def _rlm_query(self, prompt: str, model: str | None = None, paths=None) -> str:
-        return self._await_task(self._start_rlm_query(prompt, model, paths))
-
+    def _rlm_query(self, prompt: str, paths=None) -> str:
+        return self._await_task(self._start_rlm_query(prompt, paths))
     def _add_context(self, source: str) -> dict[str, Any] | str:
         """Pack an external dir/file/git-URL on the host and append it into `context`.
 
@@ -695,9 +692,8 @@ class Worker:
         return out
 
     @_spawnable("rlm_query_batched")
-    def _rlm_query_batched(self, prompts, model: str | None = None, paths=None) -> list[str]:
-        return self._await_task(self._start_rlm_query_batched(prompts, model, paths))
-
+    def _rlm_query_batched(self, prompts, paths=None) -> list[str]:
+        return self._await_task(self._start_rlm_query_batched(prompts, paths))
     # ---- context + execution --------------------------------------------------------------
 
     def load_context(self, path: str, index: int | None = None, is_json: bool = False) -> int:

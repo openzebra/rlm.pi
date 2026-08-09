@@ -110,11 +110,11 @@ rm -rf ~/.pi/agent/extensions/rlm
 | 函数 | 签名 | 描述 |
 |---|---|---|
 | `context` | `list[dict]` | 打包为 `[{"path","content","tokens"}, ...]` 的仓库 —— 完整的代码库 |
-| `llm_query` | `(prompt, model=None) -> str` | 单次子 LLM 调用 (worker 模型) |
-| `llm_query_batched` | `(prompts, model=None) -> list[str]` | 并发子 LLM 调用 (池上限) |
-| `llm_query_chunked` | `(text, prompt, model=None) -> list[str]` | 将大文本拆分为不超过上限的块并通过子 LLM 处理 |
-| `rlm_query` | `(prompt, model=None, paths=None) -> str` | 具有自有沙箱的递归子 RLM (设有深度限制)。继承父级的 `context`；`paths` 按前缀缩小范围 |
-| `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | 并发递归子 RLM，共享同一个 `paths` 切片 |
+| `llm_query` | `(prompt) -> str` | 单次子 LLM 调用（配置的 RLM LLM） |
+| `llm_query_batched` | `(prompts) -> list[str]` | 并发子 LLM 调用 (池上限) |
+| `llm_query_chunked` | `(text, prompt) -> list[str]` | 将大文本拆分为不超过上限的块并通过子 LLM 处理 |
+| `rlm_query` | `(prompt, paths=None) -> str` | 具有自有沙箱的递归子 RLM (设有深度限制)。继承父级的 `context`；`paths` 按前缀缩小范围 |
+| `rlm_query_batched` | `(prompts, paths=None) -> list[str]` | 并发递归子 RLM，共享同一个 `paths` 切片 |
 | `ask_user_question` | `(questions) -> list[dict]` | 向用户提出结构化问题 (仅限深度 0) |
 | `SHOW_VARS` | `() -> str` | 列出当前定义的变量及其类型 |
 | `answer` | `dict` | 设置 `answer["content"]=...; answer["ready"]=True` 以结束 |

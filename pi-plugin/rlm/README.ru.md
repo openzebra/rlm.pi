@@ -104,11 +104,11 @@ rm -rf ~/.pi/agent/extensions/rlm
 | Функция | Сигнатура | Описание |
 |---|---|---|
 | `context` | `list[dict]` | Репозиторий, упакованный как `[{"path","content","tokens"}, ...]` — вся кодовая база |
-| `llm_query` | `(prompt, model=None) -> str` | Одноразовый вызов sub-LLM (worker-модель) |
-| `llm_query_batched` | `(prompts, model=None) -> list[str]` | Параллельные вызовы sub-LLM (с ограничением пула) |
-| `llm_query_chunked` | `(text, prompt, model=None) -> list[str]` | Дробит большой текст на части по лимиту и обрабатывает через sub-LLM |
-| `rlm_query` | `(prompt, model=None, paths=None) -> str` | Рекурсивный дочерний RLM со своей песочницей (с ограничением глубины). Наследует ваш `context`; `paths` сужает его по префиксу |
-| `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | Параллельные рекурсивные дочерние RLM с общим срезом `paths` |
+| `llm_query` | `(prompt) -> str` | Одноразовый вызов sub-LLM (настроенная RLM LLM) |
+| `llm_query_batched` | `(prompts) -> list[str]` | Параллельные вызовы sub-LLM (с ограничением пула) |
+| `llm_query_chunked` | `(text, prompt) -> list[str]` | Дробит большой текст на части по лимиту и обрабатывает через sub-LLM |
+| `rlm_query` | `(prompt, paths=None) -> str` | Рекурсивный дочерний RLM со своей песочницей (с ограничением глубины). Наследует ваш `context`; `paths` сужает его по префиксу |
+| `rlm_query_batched` | `(prompts, paths=None) -> list[str]` | Параллельные рекурсивные дочерние RLM с общим срезом `paths` |
 | `ask_user_question` | `(questions) -> list[dict]` | Задать пользователю структурированные вопросы (только на глубине 0) |
 | `SHOW_VARS` | `() -> str` | Список текущих переменных и их типов |
 | `answer` | `dict` | Установите `answer["content"]=...; answer["ready"]=True` для завершения |

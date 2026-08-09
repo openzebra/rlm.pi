@@ -45,13 +45,12 @@ export interface SubcallOpts {
 
 /** Handlers the bridge installs to service sub-LLM interrupts. Return the reply payload. */
 export interface SubLlmHandlers {
-  llmQuery(prompt: string, model: string | null, depth: number, opts: SubcallOpts): Promise<string>;
-  llmQueryBatched(prompts: readonly string[], model: string | null, depth: number, opts: SubcallOpts): Promise<string[]>;
-  rlmQuery(prompt: string, model: string | null, depth: number, opts: SubcallOpts): Promise<string>;
-  rlmQueryBatched(prompts: readonly string[], model: string | null, depth: number, opts: SubcallOpts): Promise<string[]>;
+  llmQuery(prompt: string, depth: number, opts: SubcallOpts): Promise<string>;
+  llmQueryBatched(prompts: readonly string[], depth: number, opts: SubcallOpts): Promise<string[]>;
+  rlmQuery(prompt: string, depth: number, opts: SubcallOpts): Promise<string>;
+  rlmQueryBatched(prompts: readonly string[], depth: number, opts: SubcallOpts): Promise<string[]>;
   addContext(source: string, depth: number): Promise<AddContextResult>;
 }
-
 /** Narrow an unknown JSON value to a frozen string array. Non-strings and blanks are dropped. */
 function toStringArray(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -112,16 +111,16 @@ export async function serviceInterrupt(
   });
   try {
     if (msg.type === "llm_query") {
-      const response = await h.llmQuery(msg.prompt ?? "", msg.model ?? null, d, opts);
+      const response = await h.llmQuery(msg.prompt ?? "", d, opts);
       reply(msg.rid, { response });
     } else if (msg.type === "rlm_query") {
-      const response = await h.rlmQuery(msg.prompt ?? "", msg.model ?? null, d, opts);
+      const response = await h.rlmQuery(msg.prompt ?? "", d, opts);
       reply(msg.rid, { response });
     } else if (msg.type === "llm_query_batched") {
-      const responses = await h.llmQueryBatched(msg.prompts ?? [], msg.model ?? null, d, opts);
+      const responses = await h.llmQueryBatched(msg.prompts ?? [], d, opts);
       reply(msg.rid, { responses });
     } else if (msg.type === "rlm_query_batched") {
-      const responses = await h.rlmQueryBatched(msg.prompts ?? [], msg.model ?? null, d, opts);
+      const responses = await h.rlmQueryBatched(msg.prompts ?? [], d, opts);
       reply(msg.rid, { responses });
     } else if (msg.type === "add_context") {
       const lib = await h.addContext(msg.source ?? "", d);

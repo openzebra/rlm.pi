@@ -116,10 +116,10 @@ These functions are injected into the model's Python namespace inside the REPL:
 | Function | Signature | Description |
 |---|---|---|
 | `context` | `list[dict]` | Repository packed as `[{"path","content","tokens"}, ...]` — the full codebase |
-| `llm_query` | `(prompt, model=None) -> str` | One-shot sub-LLM call (worker model) |
-| `llm_query_batched` | `(prompts, model=None) -> list[str]` | Concurrent sub-LLM calls (pool-bounded) |
-| `rlm_query` | `(prompt, model=None, paths=None) -> str` | Recursive child RLM with its own sandbox (depth-capped). Inherits your `context`; `paths` narrows it by prefix |
-| `rlm_query_batched` | `(prompts, model=None, paths=None) -> list[str]` | Concurrent recursive child RLMs, sharing one `paths` slice |
+| `llm_query` | `(prompt) -> str` | One-shot sub-LLM call (configured RLM LLM) |
+| `llm_query_batched` | `(prompts) -> list[str]` | Concurrent sub-LLM calls (pool-bounded) |
+| `rlm_query` | `(prompt, paths=None) -> str` | Recursive child RLM with its own sandbox (depth-capped). Inherits your `context`; `paths` narrows it by prefix |
+| `rlm_query_batched` | `(prompts, paths=None) -> list[str]` | Concurrent recursive child RLMs, sharing one `paths` slice |
 | `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
 | `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
 

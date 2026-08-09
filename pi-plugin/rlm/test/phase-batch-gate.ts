@@ -99,7 +99,7 @@ const handlers = createSubcallHandlers({
 const prompts = Array.from({ length: BATCH }, (_, i) => `question ${i}`);
 const started = Date.now();
 const outcome = await Promise.race([
-  handlers.llmQueryBatched(prompts, null, 0, ATTACHED),
+  handlers.llmQueryBatched(prompts, 0, ATTACHED),
   sleep(DEADLOCK_MS).then((): null => null),
 ]);
 const elapsed = Date.now() - started;
@@ -118,7 +118,7 @@ check("leaf gate bound respected", peak > 0 && peak <= GATE_LIMIT, `peak=${peak}
 
 // A single llm_query must still work through the same gate.
 const single = await Promise.race([
-  handlers.llmQuery("one", null, 0, ATTACHED),
+  handlers.llmQuery("one", 0, ATTACHED),
   sleep(DEADLOCK_MS).then((): string => "TIMEOUT"),
 ]);
 check("single llm_query still completes", single === "ok", single.slice(0, 60));
@@ -148,7 +148,7 @@ const childHandlers = createSubcallHandlers({
 
 const childPrompts = Array.from({ length: 8 }, (_, i) => `child ${i}`);
 const childOut = await Promise.race([
-  childHandlers.rlmQueryBatched(childPrompts, null, 0, ATTACHED),
+  childHandlers.rlmQueryBatched(childPrompts, 0, ATTACHED),
   sleep(DEADLOCK_MS).then((): null => null),
 ]);
 check("child batch completes through the per-depth gate", childOut !== null);

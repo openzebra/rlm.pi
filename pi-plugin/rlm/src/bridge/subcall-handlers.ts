@@ -16,7 +16,7 @@
 
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { displayModelRef, modelRef, resolveModelId } from "../config/settings.ts";
+import { modelRef } from "../config/settings.ts";
 import { type ChatMsg, modelComplete } from "./model.ts";
 import { previewText } from "../text/preview.ts";
 import { checkResourceLimits } from "../core/resource-limits.ts";
@@ -120,7 +120,7 @@ export interface SubcallHandlerDeps {
    * What rlm_query degrades to at the depth cap. A child RLM there would just be an LM, so
    * both callers hand in their own one-shot path rather than re-deriving one here.
    */
-  readonly degrade?: (prompt: string, model: string | null, depth: number) => Promise<string>;
+  readonly degrade?: (prompt: string, depth: number) => Promise<string>;
   /** Called with a child run's totals so a caller-side guard can debit them too. */
   readonly onChildUsage?: (costUsd: number, inputTokens: number, outputTokens: number) => void;
   /** Wraps detached work so a session registry can count what is still in flight. */
@@ -158,9 +158,9 @@ interface ChildContext {
 const NO_UNMATCHED: readonly string[] = Object.freeze([]);
 
 export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers {
-  /** DRY #3 — the one display-model resolution. */
-  const displayModel = (model: string | null): string =>
-    displayModelRef(deps.registry, model, deps.getLlmModel());
+  /** DRY #3 — display label is always the configured sub-LLM (no per-call override). */
+  const displayModel = (): string =>
+    modelRef(deps.getLlmModel()) ?? deps.getLlmModel().id;
 
   /** Detached work is counted by the session registry; attached work runs as-is. */
   const detachable = <T>(opts: SubcallOpts, run: () => Promise<T>): Promise<T> =>
@@ -170,7 +170,6 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
   async function complete1(
     inv: Invocation,
     prompt: string,
-    model: string | null,
     track: (usage: Usage) => void,
   ): Promise<string> {
     const config = deps.getConfig();
@@ -184,12 +183,10 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
         `${config.maxPromptChars.toLocaleString()}). Shorten or chunk the prompt before calling llm_query.`,
       );
     }
-    const resolved = model ? resolveModelId(deps.registry, model) : undefined;
-    if (model && !resolved) return formatError(`unknown model override '${model}'`);
     try {
       const messages: ChatMsg[] = [{ role: "user", content: prompt }];
       const res = await deps.gates.leaf.run(() => modelComplete(messages, {
-        model: resolved ?? deps.getLlmModel(),
+        model: deps.getLlmModel(),
         registry: deps.registry,
         system: config.subSystemPrompt,
         maxTokens: config.subSampling?.maxTokens,
@@ -218,7 +215,7 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
   async function emitting<T>(
     opts: SubcallOpts,
     depth: number,
-    init: { kind: "llm" | "batch"; label: string; model: string | null; args: string },
+    init: { kind: "llm" | "batch"; label: string; args: string },
     run: (inv: Invocation, track: (usage: Usage) => void) => Promise<T>,
     summarize: (out: T) => {
       readonly preview: string;
@@ -232,7 +229,7 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
     if (inv === null) return unwired();
     const id = inv.emitter.emitSubcallCreated({
       kind: init.kind, parentId: inv.parentId, label: init.label,
-      model: displayModel(init.model), args: init.args, depth: inv.depth,
+      model: displayModel(), args: init.args, depth: inv.depth,
     });
     let costUsd = 0;
     let tokens = 0;
@@ -280,7 +277,6 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
   async function childRun(
     inv: Invocation,
     prompt: string,
-    model: string | null,
     paths: readonly string[] | undefined,
   ): Promise<RlmResult> {
     const childDepth = inv.depth + 1;
@@ -291,8 +287,8 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
     if (run === undefined || childDepth >= maxDepth) {
       const degrade = deps.degrade;
       const answer = degrade !== undefined
-        ? await degrade(prompt, model, inv.depth)
-        : await complete1(inv, prompt, model, () => {});
+        ? await degrade(prompt, inv.depth)
+        : await complete1(inv, prompt, () => {});
       return emptyResult(answer);
     }
 
@@ -301,10 +297,7 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
     if (limitError) return emptyResult(limitError);
 
     const rootModel = deps.getModel?.();
-    const resolvedOverride = model ? resolveModelId(deps.registry, model) : undefined;
-    const modelLabel = model
-      ? (modelRef(resolvedOverride) ?? `unknown/${model}`)
-      : (rootModel === undefined ? undefined : (modelRef(rootModel) ?? rootModel.id));
+    const modelLabel = rootModel === undefined ? undefined : (modelRef(rootModel) ?? rootModel.id);
     const subId = inv.emitter.emitSubcallCreated({
       kind: "rlm", parentId: inv.parentId, label: "rlm_query",
       model: modelLabel, detail: prompt.slice(0, 60), depth: childDepth,
@@ -321,7 +314,6 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
         context: child.context,
         depth: childDepth,
         parentNodeId: subId,
-        modelOverride: model ?? undefined,
         remainingTimeoutMs: remTimeout,
       }, inv));
       inv.limits.addRaw(res.costUsd, res.inputTokens, res.outputTokens);
@@ -338,20 +330,20 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
   }
 
   return {
-    llmQuery: (prompt, model, depth, opts) => emitting(
+    llmQuery: (prompt, depth, opts) => emitting(
       opts, depth,
-      { kind: "llm", label: "llm_query", model, args: `prompt: ${previewText(prompt)}` },
-      (inv, track) => complete1(inv, prompt, model, track),
+      { kind: "llm", label: "llm_query", args: `prompt: ${previewText(prompt)}` },
+      (inv, track) => complete1(inv, prompt, track),
       (out) => ({ preview: previewText(out), error: isErrorText(out) ? out : undefined }),
       () => UNWIRED,
     ),
 
-    llmQueryBatched: (prompts, model, depth, opts) => emitting(
+    llmQueryBatched: (prompts, depth, opts) => emitting(
       opts, depth,
-      { kind: "batch", label: `llm_query ×${prompts.length}`, model, args: `prompt: ${previewText(prompts[0] ?? "")}` },
+      { kind: "batch", label: `llm_query ×${prompts.length}`, args: `prompt: ${previewText(prompts[0] ?? "")}` },
       // NO outer gate. `complete1` already takes the single `leaf` slot each prompt needs;
       // an outer `gates.leaf.map` here deadlocked every batch of >= limit prompts.
-      (inv, track) => Promise.all(prompts.map((p) => complete1(inv, p, model, track))),
+      (inv, track) => Promise.all(prompts.map((p) => complete1(inv, p, track))),
       (out) => {
         const { failed, error } = summarizeBatch(out);
         const first = previewText(out[0] ?? "");
@@ -363,18 +355,18 @@ export function createSubcallHandlers(deps: SubcallHandlerDeps): SubcallHandlers
       () => prompts.map(() => UNWIRED),
     ),
 
-    async rlmQuery(prompt, model, depth, opts) {
+    async rlmQuery(prompt, depth, opts) {
       const inv = deps.resolve(opts, depth);
       if (inv === null) return UNWIRED;
-      return detachable(opts, async () => (await childRun(inv, prompt, model, opts.paths)).answer);
+      return detachable(opts, async () => (await childRun(inv, prompt, opts.paths)).answer);
     },
 
-    async rlmQueryBatched(prompts, model, depth, opts) {
+    async rlmQueryBatched(prompts, depth, opts) {
       const inv = deps.resolve(opts, depth);
       if (inv === null) return prompts.map(() => UNWIRED);
       // Bounded by the per-depth rlm gate inside childRun, not by an outer pool.
       return detachable(opts, async () => {
-        const results = await Promise.all(prompts.map((p) => childRun(inv, p, model, opts.paths)));
+        const results = await Promise.all(prompts.map((p) => childRun(inv, p, opts.paths)));
         return results.map((r) => r.answer);
       });
     },
