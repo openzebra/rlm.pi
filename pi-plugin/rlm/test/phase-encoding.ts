@@ -26,6 +26,8 @@ const SAMPLE = "Привет — 世界 🚀 ok";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const PY_DIR = join(TEST_DIR, "..", "src", "sandbox", "py");
+/** Check 6's scanner. A real .py file so it stays lintable and runnable by hand. */
+const NO_BARE_OPEN_PY = join(TEST_DIR, "fixtures", "no-bare-open.py");
 
 /** Python length of SAMPLE (code points, not UTF-8 bytes). */
 const SAMPLE_LEN = [...SAMPLE].length;
@@ -241,55 +243,8 @@ async function main(): Promise<void> {
     {
       // AST scan (flags bare open/io.open) + runtime EncodingWarning under
       // -X warn_default_encoding when hostio exercises its I/O. EncodingWarning is 3.10+.
-      const checker = [
-        "import ast, sys, pathlib, warnings, tempfile, os",
-        "root = pathlib.Path(sys.argv[1])",
-        "names = ('worker.py', 'guards.py', 'hostio.py')",
-        "bad = []",
-        "for name in names:",
-        "    path = root / name",
-        "    if not path.is_file():",
-        "        bad.append(f'{name}: missing')",
-        "        continue",
-        "    tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))",
-        "    for node in ast.walk(tree):",
-        "        if not isinstance(node, ast.Call):",
-        "            continue",
-        "        func = node.func",
-        "        is_open = isinstance(func, ast.Name) and func.id == 'open'",
-        "        is_io_open = (",
-        "            isinstance(func, ast.Attribute)",
-        "            and func.attr == 'open'",
-        "            and isinstance(func.value, ast.Name)",
-        "            and func.value.id == 'io'",
-        "        )",
-        "        if not (is_open or is_io_open):",
-        "            continue",
-        "        has_enc = any(kw.arg == 'encoding' for kw in node.keywords)",
-        "        if not has_enc:",
-        "            bad.append(f'{name}:{node.lineno}: bare open/io.open')",
-        "EncWarn = getattr(__import__('builtins'), 'EncodingWarning', None)",
-        "if EncWarn is not None:",
-        "    warnings.filterwarnings('error', category=EncWarn)",
-        "sys.path.insert(0, str(root))",
-        "from hostio import read_host_payload, pin_stdio_utf8",
-        "pin_stdio_utf8()",
-        "fd, p = tempfile.mkstemp(suffix='.txt')",
-        "os.close(fd)",
-        "try:",
-        "    with open(p, 'w', encoding='utf-8') as f:",
-        "        f.write('ok')",
-        "    assert read_host_payload(p, False) == 'ok'",
-        "finally:",
-        "    try: os.remove(p)",
-        "    except OSError: pass",
-        "if bad:",
-        "    print('FAIL', '; '.join(bad))",
-        "    sys.exit(1)",
-        "print('ok')",
-      ].join("\n");
       const result = await runPython(
-        ["-X", "warn_default_encoding", "-c", checker, PY_DIR],
+        ["-X", "warn_default_encoding", NO_BARE_OPEN_PY, PY_DIR],
         PY_DIR,
       );
       const ok = result.code === 0 && result.stdout.includes("ok")
