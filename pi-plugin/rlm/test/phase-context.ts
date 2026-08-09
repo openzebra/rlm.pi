@@ -671,8 +671,8 @@ async function main() {
     // alreadyLoaded that pretends the seed had it.
     check(
       "subpath: absent subtree is not false-alreadyLoaded",
-      nmAdd.alreadyLoaded !== true || nmAdd.files > 0,
-      `already=${String(nmAdd.alreadyLoaded)} files=${nmAdd.files}`,
+      nmAdd.alreadyLoaded !== true || (nmAdd.files ?? 0) > 0,
+      `already=${String(nmAdd.alreadyLoaded)} files=${String(nmAdd.files)}`,
     );
 
     // ── NEW: documents count present even on cache hit ──
@@ -691,13 +691,19 @@ async function main() {
     const recoverBundle = buildAddContextHandler({ cwd: tmp, getContext: () => [] });
     // No markSeededCwd — simulates sticky failed seed.
     const recover = await recoverBundle.handlers.addContext(".", 0);
+    const recoverPayload = Array.isArray(recover.payload) ? recover.payload : [];
+    const recoverUnprefixed = recoverPayload.every((entry: unknown) => {
+      if (entry === null || typeof entry !== "object" || !("path" in entry)) return false;
+      const path: unknown = entry.path;
+      return typeof path === "string" && !path.startsWith("ctx/");
+    });
     check(
       "recovery: add_context(\".\") without prior seed packs with pathPrefix \"\"",
       recover.alreadyLoaded !== true
         && recover.pathPrefix === ""
-        && recover.files > 0
-        && recover.payload.every((f) => !f.path.startsWith("ctx/")),
-      `already=${String(recover.alreadyLoaded)} prefix=${recover.pathPrefix} files=${recover.files}`,
+        && (recover.files ?? 0) > 0
+        && recoverUnprefixed,
+      `already=${String(recover.alreadyLoaded)} prefix=${recover.pathPrefix} files=${String(recover.files)}`,
     );
     check("recovery: marks cwd seeded afterwards",
       recoverBundle.seededCwd() !== undefined);
