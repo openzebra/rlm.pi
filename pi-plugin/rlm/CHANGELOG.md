@@ -10,20 +10,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Replaced `repomix` with a native walker + `@firecrawl/anydoc`.** Context packing no longer
-  pulls 28 transitive dependencies for gitignore + binary filtering. A native `git ls-files`
-  (with `walkFs` fallback) enumerates the tree; documents (PDF, DOCX, XLSX, PPTX, CSV, …) are
-  converted to Markdown via anydoc and cached under `$XDG_CACHE_HOME/pi-rlm/anydoc` keyed by
-  `(size, mtimeMs)`.
+  pulls 28 transitive dependencies for gitignore + binary filtering. A native
+  `git ls-files -co --exclude-standard -z` (with `walkFs` fallback) enumerates the tree;
+  documents (PDF, DOCX, XLSX, PPTX, CSV, …) convert to Markdown via anydoc and cache under
+  `$XDG_CACHE_HOME/pi-rlm/anydoc` (else `~/.cache/…`) keyed by pre-conversion `(size, mtimeMs)`.
+  Requires **Node ≥ 20** (NAPI native addon).
 - **`load_library` → `add_context`.** Same control flow; namespaces move from `lib/<id>/` to
-  `ctx/<id>/`. No alias — the prompt is the only teacher of the name.
+  `ctx/<id>/`. No alias — the prompt is the only teacher of the name. Return metadata gains
+  `documents` (docs in payload, including cache hits) and `converted` (fresh conversions this
+  call), plus a capped `skipped` list.
 - **`context` starts empty.** The working directory seeds lazily on the first `repl()` call
-  (`autoSeedCwd: true`, un-prefixed paths so `search()` hits remain real paths). Config renames
-  `libraryLoader` → `contextLoader` (legacy key still read from `rlm.json`).
+  (`autoSeedCwd: true`, un-prefixed paths so `search()` hits remain real paths for
+  `edit`/`write`). Config renames `libraryLoader` → `contextLoader` (legacy key still read from
+  `rlm.json`). The compact listing injects only when the payload identity changes, not every
+  turn.
+- **Removed `repomix` dependency**; added `@firecrawl/anydoc@^0.1.7`.
 
 ### Added
 
-- **Document conversion** for binary containers that repomix dropped as opaque assets.
-- **`autoSeedCwd` config toggle** in `/rlm-config`.
+- **Document conversion** for binary containers that repomix dropped as opaque assets (PDF,
+  DOCX, XLSX, PPTX, CSV, Office macro variants, …). Lazy NAPI load — missing platforms degrade
+  to `skipped: "no-converter"` without crashing plugin load.
+- **`autoSeedCwd` config toggle** in `/rlm-config` (default on).
+- **`SkipReason` closed union** for model-facing skips (`binary`, `sensitive`, `symlink-escape`,
+  anydoc codes, …) instead of free-form strings.
+
+### Fixed / security
+
+- **Secrets no longer enter context.** A deny-list under `.gitignore` drops `.env*`, key
+  material (`id_rsa*`, `*.pem`/`*.key`/`*.p12`, …), and paths under `.ssh`/`.aws`/… as
+  `skipped: "sensitive"`. `walkFs` does not descend into dot-directories except `.github`.
+  Single-file `add_context` of a secret path hard-refuses.
+- **Symlink escape closed.** `lstat` + `realpath` refuse targets outside the packed root
+  (`symlink-escape`) and re-check sensitivity on the resolved path — an innocuous link name
+  pointing at `/tmp/prod.env` no longer leaks.
+- **`add_context(".")` no longer doubles the tree.** The cwd seed registers a host sentinel
+  (`""` + absolute path); re-adding cwd is `alreadyLoaded`. Subpaths of the seed short-circuit
+  only when those un-prefixed files are already in context (gitignored subtrees still pack).
+  Failed seed is sticky (no re-walk storm) and `add_context(".")` recovers un-prefixed.
+- **MD cache no longer freezes stale Markdown.** Stamp is captured before conversion; write
+  refuses if a post-conversion stat disagrees. Cache hits report `converted: 0` but
+  `documents: N`.
+- **Document size cap** `MAX_DOCUMENT_BYTES` (64MB) during directory walks; skipped list capped
+  at 64 entries on the wire. Shallow clone sets `GIT_TERMINAL_PROMPT=0` so private URLs fail
+  fast instead of hanging on a credential helper.
 
 ## [0.2.2] - 2026-08-09
 
