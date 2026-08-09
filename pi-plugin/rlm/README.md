@@ -110,14 +110,18 @@ These functions are injected into the model's Python namespace inside the REPL:
 | Function | Signature | Description |
 |---|---|---|
 | `context` | `list[dict]` | Loaded files as `[{"path","content","tokens"}, …]` — starts empty; cwd seeds on first `repl()` |
-| `llm_query` | `(prompt) -> str` | One-shot sub-LLM call (configured RLM LLM) |
-| `llm_query_batched` | `(prompts) -> list[str]` | Concurrent sub-LLM calls (pool-bounded) |
-| `llm_query_chunked` | `(text, prompt) -> list[str]` | Split large text into cap-sized chunks and fan out via sub-LLMs |
-| `rlm_query` | `(prompt, paths=None) -> str` | Recursive child RLM with its own sandbox (depth-capped). Inherits your `context`; `paths` narrows it by prefix |
-| `rlm_query_batched` | `(prompts, paths=None) -> list[str]` | Concurrent recursive child RLMs, sharing one `paths` slice |
+| `llm_query` | `(prompt) -> Task` | Always spawn one sub-LLM; `await_task` → `str` |
+| `llm_batch` | `(prompts) -> Task` | Always spawn many sub-LLMs in parallel; `await_task` → `list[str]` |
+| `llm_query_chunked` | `(text, prompt) -> Task` | Always spawn; split large text into cap-sized chunks; `await_task` → `list[str]` |
+| `map_files` | `(files, prompt) -> Task` | Always spawn; ask `prompt` of many files; `await_task` → `dict[path, answer]` |
+| `rlm_query` | `(prompt, paths=None) -> Task` | Always spawn recursive child RLM; `await_task` → report `str` |
+| `rlm_batch` | `(prompts, paths=None) -> Task` | Always spawn many child RLMs; `await_task` → `list[str]` |
+| `await_task` | `(Task \| list[Task])` | Collect result(s) from always-spawn tools |
 | `add_context` | `(source) -> dict \| str` | Append a dir, file, document, or git URL into `context` under `ctx/<id>/` |
 | `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
 | `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
+
+Fan-out posts run **detached** (BG / ↯bg): fire several Tasks, do free `search`/`grep`, then `await_task([...])`.
 
 ### Adding context
 

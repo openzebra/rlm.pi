@@ -41,39 +41,38 @@ export const RETRIEVAL_GLOSSARY_LINES: readonly string[] = Object.freeze([
 
 /** One-line delegation helpers — orchestrating must be cheaper than solving. */
 export const DELEGATION_GLOSSARY_LINES: readonly string[] = Object.freeze([
-  "- `map_files(files, prompt) -> dict[path, str]`: ask `prompt` of every file and",
-  "  get back {path: answer}. Accepts context entries or paths, packs them into cap-sized",
-  "  batched sub-calls, and splits oversized files automatically. **This is the default way to",
-  "  read many files** — prefer it over hand-rolling a chunk loop.",
-  "- `llm_map_reduce(items, map_prompt, reduce_prompt) -> str`: map over items in",
-  "  one batch, then reduce the partial answers with a single call. The paper's canonical",
-  "  strategy (query per chunk → aggregate the buffers) as one call.",
+  "- `map_files(files, prompt) -> Task`: always spawn. `await_task(t)` → dict[path, answer].",
+  "  Accepts context entries or paths; packs into cap-sized batches; splits oversized files.",
+  "  **Default way to read many files** — fire independent `map_files` Tasks, free work, then await.",
+  "- `llm_map_reduce(items, map_prompt, reduce_prompt) -> str`: **blocks** (map then reduce).",
+  "  Prefer separate `map_files` / `llm_batch` Tasks when you can do free work between fan-out and collect.",
 ]);
 
 /** Shared glossary entry for the chunked-query helper (headless + native). */
 export const CHUNKED_GLOSSARY_LINES: readonly string[] = Object.freeze([
-  "- `llm_query_chunked(text: str, prompt: str) -> list[str]`: auto-splits `text` into",
-  "  chunks that fit the sub-LLM prompt cap, fans them out concurrently (order preserved), and",
-  "  returns one answer per chunk. Use it for ANY text too large for a single `llm_query` — a file",
-  "  you open()ed, an oversized sub-result, or several concatenated context files.",
+  "- `llm_query_chunked(text: str, prompt: str) -> Task`: always spawn. `await_task(t)` → list[str]",
+  "  (one answer per chunk, order preserved). Auto-splits text to the sub-LLM prompt cap.",
+  "  Use for ANY text too large for a single `llm_query` — open()ed files, oversized sub-results.",
 ]);
 
 /** Non-blocking fan-out: spawn now, collect later (headless glossary). */
 export const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
-  "- **ALWAYS SPAWN:** `llm_query` / `llm_batch` / `rlm_query` / `rlm_batch` return a `Task`",
-  "  immediately — never the answer. Collect with `await_task(t)` or `await_task([t1,t2,…])`.",
-  "  Fire independent Tasks first, then await. `task.done` is True when settled.",
-  "- `spawn(fn, *args) -> Task`: same as calling the tool for the four core tools; also",
-  "  starts `llm_query_chunked` / `map_files` without waiting.",
-  "  (Not `llm_map_reduce` — reduce depends on its own map results.)",
-  "- `map_files` / `llm_query_chunked` / `llm_map_reduce` still block until done (helpers).",
+  "- **ALWAYS SPAWN (Task + ↯bg):** `llm_query` / `llm_batch` / `rlm_query` / `rlm_batch` /",
+  "  `map_files` / `llm_query_chunked`. Never treat the return as the answer.",
+  "  Collect with `await_task(t)` or `await_task([t1,t2,…])`. Fire independent Tasks first, free work, then await.",
+  "  Do NOT await after every independent spawn (serializes wall time). `task.done` when settled.",
+  "- `spawn(fn, *args) -> Task`: same as calling the always-spawn tools (not `llm_map_reduce`).",
+  "- Only `llm_map_reduce` still blocks until done.",
   "",
   "  ```python",
-  "  # ALWAYS: Task first, then await — never treat Task as the answer",
-  "  t1 = llm_batch([\"q1\", \"q2\", \"q3\"])",
-  "  t2 = rlm_batch([\"study A NO edits\", \"study B NO edits\"])",
-  "  hits = search(\"timeout\")  # free work while host runs",
-  "  answers = await_task([t1, t2])",
+  "  # Multi-area study: one rlm_batch (parallel workers), free locate, then await",
+  "  t = rlm_batch([",
+  "      \"Study module A — NO edits. Paths + symbols for X.\",",
+  "      \"Study module B — NO edits. Report how Y is configured.\",",
+  "  ])",
+  "  hits = search(\"X OR Y\", k=10)",
+  "  reports = await_task(t)",
+  "  # One-shot extracts: map_files / llm_batch also return Task → await_task",
   "  ```",
 ]);
 
@@ -120,15 +119,15 @@ export const LARGE_FILE_RULE_LINES: readonly string[] = Object.freeze([
   '1. Load in Python: `raw = open("dhat-heap.json").read()` — loading into a variable is fine.',
   "2. Deterministic processing in Python (`json.load`, `re`, counting, aggregation) is fine and preferred.",
   "3. The moment you need MEANING from raw text (summarize, explain, find anomalies), do NOT read it",
-  "   yourself — call `llm_query_chunked(raw, question)`, or slice + `llm_batch`.",
+  "   yourself — call `llm_query_chunked(raw, question)` (Task → await_task), or slice + `llm_batch`.",
   "4. Never print more than a small probe (~2K chars) of raw content.",
-  'Example: `parts = llm_query_chunked(raw, "Extract top allocation sites with byte totals")`, then',
-  "aggregate `parts` in Python or with one final `llm_query`.",
+  'Example: `t = llm_query_chunked(raw, "Extract top allocation sites with byte totals"); parts = await_task(t)`, then',
+  "aggregate `parts` in Python or with one final `llm_query` + await_task.",
 ]);
 
 /** Concise native-mode glossary line for the chunked helper (native prompt has a 6K budget). */
 export const CHUNKED_GLOSSARY_LINE_NATIVE =
-  "- `llm_query_chunked(text, prompt) -> list[str]` — auto-splits oversized text into cap-sized chunks, fans out concurrently; one answer per chunk.";
+  "- `llm_query_chunked(text, prompt) -> Task` — always spawn; await_task → list[str] (one answer per chunk). Auto-splits oversized text.";
 
 /** Concise native-mode large-file rule (folds in the context-exclusion note; native 6K budget). */
 export const LARGE_FILE_RULE_NATIVE =
@@ -151,47 +150,43 @@ export const ENV_TIPS = [
   "## Decomposition doctrine",
   "",
   "**Orchestrate; don't solve.** A single chain of thought over a large repository drifts —",
-  "you lose partials and compound mistakes. Your sub-LLMs are competent readers: given a",
-  "self-contained prompt and the text, they will extract, locate, classify, and summarize",
-  "reliably. Trust them; don't do their reading yourself.",
+  "you lose partials and compound mistakes. Sub-workers are competent: trust them; don't read for them.",
   "",
-  "Your job: (1) find the relevant slice with `search` / `grep_context` / `outline`,",
-  "(2) delegate all semantic reading to `map_files` / `llm_batch` / `llm_map_reduce`,",
-  "(3) memoize every result you will reuse in `answers`, (4) sanity-check an answer before",
-  "another step depends on it, (5) assemble the final answer from `answers` by lookup.",
+  "Your job: (1) free locate with `search` / `grep_context` / `outline`,",
+  "(2) fan out: **multi-step areas → `rlm_batch` / `rlm_query`**; one-shot extracts →",
+  "  `map_files` / `llm_batch` (all return Task — `await_task` for content),",
+  "(3) memoize into `answers`, (4) sanity-check before dependents, (5) assemble from `answers`.",
   "Your own compute is: pointers, dict lookups, string formatting, and decisions.",
   "",
   "### The only state that matters",
   "`answers` and `plan` are dicts that persist across every turn.",
-  "**If a value isn't in `answers`, it doesn't exist.** Do not trust a number from your own",
-  "earlier reasoning or from truncated stdout — context drifts. Memoize everything you reuse.",
+  "**If a value isn't in `answers`, it doesn't exist.** Do not trust truncated stdout. Memoize.",
   "",
   "### Shape of a run",
-  "1. Probe: `print(len(context))`, `search(<the user's question>)`. Do not print file bodies.",
-  "2. Plan: write the sub-questions into `plan`; each must be answerable from a named slice.",
-  "3. Fan out: one `map_files` / `llm_batch` per independent group, not one call per",
-  "   file. Store results into `answers` keyed by path or sub-question.",
-  "4. Assemble: build the answer from `answers`. Delegate the aggregation too if it is large.",
+  "1. Probe: `print(len(context))`, `search(<question>)`. Do not print file bodies.",
+  "2. Plan: sub-questions into `plan` (each from a named slice / module).",
+  "3. Fan out **in parallel**: one `rlm_batch` for independent multi-step studies, or",
+  "   `map_files` / `llm_batch` for one-shot reads — not one serial call per file.",
+  "4. Assemble from `answers`.",
   "",
   "### Red flags — you are off track",
-  "- Printing file bodies to read them yourself → stop, delegate to `map_files`.",
-  "- Writing regex to *infer meaning* (naming conventions, intent, correctness) → that is a",
-  "  sub-LLM job. Regex is for exact lexical needles only.",
-  "- Two turns in with zero sub-LLM calls on an analysis task → you are solving it yourself.",
-  "- About to reuse a value that is not in `answers` → re-derive it and store it.",
-  "- One sub-call per file over dozens of files → batch them; fat prompts in small batches win.",
+  "- Printing file bodies / native bulk read → stop; use map_files or rlm_*.",
+  "- Multi-module task with zero `rlm_batch`/`rlm_query` → you are under-delegating.",
+  "- Await after every independent spawn → serializes wall time; fire-all-then-await.",
+  "- Treating Task as the answer without `await_task`.",
+  "- Regex used to *infer meaning* → sub-LLM job. Regex is for exact needles only.",
+  "- Two turns with zero sub-LLM calls on analysis → solving it yourself.",
 ].join("\n");
 
 /** Native-mode variant of the doctrine — same rules, sized for the native prompt budget. */
 export const ENV_TIPS_CONDENSED = [
-  "### Decomposition doctrine (paper App. C.3 — worth +69.5% there)",
-  "Orchestrate; don't solve. Loop: `search`/`grep_context`/`outline` to find the slice →",
-  "`map_files` / `llm_batch` to read it → memoize into `answers` → assemble by lookup.",
-  "`answers` and `plan` persist across every turn: **if a value isn't in `answers`, it",
-  "doesn't exist** — never reuse a number from your own earlier reasoning or truncated stdout.",
-  "Red flags: printing file bodies to read them; regex used to infer meaning rather than match",
-  "a literal; two turns into an analysis with zero sub-LLM calls; one sub-call per file instead",
-  "of one batch. Exception — AUTHORING is not reading: you write every edit body yourself.",
+  "### Decomposition doctrine",
+  "Orchestrate; don't solve. Free locate → fan-out Tasks → await_task → memoize in `answers`.",
+  "Multi-module / multi-step areas: **`rlm_batch` (or rlm_query)** — not serial native read.",
+  "One-shot extracts: `map_files` / `llm_batch`. Always Task → await_task; fire-all then await.",
+  "`answers`/`plan` persist: **if it isn't in `answers`, it doesn't exist.**",
+  "Red flags: bulk file dumps; zero rlm_*/map_files on multi-area tasks; await after each spawn;",
+  "Task treated as answer. AUTHORING: you write every edit body yourself.",
 ].join("\n");
 
 export function howToRunCode(): string {
@@ -226,11 +221,12 @@ export function replGlossary(
     if (child) lines.push(...CHILD_CONTEXT_LINES);
     lines.push(
       "",
-      "  Worked example — find the slice, then delegate it:",
+      "  Worked example — find the slice, then delegate it (Task + await):",
       "  ```python",
       '  hits = search("where is the retry/backoff policy configured?", k=8)',
       "  paths = sorted({h['path'] for h in hits})",
-      '  answers.update(map_files(paths, "Describe any retry/backoff policy in this file, with line numbers. Say NONE if absent."))',
+      '  t = map_files(paths, "Describe any retry/backoff policy in this file, with line numbers. Say NONE if absent.")',
+      "  answers.update(await_task(t))",
       "  print({p: a[:80] for p, a in answers.items()})",
       "  ```",
     );
@@ -267,11 +263,13 @@ export function replGlossary(
   if (recursion) {
     lines.push(
       "- `rlm_query(task, paths=None) -> Task` / `rlm_batch(tasks, paths=None) -> Task`:",
-      "  always spawn. await_task for the report string(s). Child REPL is private.",
+      "  always spawn + ↯bg. await_task for the report string(s). Child REPL is private.",
       "",
-      "  **Choosing between `llm_query` and `rlm_query`:**",
-      "  - `llm_query` / `llm_batch` for one-shot facts (fast). Always Task → await_task.",
-      "  - `rlm_query` / `rlm_batch` when multi-step locate/edit is needed. Always Task → await_task.",
+      "  **Routing (api_v5):**",
+      "  - `llm_query` / `llm_batch` / `map_files` — one-shot facts/extracts (fast).",
+      "  - `rlm_query` — one multi-step study (own search/outline loop).",
+      "  - `rlm_batch` — ≥2 independent multi-step studies in **parallel** (prefer over N× rlm_query).",
+      "  Always Task → await_task. Fire independent work first; never serial-await between peers.",
       ...RECURSION_CONTEXT_LINES,
     );
   }

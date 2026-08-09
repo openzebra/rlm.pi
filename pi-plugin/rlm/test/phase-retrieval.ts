@@ -130,19 +130,26 @@ async function main(): Promise<void> {
     check("search index invalidates when context grows (add_context path)",
       JSON.stringify(parsePrinted(r.stdout)) === '["lib/x/a.py"]', r.stdout.trim());
 
-    // ── map_files: one batch, not one call per file ──────────────────────────────────────
+    // ── map_files: always Task; one batch, not one call per file ─────────────────────────
     batchCalls = 0; batchSizes = [];
     r = await sandbox.exec(
-      'out = map_files(["src/config/settings.ts", "docs/README.md"], "Summarize")\n'
+      't = map_files(["src/config/settings.ts", "docs/README.md"], "Summarize")\n'
+      + 'print(json.dumps([type(t).__name__, t.done]))\n'
+      + "out = await_task(t)\n"
       + "print(json.dumps(sorted(out.keys())))",
     );
-    check("map_files returns one entry per requested path",
-      JSON.stringify(parsePrinted(r.stdout)) === '["docs/README.md","src/config/settings.ts"]', r.stdout.trim());
+    check("map_files returns Task immediately",
+      r.stdout.includes('"Task"') && r.stdout.includes("false"), r.stdout.trim());
+    check("map_files await yields one entry per requested path",
+      r.stdout.includes('["docs/README.md", "src/config/settings.ts"]')
+      || r.stdout.includes('["docs/README.md","src/config/settings.ts"]'), r.stdout.trim());
     check("map_files issues ONE batched call for two files",
       batchCalls === 1 && batchSizes[0] === 2, `calls=${batchCalls} sizes=${JSON.stringify(batchSizes)}`);
 
     batchCalls = 0; batchSizes = [];
-    r = await sandbox.exec('print(json.dumps(sorted(map_files(context[:2], "Summarize").keys())))');
+    r = await sandbox.exec(
+      'print(json.dumps(sorted(await_task(map_files(context[:2], "Summarize")).keys())))',
+    );
     check("map_files accepts context entries as well as paths",
       JSON.stringify(parsePrinted(r.stdout)) === '["src/config/settings.ts","src/core/engine.ts"]', r.stdout.trim());
     check("map_files still batches when given entries", batchCalls === 1, `calls=${batchCalls}`);
@@ -151,23 +158,21 @@ async function main(): Promise<void> {
     batchCalls = 0; batchSizes = [];
     r = await sandbox.exec(
       'long_prompt = "Q" * 2500\n'
-      + 'out = map_files(["src/core/engine.ts"], long_prompt)\n'
+      + 'out = await_task(map_files(["src/core/engine.ts"], long_prompt))\n'
       + 'print(json.dumps(out["src/core/engine.ts"].count("ANS:") > 1))',
     );
     check("map_files splits a file that exceeds the per-call budget",
       parsePrinted(r.stdout) === true, `${r.stdout.trim()} sizes=${JSON.stringify(batchSizes)}`);
 
-    // ── spawn(map_files): detached, awaited in a LATER exec, same result shape ────────────
-    // map_files is the documented default for bulk reading, so it has to be spawnable — the
-    // glossary promised it while the allowlist refused it.
+    // ── bare map_files = spawn (later await), same shape ─────────────────────────────────
     batchCalls = 0; batchSizes = [];
     r = await sandbox.exec(
-      't = spawn(map_files, ["src/config/settings.ts", "docs/README.md"], "Summarize")\n'
+      't = map_files(["src/config/settings.ts", "docs/README.md"], "Summarize")\n'
       + 'print(json.dumps([type(t).__name__, t.done]))',
     );
-    check("spawn(map_files) returns a Task without awaiting it",
-      JSON.stringify(parsePrinted(r.stdout)) === '["Task",false]', r.stdout.trim());
-    check("spawned map_files posts its batch immediately", batchCalls === 1, `calls=${batchCalls}`);
+    check("map_files Task without await posts batch immediately",
+      JSON.stringify(parsePrinted(r.stdout)) === '["Task",false]' && batchCalls === 1,
+      `${r.stdout.trim()} calls=${batchCalls}`);
 
     r = await sandbox.exec('print(json.dumps(sorted(await_task(t).keys())))');
     check("await_task(map_files task) yields the same {path: answer} dict",

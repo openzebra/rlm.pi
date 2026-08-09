@@ -105,7 +105,8 @@ class Worker:
         self._inflight: set[str] = set()
         # Requests (exec/shutdown) that arrived mid-exec; main() replays them.
         self._deferred: list[Any] = []
-        # True only while spawn() runs a builder — marks requests that may outlive this exec.
+        # Kept for spawn() compatibility; sub-LLM kinds always post detached=true so fan-out
+        # outlives the repl cell and shows ↯bg (see _post).
         self._detached = False
         self.ns: dict[str, Any] = {}
         self._setup()
@@ -184,14 +185,19 @@ class Worker:
 
     # ---- sub-LLM bridge over stdio --------------------------------------------------------
 
+    # Sub-LLM fan-out always runs detached (session BG registry + ↯bg), whether called
+    # as llm_batch(...) or via map_files internals — not only when wrapped in spawn().
+    _DETACHED_KINDS = frozenset({"llm_query", "llm_batch", "rlm_query", "rlm_batch"})
+
     def _post(self, kind: str, payload: dict[str, Any]) -> str:
         """Write one parent request and return its rid WITHOUT waiting for the reply."""
         self._rid += 1
         rid = f"q{self._rid}"
         # Register only after the write succeeds — a broken pipe must not leave an
         # _inflight entry that nothing will ever settle.
+        detached = self._detached or kind in self._DETACHED_KINDS
         _send({"type": kind, "rid": rid, "depth": self.depth,
-               "detached": self._detached, **payload})
+               "detached": detached, **payload})
         self._inflight.add(rid)
         return rid
 
@@ -363,8 +369,7 @@ class Worker:
                 "spawn() takes llm_query, llm_batch, llm_query_chunked, map_files, "
                 "rlm_query or rlm_batch — not llm_map_reduce, whose reduce step depends "
                 "on its own map results and so cannot be a single Task"))
-        # Mark every request this builder posts as detached: the parent routes them to its
-        # session-scoped registry, since they may outlive the exec that started them.
+        # Sub-LLM kinds already post detached via _post; keep the flag for clarity / future kinds.
         self._detached = True
         try:
             return builder(*args, **kwargs)
@@ -508,14 +513,15 @@ class Worker:
                     _reduce_map_files(sizes, spans), f"{len(by_path)} files")
 
     @_spawnable("map_files")
-    def _map_files(self, files: Any, prompt: str) -> dict[str, str]:
-        """Ask `prompt` of every given file, batched, and return {path: answer}.
+    def _map_files(self, files: Any, prompt: str) -> Task:
+        """Always spawn. Collect with await_task(t) → dict[path, answer].
 
         `files` accepts context entries (dicts), paths (strings), or a mix — the whole
         chunk/batch/collect loop the system prompt used to spell out, as one call.
         Oversized files are split and their per-chunk answers joined.
+        Posts are detached (↯bg) so fan-out outlives the repl cell.
         """
-        return self._await_task(self._start_map_files(files, prompt))
+        return self._start_map_files(files, prompt)
 
     def _llm_map_reduce(
         self,
@@ -568,9 +574,9 @@ class Worker:
         return self._start_llm_batch(prompts)
 
     @_spawnable("llm_query_chunked")
-    def _llm_query_chunked(self, text, prompt: str) -> list[str]:
-        """Convenience: spawn chunked batches and await (multi-rid Task)."""
-        return self._await_task(self._start_llm_query_chunked(text, prompt))
+    def _llm_query_chunked(self, text, prompt: str) -> Task:
+        """Always spawn. Collect with await_task(t) → list[str] (one answer per chunk)."""
+        return self._start_llm_query_chunked(text, prompt)
 
     @_spawnable("rlm_query")
     def _rlm_query(self, prompt: str, paths=None) -> Task:

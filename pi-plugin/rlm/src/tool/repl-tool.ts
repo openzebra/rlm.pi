@@ -202,19 +202,18 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     name: "repl",
     label: "REPL",
     description:
-      "PRIMARY tool for bulk repository analysis. " +
-      "Persistent Python sandbox with loaded files in `context` (starts empty; cwd seeds on first " +
-      "call). Locate first with the free primitives search(query) / grep_context(pattern) / " +
-      "outline(path), then delegate the semantic reading to map_files / llm_query / " +
-      "llm_batch / llm_query_chunked (rlm_query for iterative sub-tasks) — stdout " +
-      "returned to you is hard-capped at 4K chars, so printing file bodies is useless. " +
-      "Variables, imports, and the `answers`/`plan` memo persist across calls. Also supports " +
-      "add_context for external dirs/files/git URLs and document conversion.",
+      "PRIMARY tool for bulk repository analysis (orchestrator). " +
+      "Persistent Python sandbox: free locate with search/grep_context/outline, then ALWAYS-SPAWN " +
+      "fan-out — llm_query/llm_batch/map_files/llm_query_chunked/rlm_query/rlm_batch return Task " +
+      "immediately (↯bg); collect with await_task. Prefer rlm_batch for ≥2 independent multi-step " +
+      "module studies; map_files/llm_batch for one-shot extracts. Fire independent Tasks first, " +
+      "free work, then await — never treat Task as the answer. Stdout hard-capped ~4K (no file dumps). " +
+      "`answers`/`plan` persist. add_context for external dirs/files/git/docs.",
     promptSnippet:
-      "repl: run Python in a persistent sandbox holding loaded files in `context`; " +
-      "search/grep_context/outline to locate, map_files/llm_query* to read.",
+      "repl: free search/outline; fire rlm_batch|map_files|llm_batch as Task (BG); await_task for results.",
     promptGuidelines: [
-      "Inside `repl`, locate with search()/grep_context()/outline() before delegating bulk reading to map_files()/llm_batch().",
+      "Multi-area analysis: rlm_batch([...]) or several Tasks in one repl, free search, then await_task — not serial native read.",
+      "Always-spawn tools return Task; only await_task has content. Fire-all independent work before await.",
     ],
     parameters: ReplToolParams,
 

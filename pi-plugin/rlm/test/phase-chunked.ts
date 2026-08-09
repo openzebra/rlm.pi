@@ -22,7 +22,7 @@ async function main() {
       },
     },
   });
-  const res = await sb.exec('print(len(llm_query_chunked("x" * 25_000, "Q")))');
+  const res = await sb.exec('print(len(await_task(llm_query_chunked("x" * 25_000, "Q"))))');
   check("chunked splits 25K under a 10K cap into 3 chunks", res.stdout.trim() === "3", res.stdout.trim());
   const flat = received.flat();
   check(
@@ -32,13 +32,13 @@ async function main() {
   );
   check("chunk numbering/order preserved", flat[0]?.includes("[chunk 1/3"), flat[0]?.slice(0, 40));
 
-  // 2. Empty text → no sub-calls, returns [].
-  const empty = await sb.exec('print(llm_query_chunked("", "Q"))');
+  // 2. Empty text → no sub-calls, resolved Task → [].
+  const empty = await sb.exec('print(await_task(llm_query_chunked("", "Q")))');
   check("empty text yields [] with no sub-calls", empty.stdout.trim() === "[]", empty.stdout.trim());
 
   // Scaffold restoration: model clobbers llm_query_chunked, next exec re-injects it.
   await sb.exec("llm_query_chunked = 'clobbered'");
-  const clobbered = await sb.exec('print(len(llm_query_chunked("hi", "Q")))');
+  const clobbered = await sb.exec('print(len(await_task(llm_query_chunked("hi", "Q"))))');
   check(
     "llm_query_chunked restored after clobber",
     clobbered.stdout.trim() === "1" && !clobbered.raised,
@@ -47,7 +47,7 @@ async function main() {
 
   // 2b. Tiny budget (prompt near the cap) returns one error, never thousands of chunks.
   const beforeCalls = received.length;
-  const tiny = await sb.exec('print(llm_query_chunked("data", "z" * 9000))');
+  const tiny = await sb.exec('print(await_task(llm_query_chunked("data", "z" * 9000)))');
   check(
     "tiny budget returns an error without fanning out",
     tiny.stdout.includes("Error:") && tiny.stdout.includes("1,000") && received.length === beforeCalls,
@@ -61,7 +61,7 @@ async function main() {
     maxPromptChars: 1500,
     handlers: { llmBatch: async (p) => p.map((_, i) => `c${i}`) },
   });
-  const ceiling = await csb.exec('print(llm_query_chunked("x" * 720_000, "Q"))');
+  const ceiling = await csb.exec('print(await_task(llm_query_chunked("x" * 720_000, "Q")))');
   check(
     "chunk ceiling guards against explosion",
     ceiling.stdout.includes("Error:") && ceiling.stdout.includes("chunks would be needed"),

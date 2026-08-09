@@ -35,22 +35,25 @@ export interface SystemPromptOptions {
 
 function orchestratorAddendum(maxPromptChars: number): string {
   return [
-    "As an RLM you are an **orchestrator, not a solver**. After you probe `context` and understand the",
-    "task, pause and plan: state how the task decomposes into sub-LLM / REPL steps, then execute one step",
-    "at a time, printing a small sample of each result to verify before moving on.",
+    "As an RLM you are an **orchestrator, not a solver**. Probe `context`, plan decomposition, then",
+    "fan out — do not solve multi-step module work yourself in a long chain of thought.",
     "",
-    "Your own context window is small. Push every long-context operation — reading, summarizing,",
-    "classifying, answering sub-questions — into `llm_query` / `llm_batch` instead of pulling raw",
-    "text into your own message stream. Conversely, if a Python keyword/regex search over `context` would",
-    "already pin the answer, just read it directly. Aggregate the small results back in Python.",
+    "<contract> llm_query / llm_batch / map_files / rlm_query / rlm_batch return Task (not the answer).",
+    "Only await_task returns content. Fire independent Tasks first, free search, then await_task.",
+    "Do not await after every independent spawn.</contract>",
     "",
-    `Sub-call budget is finite on two axes: (1) per-prompt capacity — each sub-prompt must stay under ${maxPromptChars.toLocaleString()} characters`,
-    `(hard cap; ≈${promptCapTokensK(maxPromptChars)}K tokens), packing a chunk of many items per call; (2) batch fan-out —`,
-    "keep batches to roughly ~20 prompts. Fat prompts in small batches beat thousands of tiny prompts.",
-    "If the workload exceeds both at once, filter aggressively in Python first, then batch the survivors.",
+    "<routing> one-shot facts → llm_query/llm_batch/map_files; one multi-step study → rlm_query;",
+    "≥2 independent multi-step areas → rlm_batch (prefer over serial rlm_query). NEVER print file",
+    "bodies into your own stream when a Task tool can read them.</routing>",
     "",
-    "Reserve your own tokens for high-level decisions: what to ask next, how to combine sub-LM outputs,",
-    "when to finalize. Delegate everything else. Do not submit a final answer before inspecting `context`.",
+    "Your own context window is small. Push long-context work into sub-calls. If free search/grep",
+    "already pins a tiny fact, use that. Aggregate small results in Python / `answers`.",
+    "",
+    `Sub-call budget: (1) per-prompt < ${maxPromptChars.toLocaleString()} chars (≈${promptCapTokensK(maxPromptChars)}K tok);`,
+    "(2) ~20 prompts per llm_batch. Fat prompts in small batches beat thousands of tiny prompts.",
+    "Filter in Python first when both axes overflow.",
+    "",
+    "Reserve your tokens for planning, combining, and finalizing. Do not finalize before inspecting `context`.",
   ].join("\n");
 }
 

@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Always-spawn core tools (breaking).** `llm_query` / `llm_batch` / `rlm_query` /
-  `rlm_batch` always return a Python `Task` — never auto-await. Collect with
-  `await_task(t)`. Helpers (`map_files`, `llm_query_chunked`, `llm_map_reduce`) still
-  block internally. Fixes serial “llm_batch blocks the whole REPL cell” (e.g. 13× batch ~3min).
+- **Always-spawn fan-out (breaking).** `llm_query` / `llm_batch` / `rlm_query` /
+  `rlm_batch` / **`map_files` / `llm_query_chunked`** always return a Python `Task` —
+  never auto-await. Collect with `await_task(t)`. Only `llm_map_reduce` still blocks
+  (map then reduce). Fire independent Tasks, do free `search`/`grep`, then await once.
+- **Always-detached sub-LLM posts.** Bare `llm_batch` / `map_files` (not only
+  `spawn(...)`) post `detached=true` → host BG registry, **↯bg** marker, work outlives
+  the `repl()` cell. Fixes “looks serial / no BG” when agents call `map_files(...)`.
 - **Search/grep hit shape unified.** Both expose `snippet` and `text` keys (aliases) to
   prevent `KeyError: 'snippet'` when agents mix the two APIs.
 
@@ -35,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Native/headless prompts → api_v5 style (rlm_test bake-off winner).** Front-loaded
+  `<contract>` / `<routing>` / few-shots: multi-area work prefers `rlm_batch` /
+  `rlm_query` as always-spawn Tasks (fire → free locate → `await_task`), not serial
+  `repl` + native `read`. `repl` tool description and per-turn reminder match.
 - **Removed hard-blocks on native `read` / `grep` and bash readers.** Soft stdout caps remain
   (`tool_result` for bash/find/ls/read/grep). Prompts no longer mention allow/deny of native
   readers — prefer `repl` for bulk, tools stay available.
@@ -53,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sub-LLM pin no longer resets to cheapest on every `/rlm-config`.** The model
+  picker always opened on "⟳ cheapest (auto)" and never pre-selected the current
+  pin, so Enter while reopening config silently cleared `rlm.json` `llm`. Now the
+  list starts on the pinned model (or saved ref); choosing cheapest no longer
+  wipes `subSampling.reasoning`; unresolved pins warn once and stay on disk.
 - **Host↔worker batch wire replies.** Interrupt layer maps handler returns to
   `{ response }` / `{ responses: string[] }` (and unwraps SpawnResult via `awaitTask`) so the
   worker reducers no longer see `malformed batched response` / double-quoted strings.

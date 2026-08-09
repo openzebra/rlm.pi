@@ -6,7 +6,7 @@
 
 import { check, failureCount } from "./helpers.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
-import { NATIVE_PROMPT_STATIC, NATIVE_PROMPT_BUDGET, NATIVE_TURN_REMINDER } from "../src/prompts/native.ts";
+import { NATIVE_PROMPT_STATIC, NATIVE_PROMPT_BUDGET } from "../src/prompts/native.ts";
 import { formatContextListing } from "../src/context/listing.ts";
 import { buildReplResultText } from "../src/tool/repl-result.ts";
 import {
@@ -65,7 +65,7 @@ async function main() {
     maxPromptChars: 10_000,
     handlers: { llmBatch: async (prompts) => prompts.map(() => "unused") },
   });
-  const tiny = await sb.exec('print(llm_query_chunked("data", "z" * 9000))');
+  const tiny = await sb.exec('print(await_task(llm_query_chunked("data", "z" * 9000)))');
   check(
     "chunked rejects prompts leaving under 1,000 chars",
     tiny.stdout.includes("Error: prompt leaves under 1,000 chars per chunk"),
@@ -99,7 +99,7 @@ async function main() {
     maxPromptChars: 1_500,
     handlers: { llmBatch: async (prompts) => prompts.map(() => "unused") },
   });
-  const ceiling = await csb.exec('print(llm_query_chunked("x" * 720_000, "Q"))');
+  const ceiling = await csb.exec('print(await_task(llm_query_chunked("x" * 720_000, "Q")))');
   check(
     "chunked rejects inputs needing over 500 chunks",
     ceiling.stdout.includes("Error:") && ceiling.stdout.includes("chunks would be needed"),
@@ -145,7 +145,13 @@ async function main() {
     (NATIVE_PROMPT_STATIC.includes("hard-capped") || NATIVE_PROMPT_STATIC.includes("hard-capped (~4K"))
       && NATIVE_PROMPT_STATIC.includes("LOCATE-THEN-DELEGATE"),
   );
-  check("per-turn reminder mentions the contract", NATIVE_TURN_REMINDER.includes("llm_query_chunked"));
+  check(
+    "native prompt has v5 contract + rlm_batch routing",
+    NATIVE_PROMPT_STATIC.includes("<contract>")
+      && NATIVE_PROMPT_STATIC.includes("rlm_batch")
+      && NATIVE_PROMPT_STATIC.includes("await_task")
+      && NATIVE_PROMPT_STATIC.includes("Fire independent"),
+  );
 
   // ── context listing tail no longer contradicts ──
   const listing = formatContextListing([]);

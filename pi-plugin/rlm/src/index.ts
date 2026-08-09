@@ -20,7 +20,7 @@ import { resolveSource } from "./context/resolve.ts";
 import { formatContextListing } from "./context/listing.ts";
 import { extractEditPaths, readDiskFile } from "./context/refresh.ts";
 import type { AddContextHandlerBundle } from "./bridge/add-context.ts";
-import { buildNativeSystemPrompt, NATIVE_TURN_REMINDER } from "./prompts/native.ts";
+import { buildNativeSystemPrompt } from "./prompts/native.ts";
 import { capToolResultText } from "./mode/native-guards.ts";
 import {
   isSubagentChildBypass,
@@ -182,7 +182,23 @@ export default function rlmExtension(pi: ExtensionAPI): void {
 
     if (controller.savedLlmRef) {
       const resolved = resolveModelId(ctx.modelRegistry, controller.savedLlmRef);
-      if (resolved) controller.llmModel = resolved;
+      if (resolved) {
+        controller.llmModel = resolved;
+      } else {
+        // Keep the pin on disk/controller — do not fall back permanently. Runtime uses
+        // cheapest until the catalog has the model again; surface that once per session.
+        console.warn(
+          `[rlm] pinned sub-LLM ${controller.savedLlmRef} not in registry; using cheapest until it reappears`,
+        );
+        try {
+          ctx.ui.notify(
+            `RLM: pinned llm=${controller.savedLlmRef} unavailable — using cheapest until it is`,
+            "warning",
+          );
+        } catch {
+          // Some hosts have no UI at session_start.
+        }
+      }
     }
 
     // Re-register repl tool each session to pick up model provider changes
@@ -254,7 +270,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const filtered = event.messages.filter(
       (message) =>
         !(message.role === "custom" && message.customType === "rlm-intro")
-        && !(message.role === "user" && typeof message.content === "string" && message.content === NATIVE_TURN_REMINDER),
+
     );
     if (!nativeTradeHolds()) return { messages: filtered };
 
@@ -266,11 +282,11 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       listingPayloadRef = payload;
       const listing = formatContextListing(payload);
       const instruction = [
-        "Prefer repl({code}) for bulk repo analysis (search/grep_context/outline + map_files/llm_batch).",
-        "Large tool/repl outputs are capped to protect the root window.",
-        "Files also live in the Python REPL `context` variable (cwd seeds on first repl()).",
-        "Use add_context(path) for external dirs/files/docs/git URLs.",
-        "If sub-LLM credits exhausted → report and stop.",
+        "Prefer repl({code}) for bulk analysis: free search/grep/outline, then fan-out Tasks.",
+        "Multi-module work → rlm_batch (or rlm_query); one-shot extracts → map_files/llm_batch.",
+        "Always-spawn returns Task (↯bg); only await_task has content — fire-all then await.",
+        "Large tool/repl outputs are capped. Files live in REPL `context` (cwd seeds first repl()).",
+        "add_context(path) for external dirs/files/docs/git. Credits exhausted → report and stop.",
         "",
       ].join("\n");
       filtered.unshift({
@@ -280,12 +296,6 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       } as PiMessage);
     }
 
-    // Per-turn last-position reminder (not persisted — context hook rebuilds every request)
-    filtered.push({
-      role: "user" as const,
-      content: NATIVE_TURN_REMINDER,
-      timestamp: 0,
-    } as PiMessage);
 
     return { messages: filtered };
   });

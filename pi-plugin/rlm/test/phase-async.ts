@@ -160,7 +160,7 @@ async function testChunkedConcurrency(): Promise<void> {
   try {
     // budget = 10000 - len("Q") - 64 = 9935 chars/chunk → 55 chunks → batches of 20/20/15.
     const started = Date.now();
-    const res = await sb.exec(`print(len(llm_query_chunked("x" * 540_000, "Q")))`);
+    const res = await sb.exec(`print(len(await_task(llm_query_chunked("x" * 540_000, "Q"))))`);
     const elapsed = Date.now() - started;
     check("chunked returns one answer per chunk", res.stdout.trim() === "55", res.stdout.trim());
     check("chunked batches are dispatched CONCURRENTLY",
