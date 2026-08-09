@@ -86,7 +86,9 @@ print(await_task("not a task"))
       mapReduce.stdout.includes("not llm_map_reduce"), mapReduce.stdout.trim().slice(0, 80));
 
     // Empty prompts: a sub-LLM asked nothing confabulates, and the confabulation looks like data.
-    const blank = await sb.exec(`print(llm_query("   "))\nprint(llm_batch(["", " "])[0])`);
+    const blank = await sb.exec(
+      `print(await_task(llm_query("   ")))\nprint(await_task(llm_batch(["", " "]))[0])`,
+    );
     check("llm_query('') is refused instead of answered",
       blank.stdout.includes("empty prompt"), blank.stdout.trim().slice(0, 80));
     check("an all-blank batch is refused per prompt",
@@ -294,7 +296,7 @@ async function testWatchdogHeartbeat(): Promise<void> {
   });
   let killed = false;
   try {
-    await doomed.exec(`print(llm_query("x"))`);
+    await doomed.exec(`print(await_task(llm_query("x")))`);
   } catch {
     killed = true;
   }
@@ -309,7 +311,7 @@ async function testWatchdogHeartbeat(): Promise<void> {
   });
   const beat = setInterval(() => kept.refreshWatchdog(), 400);
   try {
-    const res = await kept.exec(`print(llm_query("x"))`);
+    const res = await kept.exec(`print(await_task(llm_query("x")))`);
     check("the heartbeat keeps a healthy long-running sandbox alive",
       res.stdout.trim() === "slow", res.stdout.trim());
   } catch (e) {

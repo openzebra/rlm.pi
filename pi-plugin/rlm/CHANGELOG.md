@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Always-spawn core tools (breaking).** `llm_query` / `llm_batch` / `rlm_query` /
+  `rlm_batch` always return a Python `Task` — never auto-await. Collect with
+  `await_task(t)`. Helpers (`map_files`, `llm_query_chunked`, `llm_map_reduce`) still
+  block internally. Fixes serial “llm_batch blocks the whole REPL cell” (e.g. 13× batch ~3min).
+- **Search/grep hit shape unified.** Both expose `snippet` and `text` keys (aliases) to
+  prevent `KeyError: 'snippet'` when agents mix the two APIs.
+
+
 - **api_v5 async-by-default subcall surface.** Canonical tools only:
   `llm_query` / `llm_batch` / `rlm_query` / `rlm_batch` + `await_task` (Python; bare `await`
   is a keyword) / `finish`. Host handlers live under `bridge/handlers/` (`completion`,

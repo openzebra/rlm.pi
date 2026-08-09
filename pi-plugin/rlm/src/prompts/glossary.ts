@@ -29,10 +29,10 @@ export function promptCapTokensK(maxPromptChars: number): number {
  */
 export const RETRIEVAL_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "- `search(query: str, k=10, path_glob=None)`: BM25 ranking over `context`. Returns",
-  "  [{path, line, score, snippet}] — POINTERS, not bodies. **Start here.** It is free:",
-  "  no sub-LLM call, no tokens. Use it before you guess at filenames or write regex.",
+  "  [{path, line, score, snippet, text}] — POINTERS, not bodies (`text` aliases `snippet`).",
+  "  **Start here.** Free: no sub-LLM call. Use before guessing filenames.",
   "- `grep_context(pattern, k=50, path_glob=None, before=0, after=0) -> dict`: regex over",
-  "  `context`. Returns {hits: [{path, line, text}], counts: {path: n}, total, truncated} —",
+  "  `context`. Returns {hits: [{path, line, text, snippet}], counts, total, truncated} —",
   "  `counts` is complete even when `hits` is capped, so a wide pattern reports its shape",
   "  instead of flooding you. Use for exact lexical needles; use `search` for meaning.",
   "- `outline(path) -> str`: definition/heading skeleton of one file with line numbers.",
@@ -60,18 +60,20 @@ export const CHUNKED_GLOSSARY_LINES: readonly string[] = Object.freeze([
 
 /** Non-blocking fan-out: spawn now, collect later (headless glossary). */
 export const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
-  "- `spawn(fn, *args) -> Task`: start `llm_query`, `llm_batch`, `llm_query_chunked`,",
-  "  `map_files`, `rlm_query` or `rlm_batch` WITHOUT waiting. Returns immediately.",
-  "  (Not `llm_map_reduce` — its reduce step depends on its own map results.)",
-  "- `await_task(task)` / `await_task(tasks) -> list`: collect results; order matches input.",
-  "  Tasks survive across turns, so spawn the slow work first, keep doing useful things, and",
-  "  await only when you actually need the results. `task.done` tells you if it has landed.",
+  "- **ALWAYS SPAWN:** `llm_query` / `llm_batch` / `rlm_query` / `rlm_batch` return a `Task`",
+  "  immediately — never the answer. Collect with `await_task(t)` or `await_task([t1,t2,…])`.",
+  "  Fire independent Tasks first, then await. `task.done` is True when settled.",
+  "- `spawn(fn, *args) -> Task`: same as calling the tool for the four core tools; also",
+  "  starts `llm_query_chunked` / `map_files` without waiting.",
+  "  (Not `llm_map_reduce` — reduce depends on its own map results.)",
+  "- `map_files` / `llm_query_chunked` / `llm_map_reduce` still block until done (helpers).",
   "",
   "  ```python",
-  "  # start the slow sub-agents, then keep working while they run",
-  "  tasks = [spawn(rlm_query, f\"Audit {area} end to end\") for area in areas]",
-  "  hits = [f for f in context if \"TODO\" in f[\"content\"]]   # overlaps with the sub-agents",
-  "  reports = await_task(tasks)",
+  "  # ALWAYS: Task first, then await — never treat Task as the answer",
+  "  t1 = llm_batch([\"q1\", \"q2\", \"q3\"])",
+  "  t2 = rlm_batch([\"study A NO edits\", \"study B NO edits\"])",
+  "  hits = search(\"timeout\")  # free work while host runs",
+  "  answers = await_task([t1, t2])",
   "  ```",
 ]);
 
@@ -235,10 +237,10 @@ export function replGlossary(
   }
   lines.push(...RETRIEVAL_GLOSSARY_LINES);
   lines.push(
-    "- `llm_query(prompt: str) -> str`: a single sub-LLM completion (configured RLM LLM). Use for",
-    "  extraction, summarization, or Q&A over a chunk of text. No per-call model override.",
-    "- `llm_batch(prompts: list[str]) -> list[str]`: run several sub-LLM calls",
-    "  concurrently; output order matches input order.",
+    "- `llm_query(prompt: str) -> Task`: spawn one sub-LLM (await_task for str). Extraction,",
+    "  summarization, Q&A over a chunk. No per-call model override.",
+    "- `llm_batch(prompts: list[str]) -> Task`: spawn many sub-LLMs in parallel",
+    "  (await_task → ordered list[str]). ALWAYS returns Task — never a list directly.",
     ...CHUNKED_GLOSSARY_LINES,
     ...SPAWN_GLOSSARY_LINES,
     ...DELEGATION_GLOSSARY_LINES,
@@ -264,18 +266,12 @@ export function replGlossary(
   }
   if (recursion) {
     lines.push(
-      "- `rlm_query(task, paths=None)` / `rlm_batch(tasks, paths=None)`: recursive RLM",
-      "  sub-calls. Each child runs a full REPL loop internally — its entire conversation is PRIVATE",
-      "  and never enters your history. Only the final answer (a short string) is returned.",
+      "- `rlm_query(task, paths=None) -> Task` / `rlm_batch(tasks, paths=None) -> Task`:",
+      "  always spawn. await_task for the report string(s). Child REPL is private.",
       "",
       "  **Choosing between `llm_query` and `rlm_query`:**",
-      "  - `llm_query` for simple one-shot tasks — summarize a chunk, extract a fact, answer a direct",
-      "    question. It is a single LLM call: fast and cheap. Prefer it by default, and fan out with",
-      "    `llm_batch` for parallel one-shots.",
-      "  - `rlm_query` only when a sub-task genuinely needs iterative reasoning with its own code",
-      "    execution (e.g. a sub-context large enough to need its own chunking, or a multi-step",
-      "    reasoning chain). It is slower and more expensive — reserve it for cases `llm_query` cannot",
-      "    handle. Avoid excessive recursive sub-calls when a batched one-shot would suffice.",
+      "  - `llm_query` / `llm_batch` for one-shot facts (fast). Always Task → await_task.",
+      "  - `rlm_query` / `rlm_batch` when multi-step locate/edit is needed. Always Task → await_task.",
       ...RECURSION_CONTEXT_LINES,
     );
   }

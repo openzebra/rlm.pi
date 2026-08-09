@@ -90,7 +90,7 @@ async function main() {
   r = await sandbox.exec("print(f())");
   check("functions see variables created in later cells", r.stdout.trim() === "5", r.stdout.trim());
   await sandbox.exec("llm_query = 'clobbered'");
-  r = await sandbox.exec("print(llm_query('still works'))");
+  r = await sandbox.exec("print(await_task(llm_query('still works')))");
   check("tools are restored after clobber", r.stdout.includes("STUB(still works"), r.stdout.trim());
 
   // SHOW_VARS
@@ -98,10 +98,10 @@ async function main() {
   check("SHOW_VARS lists user vars", r.stdout.includes("acc"), r.stdout.trim());
 
   // sub-LLM bridge over stdio (mid-exec interrupt -> stub handler)
-  r = await sandbox.exec("print(llm_query('summarize ' + context[0]))");
+  r = await sandbox.exec("print(await_task(llm_query('summarize ' + context[0])))");
   check("llm_query reaches stub handler", r.stdout.includes("STUB(summarize doc one"), r.stdout.trim());
 
-  r = await sandbox.exec("print(llm_batch([c for c in context]))");
+  r = await sandbox.exec("print(await_task(llm_batch([c for c in context])))");
   check("llm_batch returns ordered list", r.stdout.includes("STUB0") && r.stdout.includes("STUB2"), r.stdout.trim());
 
   // key isolation: the sandbox must not see provider keys (stripped at spawn)
@@ -196,7 +196,7 @@ async function main() {
       },
     },
   });
-  r = await slow.exec("print(llm_batch(['a', 'b']))");
+  r = await slow.exec("print(await_task(llm_batch(['a', 'b'])))");
   check(
     "H3: slow batched call does not trip exec timeout",
     r.stdout.includes("SLOW0") && r.stdout.includes("SLOW1") && !r.stderr.includes("timeout"),
@@ -213,7 +213,7 @@ async function main() {
     requestTimeoutMs: 500,
     handlers: { llmQuery: async (prompt) => { await sleep(300); return `OK ${prompt}`; } },
   });
-  r = await progressSb.exec("print(llm_query('a')); print(llm_query('b')); print(llm_query('c'))");
+  r = await progressSb.exec("print(await_task(llm_query('a'))); print(await_task(llm_query('b'))); print(await_task(llm_query('c')))");
   check("request watchdog resets on sub-call progress", r.stdout.includes("OK a") && r.stdout.includes("OK c"), r.stderr.trim());
   await progressSb.dispose();
 

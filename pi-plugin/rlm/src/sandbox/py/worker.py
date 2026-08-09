@@ -546,27 +546,36 @@ class Worker:
                 f"{map_prompt}\n\n[{labels[i + j]}]\n{t}"
                 for j, t in enumerate(texts[i:i + _MAX_CHUNK_BATCH])
             ]
-            mapped.extend(self._llm_batch(batch))
+            # Core tools always return Task — helpers must await explicitly.
+            part = self._await_task(self._start_llm_batch(batch))
+            mapped.extend(part if isinstance(part, list) else [str(part)])
         joined = "\n\n".join(f"[{labels[i]}]\n{a}" for i, a in enumerate(mapped))
-        return self._llm_query(f"{reduce_prompt}\n\nPartial answers:\n{joined}")
+        reduced = self._await_task(
+            self._start_llm_query(f"{reduce_prompt}\n\nPartial answers:\n{joined}")
+        )
+        return str(reduced)
 
-    # ---- sync helpers: await(start(...)), so there is exactly one code path -----------------
+    # ---- Core tools: ALWAYS spawn (return Task). Collect with await_task only. ------------
 
     @_spawnable("llm_query")
-    def _llm_query(self, prompt: str) -> str:
-        return self._await_task(self._start_llm_query(prompt))
+    def _llm_query(self, prompt: str) -> Task:
+        """Always spawn. Collect with await_task(t). Never auto-awaits."""
+        return self._start_llm_query(prompt)
 
     @_spawnable("llm_batch")
-    def _llm_batch(self, prompts) -> list[str]:
-        return self._await_task(self._start_llm_batch(prompts))
+    def _llm_batch(self, prompts) -> Task:
+        """Always spawn. Collect with await_task(t) → ordered list[str]."""
+        return self._start_llm_batch(prompts)
 
     @_spawnable("llm_query_chunked")
     def _llm_query_chunked(self, text, prompt: str) -> list[str]:
+        """Convenience: spawn chunked batches and await (multi-rid Task)."""
         return self._await_task(self._start_llm_query_chunked(text, prompt))
 
     @_spawnable("rlm_query")
-    def _rlm_query(self, prompt: str, paths=None) -> str:
-        return self._await_task(self._start_rlm_query(prompt, paths))
+    def _rlm_query(self, prompt: str, paths=None) -> Task:
+        """Always spawn. Collect with await_task(t)."""
+        return self._start_rlm_query(prompt, paths)
     def _add_context(self, source: str) -> dict[str, Any] | str:
         """Pack an external dir/file/git-URL on the host and append it into `context`.
 
@@ -706,8 +715,10 @@ class Worker:
         return out
 
     @_spawnable("rlm_batch")
-    def _rlm_batch(self, prompts, paths=None) -> list[str]:
-        return self._await_task(self._start_rlm_batch(prompts, paths))
+    def _rlm_batch(self, prompts, paths=None) -> Task:
+        """Always spawn. Collect with await_task(t) → ordered list of reports."""
+        return self._start_rlm_batch(prompts, paths)
+
     # ---- context + execution --------------------------------------------------------------
 
     def load_context(self, path: str, index: int | None = None, is_json: bool = False) -> int:

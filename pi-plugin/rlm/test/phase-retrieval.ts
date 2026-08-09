@@ -88,8 +88,8 @@ async function main(): Promise<void> {
     check("search returns [] for a miss", JSON.stringify(parsePrinted(r.stdout)) === "[]", r.stdout.trim());
 
     r = await sandbox.exec('h = search("resolve model id", k=1)[0]\nprint(json.dumps(sorted(h.keys())))');
-    check("search hit shape is {line, path, score, snippet}",
-      JSON.stringify(parsePrinted(r.stdout)) === '["line","path","score","snippet"]', r.stdout.trim());
+    check("search hit shape is {line, path, score, snippet, text}",
+      JSON.stringify(parsePrinted(r.stdout)) === '["line","path","score","snippet","text"]', r.stdout.trim());
 
     // ── grep_context: capped hits, complete counts ────────────────────────────────────────
     r = await sandbox.exec(
