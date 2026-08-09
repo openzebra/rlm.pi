@@ -45,7 +45,7 @@ export interface SandboxOptions {
   readonly maxPromptChars?: number;
   /**
    * Max seconds the worker will wait for a host reply while parked in `_drain_until`
-   * (rlm_await / sync sub-call). Defaults to the worker's own RLM_AWAIT_TIMEOUT_S (600).
+   * (await_task / sync sub-call). Defaults to the worker's own RLM_AWAIT_TIMEOUT_S (600).
    */
   readonly awaitTimeoutS?: number;
 }

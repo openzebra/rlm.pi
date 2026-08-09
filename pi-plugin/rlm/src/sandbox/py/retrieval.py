@@ -15,7 +15,7 @@ from typing import Any
 
 
 _CHUNK_HEADER_OVERHEAD = 64
-_MAX_CHUNK_BATCH = 20          # fan-out per llm_query_batched call (matches prompt guidance)
+_MAX_CHUNK_BATCH = 20          # fan-out per llm_batch call (matches prompt guidance)
 _MAX_CHUNKS = 500              # ceiling: above this, force pre-filtering in Python
 _NUDGE_CHARS = 500_000         # str/bytes vars above this trigger a one-time stdout hint
 

@@ -29,7 +29,7 @@ async function main() {
     "env cat f",
   ]);
   for (const command of blocked) {
-    check(`bash reader blocked — ${command}`, isFileReadingCommand(command));
+    check(`bash reader classified — ${command}`, isFileReadingCommand(command));
   }
 
   const allowed = Object.freeze([
@@ -55,7 +55,7 @@ async function main() {
   const capped = capToolResultText("x".repeat(10_000));
   check(
     "tool result over cap is capped with note",
-    capped !== undefined && capped.includes("tool output capped") && capped.endsWith("llm_query_chunked / llm_query_batched.]"),
+    capped !== undefined && capped.includes("tool output capped") && capped.endsWith("llm_query_chunked / llm_batch.]"),
     capped?.slice(-120) ?? "undefined",
   );
   check("tool result under cap is untouched", capToolResultText("x".repeat(3_999)) === undefined);
@@ -63,7 +63,7 @@ async function main() {
   const sb = await PythonSandbox.spawn({
     depth: 1,
     maxPromptChars: 10_000,
-    handlers: { llmQueryBatched: async (prompts) => prompts.map(() => "unused") },
+    handlers: { llmBatch: async (prompts) => prompts.map(() => "unused") },
   });
   const tiny = await sb.exec('print(llm_query_chunked("data", "z" * 9000))');
   check(
@@ -97,7 +97,7 @@ async function main() {
   const csb = await PythonSandbox.spawn({
     depth: 1,
     maxPromptChars: 1_500,
-    handlers: { llmQueryBatched: async (prompts) => prompts.map(() => "unused") },
+    handlers: { llmBatch: async (prompts) => prompts.map(() => "unused") },
   });
   const ceiling = await csb.exec('print(llm_query_chunked("x" * 720_000, "Q"))');
   check(
@@ -108,8 +108,10 @@ async function main() {
   await csb.dispose();
 
   check(
-    "native prompt mentions bash restriction",
-    NATIVE_PROMPT_STATIC.includes("bash readers (cat/sed/head/tail/awk/rg) are blocked"),
+    "native prompt does not mention read/grep ban or allowlist",
+    !NATIVE_PROMPT_STATIC.includes("read`/`grep` are blocked")
+      && !NATIVE_PROMPT_STATIC.includes("Native `read`/`grep`/bash are allowed")
+      && !NATIVE_PROMPT_STATIC.includes("Native read/grep/bash allowed"),
   );
   check(
     "native prompt stays under budget",
@@ -140,7 +142,7 @@ async function main() {
   // ── prompts ──
   check(
     "native prompt states repl cap + delegation rule",
-    NATIVE_PROMPT_STATIC.includes("hard-capped at 4K chars")
+    (NATIVE_PROMPT_STATIC.includes("hard-capped") || NATIVE_PROMPT_STATIC.includes("hard-capped (~4K"))
       && NATIVE_PROMPT_STATIC.includes("LOCATE-THEN-DELEGATE"),
   );
   check("per-turn reminder mentions the contract", NATIVE_TURN_REMINDER.includes("llm_query_chunked"));
@@ -148,7 +150,7 @@ async function main() {
   // ── context listing tail no longer contradicts ──
   const listing = formatContextListing([]);
   check("formatContextListing no longer points at file-reading tools", !listing.includes("use the file-reading tools"));
-  check("formatContextListing points at repl delegation", listing.includes("llm_query_batched"));
+  check("formatContextListing points at repl delegation", listing.includes("llm_batch"));
 
   // ── repl result assembly (exercises the real production function, not a hand-built concatenation) ──
   const bigStdout = "z".repeat(10_000);

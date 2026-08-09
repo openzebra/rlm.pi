@@ -15,7 +15,7 @@ import { RlmEmitter } from "./rlm-events.ts";
 import { SubcallStore, type SubcallTotals } from "./subcall-store.ts";
 import type { RlmSubcall } from "./rlm-details.ts";
 import { LimitGuard, type Limits } from "../core/limits.ts";
-import type { Invocation } from "../bridge/subcall-handlers.ts";
+import type { Invocation } from "../bridge/handlers/index.ts";
 import { trace, traceEnabled } from "../util/trace.ts";
 
 /** What a drain hands to the turn that is reporting it. */

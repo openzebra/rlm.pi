@@ -13,8 +13,9 @@ import { buildAddContextHandler } from "../bridge/add-context.ts";
 import { mergeIntoContext } from "../context/merge.ts";
 import {
   createSubcallHandlers,
+  createTaskRegistry,
   type Invocation,
-} from "../bridge/subcall-handlers.ts";
+} from "../bridge/handlers/index.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
@@ -102,6 +103,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
     // run can settle or abort it first (a child engine left running would keep spending).
     let detachedInFlight = 0;
     let detachedIdle: (() => void) | undefined;
+    // One registry per run — unawaited task reminders share the same map as await handlers.
+    const taskRegistry = createTaskRegistry();
     const subcalls = createSubcallHandlers({
       resolve: () => invocation,
       gates: deps.gates
@@ -125,7 +128,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           if (detachedInFlight === 0) detachedIdle?.();
         }
       },
-    });
+    }, taskRegistry);
     /** Wait (bounded) for detached work before the sandbox goes away. */
     const settleDetached = async (): Promise<void> => {
       if (detachedInFlight === 0) return;
@@ -234,6 +237,15 @@ export function createEngine(deps: EngineDeps): RunRlm {
         if (pendingReplOutputs) {
           appendUserMessage(history, pendingReplOutputs);
           pendingReplOutputs = undefined;
+        }
+
+        // Soft runtime nudge (rlm_test parity): remind the model to await pending host tasks.
+        const pendingIds = taskRegistry.awaitDeps.unawaitedIds();
+        if (pendingIds.length > 0) {
+          appendUserMessage(
+            history,
+            `[runtime] Unawaited task_ids: ${pendingIds.join(", ")} — call await before finish.`,
+          );
         }
 
         appendUserMessage(history, buildTurnPrompt(i, deps.config.maxIterations));

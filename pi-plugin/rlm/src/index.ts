@@ -18,9 +18,10 @@ import { BackgroundTasks } from "./tool/background-tasks.ts";
 import { resolve } from "node:path";
 import { resolveSource } from "./context/resolve.ts";
 import { formatContextListing } from "./context/listing.ts";
+import { extractEditPaths, readDiskFile } from "./context/refresh.ts";
 import type { AddContextHandlerBundle } from "./bridge/add-context.ts";
 import { buildNativeSystemPrompt, NATIVE_TURN_REMINDER } from "./prompts/native.ts";
-import { bashCommandFromInput, isFileReadingCommand, capToolResultText, BASH_BLOCK_REASON } from "./mode/native-guards.ts";
+import { capToolResultText } from "./mode/native-guards.ts";
 import {
   isSubagentChildBypass,
   commitSubagentForceActivation,
@@ -37,14 +38,13 @@ export {
   processRlmDepth,
 } from "./mode/subagent.ts";
 
-const BLOCKED_NATIVE_TOOLS = Object.freeze(new Set(["read", "grep"]));
 /** How often to keep the parent sandbox's request watchdog alive during detached work. */
 const WATCHDOG_HEARTBEAT_MS = 30_000;
-const CAPPED_RESULT_TOOLS = Object.freeze(new Set(["bash", "find", "ls"]));
+/** Soft token guard — cap bulk tool stdout; do NOT hard-block read/grep/bash readers. */
+const CAPPED_RESULT_TOOLS = Object.freeze(new Set(["bash", "find", "ls", "read", "grep"]));
 
 export default function rlmExtension(pi: ExtensionAPI): void {
-  // Subagent children run a native tool flow; RLM's contract is the opposite
-  // (block read/grep, route through repl). Env fast path: full bypass when
+  // Subagent children may bypass full RLM registration. Env fast path when
   // PI_SUBAGENT_CHILD=1 (unless force-in under the depth cap). See mode/subagent.ts.
   if (isSubagentChildBypass()) {
     if (traceEnabled) {
@@ -266,11 +266,11 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       listingPayloadRef = payload;
       const listing = formatContextListing(payload);
       const instruction = [
-        "ANALYZE with repl({code}) — read/grep are DISABLED.",
-        "Files you have loaded live in the Python REPL `context` variable (starts empty; cwd seeds on first repl()).",
-        "Locate with search()/grep_context()/outline() (free), then delegate bulk reading to",
-        "map_files()/llm_query_batched(). Use add_context(path) for external dirs/files/docs/git URLs.",
-        "If credits exhausted → report and stop.",
+        "Prefer repl({code}) for bulk repo analysis (search/grep_context/outline + map_files/llm_batch).",
+        "Large tool/repl outputs are capped to protect the root window.",
+        "Files also live in the Python REPL `context` variable (cwd seeds on first repl()).",
+        "Use add_context(path) for external dirs/files/docs/git URLs.",
+        "If sub-LLM credits exhausted → report and stop.",
         "",
       ].join("\n");
       filtered.unshift({
@@ -290,32 +290,34 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     return { messages: filtered };
   });
 
-  // ── Native mode restrictions: keep bulk file content out of root-model context ──
-  // `edit`/`write` stay unblocked so the agent modifies files through Pi's native
-  // tool flow (visible to all plugins, +/- diff preview). File reading/searching
-  // belongs in the REPL, and bash output is capped as a backstop.
-  // Fail-open when repl is not active (e.g. --tools allowlist without repl): never
-  // confiscate readers without a working substitute (RLM paper §2 trade).
-  pi.on("tool_call", async (event) => {
-    if (!nativeTradeHolds()) {
-      if (traceEnabled && controller.enabled) {
-        trace("native.block_skip", { toolName: event.toolName, reason: "no_active_repl" });
-      }
-      return;
-    }
-    if (BLOCKED_NATIVE_TOOLS.has(event.toolName)) {
-      return {
-        block: true,
-        reason: "RLM mode active. Use repl({code}) to read files and search the repository — loaded files live in the REPL `context` variable (cwd seeds on first call). Use `edit`/`write` for file changes. If sub-LLM credits are exhausted, report to the user.",
-      };
-    }
-    const bashCommand = event.toolName === "bash" ? bashCommandFromInput(event.input) : undefined;
-    if (bashCommand !== undefined && isFileReadingCommand(bashCommand)) {
-      return { block: true, reason: BASH_BLOCK_REASON };
-    }
-  });
+  // Soft token guard only — never hard-block read/grep/bash. Large tool results are capped.
+  // After edit/write, re-read disk into RLM context so search/llm see fresh content.
+  const MUTATING_FILE_TOOLS = Object.freeze(new Set(["edit", "write"]));
 
-  pi.on("tool_result", async (event) => {
+  pi.on("tool_result", async (event, ctx) => {
+    // ── Keep RLM context fresh after native file mutations ──
+    if (
+      nativeTradeHolds()
+      && MUTATING_FILE_TOOLS.has(event.toolName)
+      && event.isError !== true
+    ) {
+      const cwd = resolve(ctx?.cwd ?? process.cwd());
+      const paths = extractEditPaths(event.input);
+      for (const p of paths) {
+        const body = await readDiskFile(p, cwd);
+        if (body === null) continue;
+        try {
+          await sandboxManager.refreshFileFromDisk(p, body, cwd);
+          // Listing must re-inject if we rewrote payload identity
+          listingPayloadRef = undefined;
+        } catch (err) {
+          if (traceEnabled) {
+            trace("context.refresh_fail", { path: p, error: errorMessage(err) });
+          }
+        }
+      }
+    }
+
     if (!nativeTradeHolds() || !CAPPED_RESULT_TOOLS.has(event.toolName)) return;
     let changed = false;
     const content = event.content.map((c) => {

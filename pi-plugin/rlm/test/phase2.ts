@@ -9,7 +9,7 @@ import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import {
   createSubcallHandlers,
   limitsFromRemaining,
-} from "../src/bridge/subcall-handlers.ts";
+} from "../src/bridge/handlers/index.ts";
 import { createSubcallGates } from "../src/util/concurrency.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";

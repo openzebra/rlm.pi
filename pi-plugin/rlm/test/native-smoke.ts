@@ -53,7 +53,7 @@ listing.split("\n").slice(0, 3).forEach(l => console.log(`  ${l.slice(0, 100)}`)
 check("formatContextListing — non-empty on real project", listing.length > 100);
 check("formatContextListing — contains 'Context:'", listing.includes("Context:"));
 check("formatContextListing — contains file paths", listing.includes(".ts") || listing.includes(".json"));
-check("formatContextListing — contains repl delegation hint", listing.includes("llm_query_batched"));
+check("formatContextListing — contains repl delegation hint", listing.includes("llm_batch"));
 
 if (totalFiles > 200) {
   check("formatContextListing — truncates large projects", listing.includes("more files"));

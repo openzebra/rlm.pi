@@ -40,7 +40,7 @@ function orchestratorAddendum(maxPromptChars: number): string {
     "at a time, printing a small sample of each result to verify before moving on.",
     "",
     "Your own context window is small. Push every long-context operation — reading, summarizing,",
-    "classifying, answering sub-questions — into `llm_query` / `llm_query_batched` instead of pulling raw",
+    "classifying, answering sub-questions — into `llm_query` / `llm_batch` instead of pulling raw",
     "text into your own message stream. Conversely, if a Python keyword/regex search over `context` would",
     "already pin the answer, just read it directly. Aggregate the small results back in Python.",
     "",

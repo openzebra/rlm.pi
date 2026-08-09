@@ -60,10 +60,10 @@ export const CHUNKED_GLOSSARY_LINES: readonly string[] = Object.freeze([
 
 /** Non-blocking fan-out: spawn now, collect later (headless glossary). */
 export const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
-  "- `spawn(fn, *args) -> Task`: start `llm_query`, `llm_query_batched`, `llm_query_chunked`,",
-  "  `map_files`, `rlm_query` or `rlm_query_batched` WITHOUT waiting. Returns immediately.",
+  "- `spawn(fn, *args) -> Task`: start `llm_query`, `llm_batch`, `llm_query_chunked`,",
+  "  `map_files`, `rlm_query` or `rlm_batch` WITHOUT waiting. Returns immediately.",
   "  (Not `llm_map_reduce` — its reduce step depends on its own map results.)",
-  "- `rlm_await(task)` / `rlm_await_all(tasks) -> list`: collect results; order matches input.",
+  "- `await_task(task)` / `await_task(tasks) -> list`: collect results; order matches input.",
   "  Tasks survive across turns, so spawn the slow work first, keep doing useful things, and",
   "  await only when you actually need the results. `task.done` tells you if it has landed.",
   "",
@@ -71,7 +71,7 @@ export const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "  # start the slow sub-agents, then keep working while they run",
   "  tasks = [spawn(rlm_query, f\"Audit {area} end to end\") for area in areas]",
   "  hits = [f for f in context if \"TODO\" in f[\"content\"]]   # overlaps with the sub-agents",
-  "  reports = rlm_await_all(tasks)",
+  "  reports = await_task(tasks)",
   "  ```",
 ]);
 
@@ -118,7 +118,7 @@ export const LARGE_FILE_RULE_LINES: readonly string[] = Object.freeze([
   '1. Load in Python: `raw = open("dhat-heap.json").read()` — loading into a variable is fine.',
   "2. Deterministic processing in Python (`json.load`, `re`, counting, aggregation) is fine and preferred.",
   "3. The moment you need MEANING from raw text (summarize, explain, find anomalies), do NOT read it",
-  "   yourself — call `llm_query_chunked(raw, question)`, or slice + `llm_query_batched`.",
+  "   yourself — call `llm_query_chunked(raw, question)`, or slice + `llm_batch`.",
   "4. Never print more than a small probe (~2K chars) of raw content.",
   'Example: `parts = llm_query_chunked(raw, "Extract top allocation sites with byte totals")`, then',
   "aggregate `parts` in Python or with one final `llm_query`.",
@@ -154,7 +154,7 @@ export const ENV_TIPS = [
   "reliably. Trust them; don't do their reading yourself.",
   "",
   "Your job: (1) find the relevant slice with `search` / `grep_context` / `outline`,",
-  "(2) delegate all semantic reading to `map_files` / `llm_query_batched` / `llm_map_reduce`,",
+  "(2) delegate all semantic reading to `map_files` / `llm_batch` / `llm_map_reduce`,",
   "(3) memoize every result you will reuse in `answers`, (4) sanity-check an answer before",
   "another step depends on it, (5) assemble the final answer from `answers` by lookup.",
   "Your own compute is: pointers, dict lookups, string formatting, and decisions.",
@@ -167,7 +167,7 @@ export const ENV_TIPS = [
   "### Shape of a run",
   "1. Probe: `print(len(context))`, `search(<the user's question>)`. Do not print file bodies.",
   "2. Plan: write the sub-questions into `plan`; each must be answerable from a named slice.",
-  "3. Fan out: one `map_files` / `llm_query_batched` per independent group, not one call per",
+  "3. Fan out: one `map_files` / `llm_batch` per independent group, not one call per",
   "   file. Store results into `answers` keyed by path or sub-question.",
   "4. Assemble: build the answer from `answers`. Delegate the aggregation too if it is large.",
   "",
@@ -184,7 +184,7 @@ export const ENV_TIPS = [
 export const ENV_TIPS_CONDENSED = [
   "### Decomposition doctrine (paper App. C.3 — worth +69.5% there)",
   "Orchestrate; don't solve. Loop: `search`/`grep_context`/`outline` to find the slice →",
-  "`map_files` / `llm_query_batched` to read it → memoize into `answers` → assemble by lookup.",
+  "`map_files` / `llm_batch` to read it → memoize into `answers` → assemble by lookup.",
   "`answers` and `plan` persist across every turn: **if a value isn't in `answers`, it",
   "doesn't exist** — never reuse a number from your own earlier reasoning or truncated stdout.",
   "Red flags: printing file bodies to read them; regex used to infer meaning rather than match",
@@ -237,7 +237,7 @@ export function replGlossary(
   lines.push(
     "- `llm_query(prompt: str) -> str`: a single sub-LLM completion (configured RLM LLM). Use for",
     "  extraction, summarization, or Q&A over a chunk of text. No per-call model override.",
-    "- `llm_query_batched(prompts: list[str]) -> list[str]`: run several sub-LLM calls",
+    "- `llm_batch(prompts: list[str]) -> list[str]`: run several sub-LLM calls",
     "  concurrently; output order matches input order.",
     ...CHUNKED_GLOSSARY_LINES,
     ...SPAWN_GLOSSARY_LINES,
@@ -264,14 +264,14 @@ export function replGlossary(
   }
   if (recursion) {
     lines.push(
-      "- `rlm_query(prompt, paths=None)` / `rlm_query_batched(prompts, paths=None)`: recursive RLM",
+      "- `rlm_query(task, paths=None)` / `rlm_batch(tasks, paths=None)`: recursive RLM",
       "  sub-calls. Each child runs a full REPL loop internally — its entire conversation is PRIVATE",
       "  and never enters your history. Only the final answer (a short string) is returned.",
       "",
       "  **Choosing between `llm_query` and `rlm_query`:**",
       "  - `llm_query` for simple one-shot tasks — summarize a chunk, extract a fact, answer a direct",
       "    question. It is a single LLM call: fast and cheap. Prefer it by default, and fan out with",
-      "    `llm_query_batched` for parallel one-shots.",
+      "    `llm_batch` for parallel one-shots.",
       "  - `rlm_query` only when a sub-task genuinely needs iterative reasoning with its own code",
       "    execution (e.g. a sub-context large enough to need its own chunking, or a multi-step",
       "    reasoning chain). It is slower and more expensive — reserve it for cases `llm_query` cannot",

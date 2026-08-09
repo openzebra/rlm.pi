@@ -6,7 +6,7 @@
  *   2. Capability gate — never confiscate native readers unless `repl` is in the
  *      active tool set (paper trade: scaffold only if the REPL substitute exists).
  *
- * In-process rlm_query depth is handled by subcall-handlers.childRun; this module
+ * In-process rlm_query depth is handled by bridge/handlers childRun; this module
  * only covers OS-process children (pi subagents), which restart at depth 0.
  */
 import { DEFAULT_CONFIG } from "../config/defaults.ts";

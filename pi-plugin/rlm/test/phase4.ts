@@ -15,7 +15,7 @@ import {
   createSubcallHandlers,
   limitsFromRemaining,
   type SubcallHandlers,
-} from "../src/bridge/subcall-handlers.ts";
+} from "../src/bridge/handlers/index.ts";
 import { createSubcallGates } from "../src/util/concurrency.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import type { RlmInput, RunRlm } from "../src/core/types.ts";
@@ -26,6 +26,32 @@ import { emptyChildResult, MOCK_MODEL, MOCK_REGISTRY, repl, ZERO_USAGE } from ".
 
 /** Every sub-call in these token-free tests is synchronous, never spawn()ed. */
 const ATTACHED: SubcallOpts = { detached: false };
+
+/** Collect SpawnResult → final string (api_v5). */
+async function awaitText(
+  h: SubcallHandlers,
+  spawn: { readonly ok: boolean; readonly task_id: string | null; readonly error?: string },
+  depth = 0,
+): Promise<string> {
+  if (!spawn.ok || spawn.task_id === null) return spawn.error ?? "Error: spawn failed";
+  const r = await h.awaitTask(spawn.task_id, undefined, undefined, depth, ATTACHED);
+  if (!r.ok) return r.error ?? "Error: await failed";
+  if (r.results !== undefined) return r.results.join("\n");
+  return r.result ?? "";
+}
+
+/** Collect SpawnResult → final string list (api_v5 batch). */
+async function awaitList(
+  h: SubcallHandlers,
+  spawn: { readonly ok: boolean; readonly task_id: string | null; readonly error?: string },
+  depth = 0,
+): Promise<readonly string[]> {
+  if (!spawn.ok || spawn.task_id === null) return [spawn.error ?? "Error: spawn failed"];
+  const r = await h.awaitTask(spawn.task_id, undefined, undefined, depth, ATTACHED);
+  if (r.results !== undefined) return r.results;
+  if (r.result !== undefined) return [r.result];
+  return [r.error ?? "Error: await failed"];
+}
 
 /** One-shot fallback used at the depth cap, standing in for a real llm_query. */
 type Degrade = (prompt: string, depth: number) => Promise<string>;
@@ -81,15 +107,16 @@ async function testRecursionBridge(): Promise<boolean> {
   });
 
   // depth 0 -> child depth 1 < 2 -> recurse into engine
-  log("rlm_query at depth 0 recurses", (await handlers.rlmQuery("alpha", 0, ATTACHED)).startsWith("child("));
+  const d0 = await awaitText(handlers, await handlers.rlmQuery("alpha", 0, ATTACHED));
+  log("rlm_query at depth 0 recurses", d0.startsWith("child("));
   // depth 1 -> child depth 2 >= maxDepth -> fall back to llm_query
-  const atCap = await handlers.rlmQuery("beta", 1, ATTACHED);
+  const atCap = await awaitText(handlers, await handlers.rlmQuery("beta", 1, ATTACHED), 1);
   log("rlm_query at depth cap falls back to llm_query", atCap.startsWith("llm("));
   // batched preserves order
-  const batched = await handlers.rlmQueryBatched(["one", "two", "three"], 0, ATTACHED);
+  const batched = await awaitList(handlers, await handlers.rlmBatch(["one", "two", "three"], 0, ATTACHED));
   const firstBatch = batched[0];
   const thirdBatch = batched[2];
-  log("rlm_query_batched preserves order", batched.length === 3 && firstBatch !== undefined && thirdBatch !== undefined && firstBatch.includes("one") && thirdBatch.includes("three"));
+  log("rlm_batch preserves order", batched.length === 3 && firstBatch !== undefined && thirdBatch !== undefined && firstBatch.includes("one") && thirdBatch.includes("three"));
 
   return pass;
 }
@@ -119,7 +146,7 @@ async function testContextInheritance(): Promise<boolean> {
   };
 
   const inherit = rlmOnlyHandlers({ run: record, degrade, maxDepth: 2, childContext: () => files });
-  await inherit.rlmQuery("audit auth", 0, ATTACHED);
+  await awaitText(inherit, await inherit.rlmQuery("audit auth", 0, ATTACHED));
   const child = seen[0];
   log("#4: prompt becomes the child's rootPrompt", child?.rootPrompt === "audit auth");
   log("#4: child inherits the parent context by identity", child?.context === files);
@@ -129,12 +156,12 @@ async function testContextInheritance(): Promise<boolean> {
   // because a genuine text sub-task still has nothing else to be its world.
   seen.length = 0;
   const unwired = rlmOnlyHandlers({ run: record, degrade, maxDepth: 2 });
-  await unwired.rlmQuery("plain text task", 0, ATTACHED);
+  await awaitText(unwired, await unwired.rlmQuery("plain text task", 0, ATTACHED));
   log("#4: unwired falls back to prompt-as-context", seen[0]?.context === "plain text task");
 
   // paths= narrows by prefix.
   seen.length = 0;
-  await inherit.rlmQuery("only auth", 0, { detached: false, paths: ["src/auth/"] });
+  await awaitText(inherit, await inherit.rlmQuery("only auth", 0, { detached: false, paths: ["src/auth/"] }));
   const narrowed = seen[0]?.context;
   log(
     "#4: paths= narrows the inherited context",
@@ -145,7 +172,7 @@ async function testContextInheritance(): Promise<boolean> {
 
   // A prefix that matches nothing must hand over everything AND say so — never blind the child.
   seen.length = 0;
-  await inherit.rlmQuery("typo", 0, { detached: false, paths: ["src/nope/"] });
+  await awaitText(inherit, await inherit.rlmQuery("typo", 0, { detached: false, paths: ["src/nope/"] }));
   log("#4: unmatched paths fall back to the full context", seen[0]?.context === files);
   log(
     "#4: unmatched paths are reported in the child's prompt",
@@ -154,7 +181,7 @@ async function testContextInheritance(): Promise<boolean> {
 
   // Batched children share one prefix set.
   seen.length = 0;
-  await inherit.rlmQueryBatched(["a", "b"], 0, { detached: false, paths: ["lib/x-9f3a/"] });
+  await awaitList(inherit, await inherit.rlmBatch(["a", "b"], 0, { detached: false, paths: ["lib/x-9f3a/"] }));
   log(
     "#4: batched children each get the narrowed slice",
     seen.length === 2 && seen.every((s) => Array.isArray(s.context) && s.context.length === 1),
@@ -253,8 +280,8 @@ async function testChildCostPropagation(): Promise<boolean> {
   });
 
   // Run two sequential rlm_query children; both should debit.
-  await handlers.rlmQuery("alpha", 0, ATTACHED);
-  await handlers.rlmQuery("beta", 0, ATTACHED);
+  await awaitText(handlers, await handlers.rlmQuery("alpha", 0, ATTACHED));
+  await awaitText(handlers, await handlers.rlmQuery("beta", 0, ATTACHED));
 
   log(
     "R1b: child cost debited from parent after each rlm_query",
@@ -288,20 +315,20 @@ async function testPreSpawnGuard(): Promise<boolean> {
   // Timeout exhausted — should NOT spawn.
   spawnCount = 0;
   const hT = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ timeoutMs: 0 }) });
-  const rT = await hT.rlmQuery("x", 0, ATTACHED);
+  const rT = await awaitText(hT, await hT.rlmQuery("x", 0, ATTACHED));
   log("F-spawn: timeout=0 refuses child spawn", rT === "Error: timeout exhausted", rT);
   log("F-spawn: no run() called when timeout exhausted", spawnCount === 0, `spawned ${spawnCount}`);
 
   // Timeout available — SHOULD spawn normally.
   spawnCount = 0;
   const hOk = rlmOnlyHandlers({ run, degrade, maxDepth: 3, remaining: () => ({ timeoutMs: 60_000 }) });
-  const rOk = await hOk.rlmQuery("x", 0, ATTACHED);
+  const rOk = await awaitText(hOk, await hOk.rlmQuery("x", 0, ATTACHED));
   log("F-spawn: timeout>0 spawns child normally", rOk === "ok" && spawnCount === 1, `${rOk} spawned=${spawnCount}`);
 
   // No remaining callback — SHOULD spawn normally (no timeout cap).
   spawnCount = 0;
   const hNone = rlmOnlyHandlers({ run, degrade, maxDepth: 3 });
-  const rNone = await hNone.rlmQuery("x", 0, ATTACHED);
+  const rNone = await awaitText(hNone, await hNone.rlmQuery("x", 0, ATTACHED));
   log("F-spawn: no timeout cap spawns child normally", rNone === "ok" && spawnCount === 1, `${rNone} spawned=${spawnCount}`);
 
   return pass;
@@ -344,7 +371,10 @@ async function main() {
       getLlmModel: () => fallbackModel,
       getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 0 }),
     });
-    const guardedOut = await guardedLlm.llmQuery("must not call provider", 0, ATTACHED);
+    const guardedOut = await awaitText(
+      guardedLlm,
+      await guardedLlm.llmQuery("must not call provider", 0, ATTACHED),
+    );
     const guardedOk = guardedOut === "Error: timeout exhausted";
     console.log(`${guardedOk ? "✓" : "✗"} F4: llm_query refuses exhausted timeout before completion`);
     if (!guardedOk) process.exit(1);

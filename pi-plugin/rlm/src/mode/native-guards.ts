@@ -43,7 +43,7 @@ export function isFileReadingCommand(command: string): boolean {
 export const BASH_BLOCK_REASON =
   "RLM mode: reading files via bash is blocked — that dumps file content into the root model's " +
   "context. All files are pre-loaded in the REPL `context` variable: use repl({code}) with Python " +
-  "string/regex search, and delegate bulk analysis to llm_query / llm_query_batched / " +
+  "string/regex search, and delegate bulk analysis to llm_query / llm_batch / " +
   "llm_query_chunked. bash is for RUNNING things (tests, builds, git).";
 
 /** Max chars of tool output forwarded to the root model (≈1K tokens). */
@@ -51,12 +51,12 @@ export const TOOL_RESULT_CAP = 4_000;
 
 const CAP_NOTE =
   `\n[RLM: tool output capped at ${TOOL_RESULT_CAP.toLocaleString()} chars to protect the root ` +
-  "model's context — route bulk text through repl() + llm_query_chunked / llm_query_batched.]";
+  "model's context — route bulk text through repl() + llm_query_chunked / llm_batch.]";
 
 const REPL_CAP_NOTE =
   `\n[RLM: repl() stdout capped at ${TOOL_RESULT_CAP.toLocaleString()} chars — printing bulk text ` +
   "is useless. Keep results in REPL variables and delegate semantic reading to llm_query / " +
-  "llm_query_batched / llm_query_chunked.]";
+  "llm_batch / llm_query_chunked.]";
 
 /** Shared truncation core. Returns undefined when under the cap (leave the text untouched). */
 function capText(text: string, note: string): string | undefined {
@@ -86,7 +86,7 @@ export function replDelegationNudge(stdoutChars: number, delegated: boolean): st
   if (delegated || stdoutChars <= NUDGE_STDOUT_CHARS) return undefined;
   return (
     `\n[RLM: this repl() printed ${stdoutChars.toLocaleString()} chars with 0 sub-LLM calls — ` +
-    "if you were READING, delegate via llm_query / llm_query_batched / llm_query_chunked. " +
+    "if you were READING, delegate via llm_query / llm_batch / llm_query_chunked. " +
     "Authoring an edit body yourself is correct and needs no delegation.]"
   );
 }

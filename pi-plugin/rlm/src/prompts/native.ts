@@ -28,11 +28,11 @@ function nativeReplGlossary(): string {
     "- `map_files(files, prompt) -> {path: answer}` — ask `prompt` of many files; batches and splits oversized files for you. **The default way to read many files.**",
     "- `llm_map_reduce(items, map_prompt, reduce_prompt) -> str` — map in one batch, then reduce with one call.",
     "- `llm_query(prompt) -> str` — one-shot sub-LLM (configured RLM LLM). Use for extraction, summarization, Q&A over a chunk.",
-    "- `llm_query_batched(prompts) -> list[str]` — concurrent sub-LLM calls; output order matches input order.",
+    "- `llm_batch(prompts) -> list[str]` — concurrent sub-LLM calls; output order matches input order.",
     CHUNKED_GLOSSARY_LINE_NATIVE,
     "- `rlm_query(prompt, paths=None) -> str` — recursive RLM with its own REPL for complex sub-tasks needing iterative reasoning. Prefer llm_query — rlm_query is slower and costlier. The child inherits your `context` (loaded files + ctx/ sources) and takes your prompt as its question, so describe the task; never paste file text. `paths=['src/auth/']` narrows its context by prefix.",
-    "- `rlm_query_batched(prompts, paths=None) -> list[str]` — concurrent recursive RLM calls.",
-    "- `spawn(fn, *args) -> Task` / `rlm_await(t)` / `rlm_await_all(ts)` — start `llm_query`, `llm_query_batched`, `llm_query_chunked`, `map_files`, `rlm_query` or `rlm_query_batched` without waiting (NOT `llm_map_reduce`); collect later, order preserved. Tasks outlive the repl() call, so spawn slow work early and await when you need it.",
+    "- `rlm_batch(prompts, paths=None) -> list[str]` — concurrent recursive RLM calls.",
+    "- `spawn(fn, *args) -> Task` / ``await_task`` / `await_task(ts)` — start `llm_query`, `llm_batch`, `llm_query_chunked`, `map_files`, `rlm_query` or `rlm_batch` without waiting (NOT `llm_map_reduce`); collect later, order preserved. Tasks outlive the repl() call, so spawn slow work early and await when you need it.",
     "",
     "",
     "- `answers` / `plan` — dicts persisted across every repl() call. Your memo.",
@@ -58,7 +58,7 @@ function nativeReplGlossary(): string {
     "| `edit` / `write` | Change or create a file. Compose oldText/newText yourself; exact match required |",
     "| `search` / `grep_context` / `outline` (in repl) | Locate the relevant slice — free, do this first |",
     "| `zebra-mcp` | Semantic/embedding search when lexical `search` misses the concept |",
-    "| `map_files` / `llm_query_batched` (in repl) | Read/extract/classify that slice |",
+    "| `map_files` / `llm_batch` (in repl) | Read/extract/classify that slice |",
     "| `rlm_query` (in repl) | Sub-task needing its own iterative reasoning and REPL |",
     "",
     "### Task-Specific Patterns",
@@ -80,17 +80,16 @@ export function buildNativeSystemPrompt(): string {
     "║  NATIVE RLM MODE — YOU ARE AN ORCHESTRATOR, NOT A READER      ║",
     "╚══════════════════════════════════════════════════════════════════╝",
     "",
-    "ENFORCED BY THE RUNTIME (not advisory):",
-    "- `read`/`grep` are blocked; bash readers (cat/sed/head/tail/awk/rg) are blocked; bash output is hard-capped at 4K chars.",
-    "- repl() stdout returned to you is hard-capped at 4K chars — printing file bodies is USELESS; the text will not reach you.",
+    "RUNTIME GUARDS:",
+    "- Large tool/repl outputs are hard-capped (~4K chars) to protect the root window.",
     "",
-    "LOCATE-THEN-DELEGATE: `search(query)` / `grep_context(pattern)` / `outline(path)` cost nothing",
+    "LOCATE-THEN-DELEGATE: in repl, `search(query)` / `grep_context(pattern)` / `outline(path)` cost nothing",
     "— run them FIRST to find the relevant slice. Then, if a step needs MEANING from more than ~4K",
-    "chars, that reading MUST be a map_files / llm_query / llm_query_batched / llm_query_chunked",
+    "chars, prefer map_files / llm_query / llm_batch / llm_query_chunked",
     "call (rlm_query for iterative sub-tasks). Deterministic Python over `context` is free and",
-    "preferred for lookups. Semantic reading is always delegated.",
+    "preferred for lookups.",
     "",
-    "Loaded file content lives in the REPL `context` variable (cwd seeds on first call). Use ONLY `repl({code})`.",
+    "Loaded file content also lives in the REPL `context` variable (cwd seeds on first call).",
     "If sub-LLM credits are exhausted → report the error to the user and stop.",
     "",
     "AUTHORING RULE: sub-LLMs (`llm_query` family) READ — they extract, locate, and summarize.",
@@ -107,7 +106,7 @@ export function buildNativeSystemPrompt(): string {
  *  without bloating the root model's system prompt. Exceeded → phase-guards.ts fails.
  *  Raised from 6K when the retrieval glossary and the condensed decomposition doctrine
  *  landed; both buy far more than they cost (paper Table 2, Fig. 4a), then again for
- *  spawn/rlm_await: the async fan-out API is part of the model-visible contract, and
+ *  spawn/await_task: the async fan-out API is part of the model-visible contract, and
  *  ~50 tokens is worth the model actually using it. */
 export const NATIVE_PROMPT_BUDGET = 7_700;
 
@@ -116,12 +115,11 @@ export const NATIVE_PROMPT_STATIC = buildNativeSystemPrompt();
 
 /** Per-turn last-position reminder for native mode — appended to every context build. */
 export const NATIVE_TURN_REMINDER = [
-  "[RLM orchestrator contract — enforced by the runtime, not optional:",
-  "repl() stdout to you is hard-capped at 4K chars; read/grep and bash readers are blocked.",
-  "LOCATE FIRST with search() / grep_context() / outline() — they cost nothing. Any SEMANTIC",
-  "reading MUST then go through map_files / llm_query / llm_query_batched / llm_query_chunked",
-  "(rlm_query for iterative sub-tasks). Memoize what you reuse in `answers`; a value not in",
-  "`answers` does not exist. AUTHORING IS NOT READING: you write every edit body yourself and",
-  "apply it with the native `edit` / `write` tools — never delegate code you will ship.",
+  "[RLM orchestrator contract:",
+  "Large outputs are hard-capped (~4K). Prefer repl search for bulk multi-file work.",
+  "LOCATE FIRST with search() / grep_context() / outline() when using repl — they cost nothing.",
+  "Semantic bulk reading: map_files / llm_query / llm_batch / llm_query_chunked",
+  "(rlm_query for iterative sub-tasks). Memoize what you reuse in `answers`.",
+  "AUTHORING: write edit bodies yourself with native `edit` / `write`.",
   "Keep your own output to decisions, authored edits, and aggregation.]",
 ].join("\n");

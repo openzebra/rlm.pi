@@ -1,5 +1,5 @@
 /**
- * Phase-async verification — spawn() / rlm_await / rlm_await_all, the concurrency gates,
+ * Phase-async verification — spawn() / await_task / await_task, the concurrency gates,
  * the background-task registry, and the watchdog heartbeat.
  *
  * Drives PythonSandbox directly with fake handlers (no pi, no real LLM).
@@ -49,44 +49,44 @@ async function testOverlapAndOrder(): Promise<void> {
     const started = Date.now();
     const res = await sb.exec(`
 ts = [spawn(llm_query, str(i)) for i in range(5)]
-print(rlm_await_all(ts))
+print(await_task(ts))
 `);
     const elapsed = Date.now() - started;
     // Serial would be 240+220+200+180+160 = 1000ms; concurrent is bounded by the slowest.
     check("spawned sub-calls overlap", elapsed < 700, `${elapsed}ms (serial ≈ 1000ms)`);
     check("all 5 in flight at once", peak === 5, `peak=${peak}`);
     check(
-      "rlm_await_all preserves input order despite reversed completion",
+      "await_task preserves input order despite reversed completion",
       res.stdout.trim() === "['r0', 'r1', 'r2', 'r3', 'r4']",
       res.stdout.trim(),
     );
 
     const idem = await sb.exec(`
 t = spawn(llm_query, "9")
-a = rlm_await(t)
-b = rlm_await(t)
+a = await_task(t)
+b = await_task(t)
 print(a, b, t.done)
 `);
-    check("rlm_await is idempotent and memoized", idem.stdout.trim() === "r9 r9 True", idem.stdout.trim());
+    check("await_task is idempotent and memoized", idem.stdout.trim() === "r9 r9 True", idem.stdout.trim());
 
     const misuse = await sb.exec(`
-print(rlm_await(spawn(print, "x")))
-print(rlm_await("not a task"))
+print(await_task(spawn(print, "x")))
+print(await_task("not a task"))
 `);
     check("spawn() of a non-spawnable fn returns an Error string",
       misuse.stdout.includes("Error: spawn() takes"), misuse.stdout.split("\n")[0]?.slice(0, 60));
-    check("rlm_await of a non-Task returns an Error string",
+    check("await_task of a non-Task returns an Error string",
       misuse.stdout.includes("expects a Task"), "");
     check("misuse never raises", !misuse.raised, misuse.stderr.slice(0, 120));
 
     // llm_map_reduce cannot be a single Task (its reduce depends on its own map results) — the
     // error must SAY so, since the glossary lists it right next to the spawnable helpers.
-    const mapReduce = await sb.exec(`print(rlm_await(spawn(llm_map_reduce, ["a"], "map", "reduce")))`);
+    const mapReduce = await sb.exec(`print(await_task(spawn(llm_map_reduce, ["a"], "map", "reduce")))`);
     check("spawn(llm_map_reduce) explains why it is excluded",
       mapReduce.stdout.includes("not llm_map_reduce"), mapReduce.stdout.trim().slice(0, 80));
 
     // Empty prompts: a sub-LLM asked nothing confabulates, and the confabulation looks like data.
-    const blank = await sb.exec(`print(llm_query("   "))\nprint(llm_query_batched(["", " "])[0])`);
+    const blank = await sb.exec(`print(llm_query("   "))\nprint(llm_batch(["", " "])[0])`);
     check("llm_query('') is refused instead of answered",
       blank.stdout.includes("empty prompt"), blank.stdout.trim().slice(0, 80));
     check("an all-blank batch is refused per prompt",
@@ -96,7 +96,7 @@ print(rlm_await("not a task"))
     await sb.exec(`leftover = spawn(llm_query, "3")`);
     const afterSpawn = await sb.exec(`print("still alive")`);
     check("an unawaited Task does not block the next exec", afterSpawn.stdout.includes("still alive"), afterSpawn.stderr.slice(0, 120));
-    await sb.exec(`rlm_await(leftover)`);
+    await sb.exec(`await_task(leftover)`);
   } finally {
     await sb.dispose();
   }
@@ -127,7 +127,7 @@ async function testCrossTurn(): Promise<void> {
     // answered with "unknown type". This is what makes cross-turn awaits possible.
     release();
     await sleep(150);
-    const awaitTurn = await sb.exec(`print(rlm_await(t))`);
+    const awaitTurn = await sb.exec(`print(await_task(t))`);
     check("CROSS-TURN: a reply parked between turns is recovered",
       awaitTurn.stdout.trim() === "late-answer", awaitTurn.stdout.trim());
   } finally {
@@ -145,7 +145,7 @@ async function testChunkedConcurrency(): Promise<void> {
     depth: 1,
     maxPromptChars: 10_000,
     handlers: {
-      llmQueryBatched: async (prompts) => {
+      llmBatch: async (prompts) => {
         active += 1;
         peak = Math.max(peak, active);
         sizes.push(prompts.length);
@@ -273,10 +273,10 @@ async function testSandboxDeathWithDetached(): Promise<void> {
   await sb.exec(`t = spawn(rlm_query, "x")`);
   await sb.dispose();
   // Documented behaviour: the reply can never be delivered, and the disposed sandbox
-  // rejects rather than hanging a later rlm_await.
+  // rejects rather than hanging a later await_task.
   let rejected = false;
   try {
-    await sb.exec(`print(rlm_await(t))`);
+    await sb.exec(`print(await_task(t))`);
   } catch {
     rejected = true;
   }
@@ -325,7 +325,7 @@ async function testWatchdogHeartbeat(): Promise<void> {
 function testPrompts(): void {
   const headless = buildRlmSystemPrompt({ contextType: "list", contextChars: 100 }, { recursion: true });
   check("headless prompt documents spawn", headless.includes("spawn(fn, *args)"), "");
-  check("headless prompt documents rlm_await_all", headless.includes("rlm_await_all"), "");
+  check("headless prompt documents await_task", headless.includes("await_task"), "");
   check("native prompt documents spawn", NATIVE_PROMPT_STATIC.includes("spawn(fn, *args)"), "");
   check("native prompt stays within its budget",
     NATIVE_PROMPT_STATIC.length < NATIVE_PROMPT_BUDGET,

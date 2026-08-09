@@ -54,7 +54,7 @@ async function main(): Promise<void> {
     maxPromptChars: 4_000,
     handlers: {
       llmQuery: async (prompt) => { singleCalls++; return `ONE:${prompt.length}`; },
-      llmQueryBatched: async (prompts) => {
+      llmBatch: async (prompts) => {
         batchCalls++;
         batchSizes.push(prompts.length);
         return prompts.map((p) => `ANS:${p.length}`);
@@ -169,8 +169,8 @@ async function main(): Promise<void> {
       JSON.stringify(parsePrinted(r.stdout)) === '["Task",false]', r.stdout.trim());
     check("spawned map_files posts its batch immediately", batchCalls === 1, `calls=${batchCalls}`);
 
-    r = await sandbox.exec('print(json.dumps(sorted(rlm_await(t).keys())))');
-    check("rlm_await(map_files task) yields the same {path: answer} dict",
+    r = await sandbox.exec('print(json.dumps(sorted(await_task(t).keys())))');
+    check("await_task(map_files task) yields the same {path: answer} dict",
       JSON.stringify(parsePrinted(r.stdout)) === '["docs/README.md","src/config/settings.ts"]', r.stdout.trim());
 
     // ── llm_map_reduce: map batch then a single reduce ───────────────────────────────────

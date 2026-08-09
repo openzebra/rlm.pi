@@ -16,7 +16,7 @@ async function main() {
     depth: 1,
     maxPromptChars: 10_000,
     handlers: {
-      llmQueryBatched: async (prompts) => {
+      llmBatch: async (prompts) => {
         received.push([...prompts]);
         return prompts.map((_, i) => `r${i}`);
       },
@@ -59,7 +59,7 @@ async function main() {
   const csb = await PythonSandbox.spawn({
     depth: 1,
     maxPromptChars: 1500,
-    handlers: { llmQueryBatched: async (p) => p.map((_, i) => `c${i}`) },
+    handlers: { llmBatch: async (p) => p.map((_, i) => `c${i}`) },
   });
   const ceiling = await csb.exec('print(llm_query_chunked("x" * 720_000, "Q"))');
   check(

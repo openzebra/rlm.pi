@@ -13,7 +13,7 @@ This is a **Recursive Language Model (RLM) plugin** for the Pi coding agent. The
 ```
 pi-plugin/rlm/src/
 ├── core/          Headless RLM loop, limits, compaction, history
-├── bridge/        Sub-LLM/rlm/interactive handlers (subcall-handlers.ts is the single impl)
+├── bridge/        Sub-LLM/rlm/interactive handlers (bridge/handlers/ is the single impl)
 ├── sandbox/       Python subprocess (py/), JSONL protocol, interrupt dispatch, sandbox manager
 ├── tool/          repl() and rlm() Pi tool registrations + event emitter
 ├── config/        rlm.json persistence, defaults, model resolution
@@ -48,19 +48,19 @@ do not re-add a wrapper for something Pi already owns.
 ## DRY Rules — DO NOT Duplicate
 
 Rules 1–5 below were a standing duplication between the headless engine and the repl() tool.
-They are now **resolved**: `bridge/subcall-handlers.ts` (`createSubcallHandlers`) is the single
-implementation of `llm_query` / `llm_query_batched` / `rlm_query` / `rlm_query_batched`, and
+They are now **resolved**: `bridge/handlers/` (`createSubcallHandlers`) is the single
+implementation of `llm_query` / `llm_batch` / `rlm_query` / `rlm_batch`, and
 `bridge/llm-query.ts` + `bridge/rlm-query.ts` have been deleted. Keep it that way:
 
 1. **LLM completion logic** — `complete1` exists once, inside `createSubcallHandlers`. Never inline another one; if you need LLM handlers, call `createSubcallHandlers`.
 
 2. **RLM recursion logic** — `childRun` (depth cap → resource guard → spawn engine → debit parent) exists once, in the same file. Callers supply `runChild` and `degrade`, not their own copy of the sequence.
 
-3. **Display model resolution** — one private `displayModel()` in `subcall-handlers.ts`, built on `modelRef` + `resolveModelId` from `config/settings.ts`.
+3. **Display model resolution** — one private `displayModel()` in `bridge/handlers/`, built on `modelRef` + `resolveModelId` from `config/settings.ts`.
 
-4. **Batch error summary** — `summarizeBatch()`, exported from `subcall-handlers.ts`.
+4. **Batch error summary** — `summarizeBatch()`, exported from `bridge/handlers/`.
 
-5. **The subcall emit pattern** (create → execute → update status/cost/tokens) — the `emitting()` helper in `subcall-handlers.ts` for leaf sub-calls; `childRun` emits its own node for recursive ones (never wrap it, or the node is reported twice). `interactive.ts` follows the same shape by hand. Adding a new subcall handler? Reuse these — don't invent a new pattern.
+5. **The subcall emit pattern** (create → execute → update status/cost/tokens) — the `emitting()` helper in `bridge/handlers/` for leaf sub-calls; `childRun` emits its own node for recursive ones (never wrap it, or the node is reported twice). `interactive.ts` follows the same shape by hand. Adding a new subcall handler? Reuse these — don't invent a new pattern.
 
 6. **Child context inheritance** — `getChildContext` on `SubcallHandlerDeps` is the ONE seam by
    which a child RLM receives its parent's world (repo pack + loaded libraries). `childRun` is the
@@ -97,7 +97,7 @@ field to `SubcallHandlerDeps` instead.
 | Config validation | `settings.ts` `validateNumber(v, min)`, `validateBoolean(v)`, `validateString(v)` — all accept `unknown` |
 | Pre-allocated arrays | `new Array<R>(items.length)` before loops, never `.push()` in a loop |
 | JSONL protocol | `sandbox/protocol.ts` — newline-delimited JSON, parent→worker requests, worker→parent interrupts |
-| Async sub-calls | `py/worker.py` posts a request and parks the reply by rid (`_post` / `park_reply` / `_drain_until`); `spawn()` returns a `Task`, `rlm_await` / `rlm_await_all` collect it, possibly in a later exec |
+| Async sub-calls | `py/worker.py` posts a request and parks the reply by rid (`_post` / `park_reply` / `_drain_until`); `spawn()` returns a `Task`, `await_task` / `await_task` collect it, possibly in a later exec |
 | Worker-model ranking | `mode/worker-model.ts` `compareWorker` — free first, then widest context window, then provider/id for determinism |
 
 ## Adding a New Bridge Handler

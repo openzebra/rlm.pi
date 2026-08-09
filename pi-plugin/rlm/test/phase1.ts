@@ -35,7 +35,7 @@ async function main() {
   );
   check("prompt describes context as JSON array", sp.includes("list[dict]") && sp.includes("path"));
   check("prompt shows locate-then-delegate example", sp.includes("search(") && sp.includes("map_files("));
-  check("prompt includes batched delegation idiom", sp.includes("llm_query_batched"));
+  check("prompt includes batched delegation idiom", sp.includes("llm_batch"));
   check("prompt carries the decomposition doctrine", sp.includes("Decomposition doctrine") && sp.includes("Red flags"));
   check("prompt documents the deterministic retrieval primitives",
     sp.includes("grep_context(") && sp.includes("outline(") && sp.includes("BM25"));
@@ -72,7 +72,7 @@ async function main() {
     execTimeoutS: 2,
     handlers: {
       llmQuery: async (prompt) => `STUB(${prompt.slice(0, 20)})`,
-      llmQueryBatched: async (prompts) => prompts.map((p, i) => `STUB${i}(${p.slice(0, 10)})`),
+      llmBatch: async (prompts) => prompts.map((p, i) => `STUB${i}(${p.slice(0, 10)})`),
     },
   });
 
@@ -101,8 +101,8 @@ async function main() {
   r = await sandbox.exec("print(llm_query('summarize ' + context[0]))");
   check("llm_query reaches stub handler", r.stdout.includes("STUB(summarize doc one"), r.stdout.trim());
 
-  r = await sandbox.exec("print(llm_query_batched([c for c in context]))");
-  check("llm_query_batched returns ordered list", r.stdout.includes("STUB0") && r.stdout.includes("STUB2"), r.stdout.trim());
+  r = await sandbox.exec("print(llm_batch([c for c in context]))");
+  check("llm_batch returns ordered list", r.stdout.includes("STUB0") && r.stdout.includes("STUB2"), r.stdout.trim());
 
   // key isolation: the sandbox must not see provider keys (stripped at spawn)
   r = await sandbox.exec(
@@ -190,13 +190,13 @@ async function main() {
     depth: 1,
     execTimeoutS: 1,
     handlers: {
-      llmQueryBatched: async (prompts) => {
+      llmBatch: async (prompts) => {
         await sleep(2000);
         return prompts.map((_, i) => `SLOW${i}`);
       },
     },
   });
-  r = await slow.exec("print(llm_query_batched(['a', 'b']))");
+  r = await slow.exec("print(llm_batch(['a', 'b']))");
   check(
     "H3: slow batched call does not trip exec timeout",
     r.stdout.includes("SLOW0") && r.stdout.includes("SLOW1") && !r.stderr.includes("timeout"),
