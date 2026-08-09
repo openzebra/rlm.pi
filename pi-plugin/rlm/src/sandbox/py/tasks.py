@@ -41,14 +41,27 @@ def _reduce_batch(n: int):
     return reduce
 
 
-def _reduce_chunked(sizes: list[int]):
-    """Concatenate several llm_query_batched replies back into one flat chunk list."""
+def _reduce_chunked(sizes: list[int], drop_empty: bool = True):
+    """Concatenate several llm_query_batched replies back into one flat chunk list.
+
+    drop_empty=True (llm_query_chunked): filter "" replies so results never degrade
+    to blank entries; the flattened list may then be shorter than the chunk count,
+    so callers must consume answers in order and never index-match a chunk to a slot.
+    drop_empty=False (map_files): keep "" placeholders because _reduce_map_files
+    regroups by position — dropping an empty reply there would shift every later
+    slice and merge file contents into the wrong paths.
+    """
     per = [_reduce_batch(n) for n in sizes]
 
     def reduce(replies: list[dict[str, Any]]) -> list[str]:
+        if len(replies) != len(per):
+            return [f"Error: chunk reply count mismatch ({len(replies)} != {len(per)})"] * sum(sizes)
         out: list[str] = []
         for red, rep in zip(per, replies):
-            out.extend(red([rep]))
+            if drop_empty:
+                out.extend(x for x in red([rep]) if x)
+            else:
+                out.extend(red([rep]))
         return out
     return reduce
 
@@ -59,7 +72,7 @@ def _reduce_map_files(sizes: list[int], spans: list[tuple[str, int]]):
     A file larger than the per-prompt budget contributed several requests; its answers rejoin
     in order, which is what makes map_files a {path: answer} dict rather than a flat list.
     """
-    flatten = _reduce_chunked(sizes)
+    flatten = _reduce_chunked(sizes, drop_empty=False)
 
     def reduce(replies: list[dict[str, Any]]) -> dict[str, str]:
         responses = flatten(replies)
