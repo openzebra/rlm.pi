@@ -212,8 +212,9 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     promptSnippet:
       "repl: free search/outline; fire rlm_batch|map_files|llm_batch as Task (BG); await_task for results.",
     promptGuidelines: [
-      "Multi-area analysis: rlm_batch([...]) or several Tasks in one repl, free search, then await_task — not serial native read.",
+      "Multi-area analysis: rlm_batch([...]) or map_files(paths, q); free search; await_task — not serial native read.",
       "Always-spawn tools return Task; only await_task has content. Fire-all independent work before await.",
+      "llm_query/llm_batch have no disk — never 'Read path/to/file.ts'; use map_files or rlm_* (see context).",
     ],
     parameters: ReplToolParams,
 

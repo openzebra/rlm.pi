@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<contract>` / `<routing>` / few-shots: multi-area work prefers `rlm_batch` /
   `rlm_query` as always-spawn Tasks (fire → free locate → `await_task`), not serial
   `repl` + native `read`. `repl` tool description and per-turn reminder match.
+  Explicit ban: path-only `llm_query("Read src/foo.ts…")` (no disk); use `map_files` /
+  `rlm_*` which attach `context`.
 - **Removed hard-blocks on native `read` / `grep` and bash readers.** Soft stdout caps remain
   (`tool_result` for bash/find/ls/read/grep). Prompts no longer mention allow/deny of native
   readers — prefer `repl` for bulk, tools stay available.

@@ -171,7 +171,8 @@ export const ENV_TIPS = [
   "",
   "### Red flags — you are off track",
   "- Printing file bodies / native bulk read → stop; use map_files or rlm_*.",
-  "- Multi-module task with zero `rlm_batch`/`rlm_query` → you are under-delegating.",
+  "- `llm_query(\"Read src/foo.ts…\")` with only a path — sub-LLM has **no disk**; use map_files/rlm_*.",
+  "- Multi-module task with zero `rlm_batch`/`rlm_query`/`map_files` → under-delegating.",
   "- Await after every independent spawn → serializes wall time; fire-all-then-await.",
   "- Treating Task as the answer without `await_task`.",
   "- Regex used to *infer meaning* → sub-LLM job. Regex is for exact needles only.",
@@ -185,8 +186,9 @@ export const ENV_TIPS_CONDENSED = [
   "Multi-module / multi-step areas: **`rlm_batch` (or rlm_query)** — not serial native read.",
   "One-shot extracts: `map_files` / `llm_batch`. Always Task → await_task; fire-all then await.",
   "`answers`/`plan` persist: **if it isn't in `answers`, it doesn't exist.**",
-  "Red flags: bulk file dumps; zero rlm_*/map_files on multi-area tasks; await after each spawn;",
-  "Task treated as answer. AUTHORING: you write every edit body yourself.",
+  "Red flags: bulk file dumps; llm_query with path-only (no content — no disk!); zero rlm_*/map_files",
+  "on multi-area tasks; await after each spawn; Task treated as answer.",
+  "AUTHORING: you write every edit body yourself.",
 ].join("\n");
 
 export function howToRunCode(): string {
@@ -233,10 +235,10 @@ export function replGlossary(
   }
   lines.push(...RETRIEVAL_GLOSSARY_LINES);
   lines.push(
-    "- `llm_query(prompt: str) -> Task`: spawn one sub-LLM (await_task for str). Extraction,",
-    "  summarization, Q&A over a chunk. No per-call model override.",
-    "- `llm_batch(prompts: list[str]) -> Task`: spawn many sub-LLMs in parallel",
-    "  (await_task → ordered list[str]). ALWAYS returns Task — never a list directly.",
+    "- `llm_query(prompt: str) -> Task`: spawn one sub-LLM (await_task for str). The prompt must",
+    "  **contain the text** to analyze — this call has no filesystem and no `context`.",
+    "- `llm_batch(prompts: list[str]) -> Task`: many parallel one-shots (same rule: embed text).",
+    "  await_task → ordered list[str]. NEVER pass bare file paths as if the worker can open them.",
     ...CHUNKED_GLOSSARY_LINES,
     ...SPAWN_GLOSSARY_LINES,
     ...DELEGATION_GLOSSARY_LINES,
