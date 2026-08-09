@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-10
+
 ### Changed
 
 - **Replaced `repomix` with a native walker + `@firecrawl/anydoc`.** Context packing no longer
@@ -15,12 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documents (PDF, DOCX, XLSX, PPTX, CSV, …) convert to Markdown via anydoc and cache under
   `$XDG_CACHE_HOME/pi-rlm/anydoc` (else `~/.cache/…`) keyed by pre-conversion `(size, mtimeMs)`.
   Requires **Node ≥ 20** (NAPI native addon).
-- **`load_library` → `add_context`.** Same control flow; namespaces move from `lib/<id>/` to
-  `ctx/<id>/`. No alias — the prompt is the only teacher of the name. Return metadata gains
-  `documents` (docs in payload, including cache hits) and `converted` (fresh conversions this
-  call), plus a capped `skipped` list.
-- **`context` starts empty.** The working directory seeds lazily on the first `repl()` call
-  (`autoSeedCwd: true`, un-prefixed paths so `search()` hits remain real paths for
+- **`load_library` → `add_context` (breaking).** Same control flow; namespaces move from
+  `lib/<id>/` to `ctx/<id>/`. No alias — the prompt is the only teacher of the name. Return
+  metadata gains `documents` (docs in payload, including cache hits) and `converted` (fresh
+  conversions this call), plus a capped `skipped` list.
+- **`context` starts empty (breaking).** The working directory seeds lazily on the first
+  `repl()` call (`autoSeedCwd: true`, un-prefixed paths so `search()` hits remain real paths for
   `edit`/`write`). Config renames `libraryLoader` → `contextLoader` (legacy key still read from
   `rlm.json`). The compact listing injects only when the payload identity changes, not every
   turn.
@@ -556,7 +558,8 @@ for the Pi coding agent.
   budget ceiling, max consecutive errors, per-REPL-block timeout, max concurrent sub-calls,
   trajectory compaction, and toggles for `ask_user_question` and `todo`.
 
-[Unreleased]: https://github.com/openzebra/rlm.pi/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/openzebra/rlm.pi/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/openzebra/rlm.pi/releases/tag/v0.3.0
 [0.2.2]: https://github.com/openzebra/rlm.pi/releases/tag/v0.2.2
 [0.2.1]: https://github.com/openzebra/rlm.pi/releases/tag/v0.2.1
 [0.2.0]: https://github.com/openzebra/rlm.pi/releases/tag/v0.2.0
