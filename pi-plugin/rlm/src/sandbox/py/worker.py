@@ -7,9 +7,9 @@ This is NOT a security sandbox: __import__ and open are available, so code can i
 Protocol (parent -> worker):  {"id","type":"exec"|"load_context"|"shutdown", ...}
 Protocol (worker -> parent):  {"id","ok",...result}            # response to a request
                               {"type":"llm_query"|"llm_query_batched"|"rlm_query"|
-                               "rlm_query_batched"|"load_library","rid",...}
+                               "rlm_query_batched"|"add_context","rid",...}
                                                                 # mid-exec helper request
-When sandbox code calls llm_query/rlm_query/load_library, the worker writes a
+When sandbox code calls llm_query/rlm_query/add_context, the worker writes a
 request line and BLOCKS reading stdin until the matching {"type":"llm_reply","rid",...} arrives.
 The parent services the request in-process (it holds API keys).
 
@@ -113,7 +113,7 @@ class Worker:
         builtins = _SAFE_BUILTINS.copy()
         builtins["open"] = open
         self.ns = {"__builtins__": builtins, "__name__": "__main__"}
-        self._context_payload: Any | None = None  # pristine restore for the single `context` var
+        self._context_payload: Any = []  # empty list — the only starting value that needs no bootstrap branch
         self._nudged: set[str] = set()
         self._index: _Bm25Index | None = None
         self._index_stamp: tuple[int, int] | None = None  # (id(context), len(context))
@@ -144,7 +144,7 @@ class Worker:
             ns["answers"] = {}
         if not isinstance(ns.get("plan"), dict):
             ns["plan"] = {}
-        ns["load_library"] = self._load_library
+        ns["add_context"] = self._add_context
         ns["SHOW_VARS"] = self._show_vars
         if not isinstance(ns.get("answer"), _AnswerDict):
             cur = ns.get("answer")
@@ -157,9 +157,8 @@ class Worker:
             ns["answer"] = ans
         # Single context variable (RLM paper: the context lives in the environment and
         # the model may transform it in place). Re-inject only if the model deleted the
-        # name entirely; mutations and re-binds persist within the run.
-        if self._context_payload is not None:
-            ns.setdefault("context", self._context_payload)
+        # name entirely; mutations and re-binds persist within the run. Always a list.
+        ns.setdefault("context", self._context_payload)
         # Scrub any legacy context_N names so the model never sees multi-slot APIs.
         for k in list(ns.keys()):
             if k != "context" and _CONTEXT_NAME.match(k):
@@ -412,7 +411,7 @@ class Worker:
         """Build the BM25 index on first use; rebuild when `context` was replaced or resized.
 
         Identity+length is a cheap stamp that catches the two ways context actually changes:
-        load_library() extending the list, and the model re-binding the name. In-place edits
+        add_context() extending the list, and the model re-binding the name. In-place edits
         that preserve length are not detected — documented, and rare in practice.
         """
         ctx = self.ns.get("context")
@@ -556,23 +555,24 @@ class Worker:
     def _rlm_query(self, prompt: str, model: str | None = None, paths=None) -> str:
         return self._await_task(self._start_rlm_query(prompt, model, paths))
 
-    def _load_library(self, source: str) -> dict[str, Any] | str:
+    def _add_context(self, source: str) -> dict[str, Any] | str:
         """Pack an external dir/file/git-URL on the host and append it into `context`.
 
-        Paths are namespaced under lib/<source_id>/ (host). Content is always in the
+        Paths are namespaced under ctx/<source_id>/ (host). Content is always in the
         single `context` list — never a new context_N variable.
         Host-side idempotency may return already_loaded without a payload path.
+        Documents (PDF/DOCX/…) are converted to Markdown on the host.
         """
-        r = self._rpc("load_library", {"source": str(source)})
+        r = self._rpc("add_context", {"source": str(source)})
         if r.get("error"):
             return f"Error: {r['error']}"
         if r.get("already_loaded"):
-            source_id = r.get("source_id") if isinstance(r.get("source_id"), str) else "lib"
-            path_prefix = r.get("path_prefix") if isinstance(r.get("path_prefix"), str) else f"lib/{source_id}/"
+            source_id = r.get("source_id") if isinstance(r.get("source_id"), str) else "ctx"
+            path_prefix = r.get("path_prefix") if isinstance(r.get("path_prefix"), str) else f"ctx/{source_id}/"
             ctx = self.ns.get("context")
             ctx_len = len(ctx) if isinstance(ctx, list) else 0
             print(
-                f"[rlm] load_library: already loaded {source_id} "
+                f"[rlm] add_context: already loaded {source_id} "
                 f"(paths under {path_prefix}, context len={ctx_len})"
             )
             return {
@@ -583,10 +583,13 @@ class Worker:
                 "chars": r.get("chars"),
                 "context_len": ctx_len,
                 "already_loaded": True,
+                "documents": 0,
+                "converted": 0,
+                "skipped": [],
             }
         path = r.get("path")
         if not isinstance(path, str):
-            return "Error: malformed load_library reply (no path)"
+            return "Error: malformed add_context reply (no path)"
         try:
             with io.open(path, "r") as f:
                 payload = json.load(f) if r.get("json") else f.read()
@@ -595,57 +598,71 @@ class Worker:
                 os.remove(path)  # worker owns temp-file cleanup (host does NOT unlink)
             except OSError:
                 pass
-        return self._append_library(str(source), payload, r)
+        return self._append_context(str(source), payload, r)
 
-    def _append_library(self, source: str, payload: Any, meta: dict[str, Any]) -> dict[str, Any] | str:
-        """Append host-packed library files into `context` (idempotent by path prefix).
+    def _append_context(self, source: str, payload: Any, meta: dict[str, Any]) -> dict[str, Any] | str:
+        """Append host-packed files into `context` (idempotent by path prefix).
 
         The two refusals below are pre-flighted host-side by LIST_CONTEXT_REQUIRED /
-        NO_FILES_PRODUCED in src/bridge/library.ts, so the host never commits a
+        NO_FILES_PRODUCED in src/bridge/add-context.ts, so the host never commits a
         loaded-prefix for an append that fails here. Reaching either one means host and worker
         disagree about `context`; keep the wording identical to its twin.
         """
         ctx = self.ns.get("context")
         if not isinstance(ctx, list):
             kind = type(ctx).__name__ if ctx is not None else "None"
-            return f"Error: load_library requires list context (file bundle); got {kind}"
+            return f"Error: add_context requires list context (file bundle); got {kind}"
 
         source_id = meta.get("source_id")
         if not isinstance(source_id, str) or not source_id:
-            source_id = "lib"
+            source_id = "ctx"
         path_prefix = meta.get("path_prefix")
-        if not isinstance(path_prefix, str) or not path_prefix:
-            path_prefix = f"lib/{source_id}/"
+        if not isinstance(path_prefix, str):
+            path_prefix = f"ctx/{source_id}/"
+        # Empty path_prefix is valid (cwd seed) but add_context always sends a non-empty ctx/ prefix.
+        # Guard startsWith on empty prefix: "anything".startswith("") is always True.
+        check_prefix = path_prefix if path_prefix != "" else None
 
-        # Idempotent: already present if any path uses this library prefix.
-        for item in ctx:
-            if isinstance(item, dict) and str(item.get("path", "")).startswith(path_prefix):
-                print(
-                    f"[rlm] load_library: already loaded {source_id} "
-                    f"(paths under {path_prefix}, context len={len(ctx)})"
-                )
-                return {
-                    "source": source,
-                    "source_id": source_id,
-                    "path_prefix": path_prefix,
-                    "files": 0,
-                    "chars": meta.get("chars"),
-                    "context_len": len(ctx),
-                    "already_loaded": True,
-                }
+        # Idempotent: already present if any path uses this prefix.
+        if check_prefix is not None:
+            for item in ctx:
+                if isinstance(item, dict) and str(item.get("path", "")).startswith(check_prefix):
+                    print(
+                        f"[rlm] add_context: already loaded {source_id} "
+                        f"(paths under {path_prefix}, context len={len(ctx)})"
+                    )
+                    return {
+                        "source": source,
+                        "source_id": source_id,
+                        "path_prefix": path_prefix,
+                        "files": 0,
+                        "chars": meta.get("chars"),
+                        "context_len": len(ctx),
+                        "already_loaded": True,
+                        "documents": 0,
+                        "converted": 0,
+                        "skipped": [],
+                    }
 
-        files = self._library_file_entries(payload, path_prefix)
+        files = self._context_file_entries(payload, path_prefix)
         if not files:
-            return "Error: load_library produced no files"
+            return "Error: add_context produced no files"
 
         ctx.extend(files)
         # Keep restore payload in sync with the live list.
         self._context_payload = ctx
         self.ns["context"] = ctx
 
+        documents = meta.get("documents") if isinstance(meta.get("documents"), int) else 0
+        converted = meta.get("converted") if isinstance(meta.get("converted"), int) else 0
+        skipped = meta.get("skipped") if isinstance(meta.get("skipped"), list) else []
+        skip_n = len(skipped)
+        extra = ""
+        if documents or converted or skip_n:
+            extra = f"; documents={documents}, converted={converted}, skipped={skip_n}"
         print(
-            f"[rlm] load_library: +{len(files)} files into context "
-            f"(len={len(ctx)}); paths under {path_prefix}"
+            f"[rlm] add_context: +{len(files)} files into context "
+            f"(len={len(ctx)}); paths under {path_prefix}{extra}"
         )
         return {
             "source": source,
@@ -655,14 +672,17 @@ class Worker:
             "chars": meta.get("chars"),
             "context_len": len(ctx),
             "already_loaded": False,
+            "documents": documents,
+            "converted": converted,
+            "skipped": skipped,
         }
 
     @staticmethod
-    def _library_file_entries(payload: Any, path_prefix: str) -> list[dict[str, Any]]:
+    def _context_file_entries(payload: Any, path_prefix: str) -> list[dict[str, Any]]:
         """Normalize host payload to list[dict]. Host already namespaces; string is fallback."""
         if isinstance(payload, str):
             return [{
-                "path": f"{path_prefix}content",
+                "path": f"{path_prefix}content" if path_prefix else "content",
                 "content": payload,
                 "tokens": max(1, (len(payload) + 3) // 4),
             }]
@@ -684,7 +704,7 @@ class Worker:
         """Load the packed world into the single REPL variable `context`.
 
         `index` is accepted for protocol compatibility but ignored — there is only
-        one context slot. Libraries are merged on the host (or via load_library).
+        one context slot. Sources are merged on the host (or via add_context).
         """
         with open(path, "r") as f:
             payload = json.load(f) if is_json else f.read()

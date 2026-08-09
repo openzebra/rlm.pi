@@ -6,7 +6,7 @@
 
 import { PythonSandbox, type SubLlmHandlers } from "./sandbox.ts";
 import type { ReplResult } from "./protocol.ts";
-import { mergeLibraryIntoContext } from "../context/library-context.ts";
+import { mergeIntoContext } from "../context/merge.ts";
 
 /** Static configuration for sandbox creation — set once, reused across getOrCreate calls. */
 export interface SandboxManagerConfig {
@@ -28,23 +28,26 @@ export class SandboxManager {
   /** Serialized execution queue — concurrent repl() calls wait for predecessor. */
   private execQueue: Promise<void> = Promise.resolve();
   private pendingExecCount = 0;
-  /** Context payload to load on first sandbox creation. Set externally before getOrCreate. */
-  contextPayload: unknown = null;
+  /**
+   * Context payload to load on first sandbox creation. Starts as an empty list — context is
+   * empty by default; the first repl() seeds the cwd when autoSeedCwd is on.
+   */
+  contextPayload: unknown = [];
   /** True once contextPayload has been loaded into the sandbox (prevents reload + race fix). */
   private contextLoaded = false;
 
   constructor(private readonly config: SandboxManagerConfig) {}
 
   /**
-   * Append a library payload to the context this manager replays on death-recreate.
+   * Append a source payload to the context this manager replays on death-recreate.
    *
-   * The live worker has ALREADY appended it in-process (worker.py `_append_library`), so this
+   * The live worker has ALREADY appended it in-process (worker.py `_append_context`), so this
    * deliberately does not reload — it only keeps the host's replay copy truthful. Without it a
-   * recreate silently rolls the sandbox back to a repo-only context, and any child inheriting
-   * this payload would never see the library. Dedups by `lib/<id>/` prefix.
+   * recreate silently rolls the sandbox back to a pre-append context, and any child inheriting
+   * this payload would never see the source. Dedups by `ctx/<id>/` prefix.
    */
-  appendLibrary(payload: unknown): void {
-    this.contextPayload = mergeLibraryIntoContext(this.contextPayload, payload);
+  appendContext(payload: unknown): void {
+    this.contextPayload = mergeIntoContext(this.contextPayload, payload);
   }
 
   /**
@@ -52,15 +55,14 @@ export class SandboxManager {
    * given handlers. Subsequent calls return the existing sandbox immediately.
    * Deduplicates concurrent calls via initPromise.
    *
-   * If contextPayload is set, it is loaded before the sandbox is returned.
+   * If contextPayload is defined, it is loaded before the sandbox is returned.
    */
   async getOrCreate(handlers: Partial<SubLlmHandlers>): Promise<PythonSandbox> {
     if (this.disposed) throw new Error("SandboxManager disposed");
     if (this.sandbox) {
-      // RACE FIX: contextPayload may arrive after the sandbox was created (the
-      // "context" event's async packRepository resolves after the first repl() call).
-      // Load it into the live sandbox now if still pending.
-      if (this.contextPayload !== null && !this.contextLoaded) {
+      // RACE FIX: contextPayload may arrive after the sandbox was created (lazy seed
+      // resolves after the first getOrCreate). Load it into the live sandbox now if pending.
+      if (this.contextPayload !== undefined && !this.contextLoaded) {
         await this.sandbox.loadContext(this.contextPayload);
         this.contextLoaded = true;
       }
@@ -79,8 +81,8 @@ export class SandboxManager {
       awaitTimeoutS: this.config.awaitTimeoutS,
       handlers,
     }).then(async (s) => {
-      // Load context on first creation if available.
-      if (this.contextPayload !== null) {
+      // Load context on first creation if available (empty list is a valid starting value).
+      if (this.contextPayload !== undefined) {
         await s.loadContext(this.contextPayload);
         this.contextLoaded = true;
       }

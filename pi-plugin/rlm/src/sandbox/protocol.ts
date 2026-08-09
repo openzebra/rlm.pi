@@ -18,15 +18,21 @@ export interface LlmReply {
   readonly rid: string;
   readonly response?: string;
   readonly responses?: readonly string[];
-  /** load_library reply: temp file with the packed payload (+ namespace metadata). */
+  /** add_context reply: temp file with the packed payload (+ namespace metadata). */
   readonly path?: string;
   readonly json?: boolean;
   readonly files?: number;
   readonly chars?: number;
   readonly source_id?: string;
   readonly path_prefix?: string;
-  /** Host-side idempotency: library already loaded — no path payload. */
+  /** Host-side idempotency: source already loaded — no path payload. */
   readonly already_loaded?: boolean;
+  /** Document-type files in the payload (fresh + cache hits). */
+  readonly documents?: number;
+  /** Documents freshly converted this call (cache hits excluded). */
+  readonly converted?: number;
+  /** Paths skipped during packing (binary, no-converter, …). */
+  readonly skipped?: readonly { readonly path: string; readonly reason: string }[];
   readonly error?: string;
 }
 
@@ -56,7 +62,7 @@ export type InterruptKind =
   | "llm_query_batched"
   | "rlm_query"
   | "rlm_query_batched"
-  | "load_library";
+  | "add_context";
 
 interface InterruptBase {
   readonly rid: string;
@@ -88,8 +94,8 @@ interface BatchedPromptInterrupt extends InterruptBase {
   readonly paths?: readonly string[];
 }
 
-export interface LoadLibraryInterrupt extends InterruptBase {
-  readonly type: "load_library";
+export interface AddContextInterrupt extends InterruptBase {
+  readonly type: "add_context";
   readonly source?: string;
 }
 
@@ -97,7 +103,7 @@ export interface LoadLibraryInterrupt extends InterruptBase {
 export type WorkerInterrupt =
   | PromptInterrupt
   | BatchedPromptInterrupt
-  | LoadLibraryInterrupt;
+  | AddContextInterrupt;
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
 
@@ -106,7 +112,7 @@ export const INTERRUPT_KINDS = Object.freeze(new Set<InterruptKind>([
   "llm_query_batched",
   "rlm_query",
   "rlm_query_batched",
-  "load_library",
+  "add_context",
 ]));
 
 function isRecord(value: unknown): value is Record<string, unknown> {

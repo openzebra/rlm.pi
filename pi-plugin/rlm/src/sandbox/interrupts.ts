@@ -10,21 +10,27 @@ import type { WorkerInterrupt } from "./protocol.ts";
 import { writeContextTempFile } from "./context-file.ts";
 import { errorMessage, formatError } from "../util/errors.ts";
 
-/** Result of a host-side library pack requested by `load_library`. */
-export interface LibraryLoadResult {
-  readonly payload: unknown;     // always ContextFile[] under lib/<id>/
+/** Result of a host-side pack requested by `add_context`. */
+export interface AddContextResult {
+  readonly payload: unknown;     // always ContextFile[] under ctx/<id>/ (or un-prefixed for cwd)
   readonly files?: number;
   readonly chars: number;
   readonly sourceId: string;
   readonly pathPrefix: string;
-  /** Host already has this library — no pack, empty payload. */
+  /** Host already has this source — no pack, empty payload. */
   readonly alreadyLoaded?: boolean;
+  /** Document-type files in the payload (fresh + cache hits). */
+  readonly documents?: number;
+  /** Documents freshly converted this call (cache hits excluded). */
+  readonly converted?: number;
+  /** Paths skipped during packing (model-facing). */
+  readonly skipped?: readonly { readonly path: string; readonly reason: string }[];
 }
 
 /**
  * Per-interrupt routing context for the sub-LLM handlers.
  *
- * Only the four sub-call kinds can be spawned, so only they carry it; load_library is
+ * Only the four sub-call kinds can be spawned, so only they carry it; add_context is
  * always synchronous within one exec.
  */
 export interface SubcallOpts {
@@ -43,7 +49,7 @@ export interface SubLlmHandlers {
   llmQueryBatched(prompts: readonly string[], model: string | null, depth: number, opts: SubcallOpts): Promise<string[]>;
   rlmQuery(prompt: string, model: string | null, depth: number, opts: SubcallOpts): Promise<string>;
   rlmQueryBatched(prompts: readonly string[], model: string | null, depth: number, opts: SubcallOpts): Promise<string[]>;
-  loadLibrary(source: string, depth: number): Promise<LibraryLoadResult>;
+  addContext(source: string, depth: number): Promise<AddContextResult>;
 }
 
 /** Narrow an unknown JSON value to a frozen string array. Non-strings and blanks are dropped. */
@@ -65,7 +71,7 @@ export const REJECT: SubLlmHandlers = {
   llmQueryBatched: async (p) => p.map(() => formatError("sub-LLM bridge not configured")),
   rlmQuery: async () => formatError("sub-LLM bridge not configured"),
   rlmQueryBatched: async (p) => p.map(() => formatError("sub-LLM bridge not configured")),
-  loadLibrary: async () => { throw new Error("load_library not configured"); },
+  addContext: async () => { throw new Error("add_context not configured"); },
 };
 
 /** Body of a reply frame — the union of every handler's payload shape. */
@@ -79,6 +85,9 @@ export interface ReplyBody {
   source_id?: string;
   path_prefix?: string;
   already_loaded?: boolean;
+  documents?: number;
+  converted?: number;
+  skipped?: readonly { readonly path: string; readonly reason: string }[];
   error?: string;
 }
 
@@ -114,8 +123,8 @@ export async function serviceInterrupt(
     } else if (msg.type === "rlm_query_batched") {
       const responses = await h.rlmQueryBatched(msg.prompts ?? [], msg.model ?? null, d, opts);
       reply(msg.rid, { responses });
-    } else if (msg.type === "load_library") {
-      const lib = await h.loadLibrary(msg.source ?? "", d);
+    } else if (msg.type === "add_context") {
+      const lib = await h.addContext(msg.source ?? "", d);
       if (lib.alreadyLoaded) {
         // No temp file — worker short-circuits on already_loaded.
         reply(msg.rid, {
@@ -124,10 +133,13 @@ export async function serviceInterrupt(
           chars: lib.chars,
           source_id: lib.sourceId,
           path_prefix: lib.pathPrefix,
+          documents: lib.documents ?? 0,
+          converted: lib.converted ?? 0,
+          skipped: lib.skipped,
         });
       } else {
         const { path, json: isJson } = await writeContextTempFile(lib.payload);
-        // Worker reads then unlinks (worker._load_library). Host must not unlink here —
+        // Worker reads then unlinks (worker._add_context). Host must not unlink here —
         // if the worker is SIGKILLed before os.remove, the temp file leaks in tmpdir (acceptable).
         reply(msg.rid, {
           path,
@@ -136,6 +148,9 @@ export async function serviceInterrupt(
           chars: lib.chars,
           source_id: lib.sourceId,
           path_prefix: lib.pathPrefix,
+          documents: lib.documents ?? 0,
+          converted: lib.converted ?? 0,
+          skipped: lib.skipped,
         });
       }
     }

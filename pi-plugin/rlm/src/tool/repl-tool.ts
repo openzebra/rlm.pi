@@ -20,8 +20,8 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { Model, Usage, Api } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { buildLibraryHandler } from "../bridge/library.ts";
-import { libraryPrefixesIn } from "../context/library-context.ts";
+import { buildAddContextHandler, type AddContextHandlerBundle } from "../bridge/add-context.ts";
+import { contextPrefixesIn } from "../context/namespace.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
 import { LimitGuard, limitsFromConfig } from "../core/limits.ts";
 import type { RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
@@ -115,8 +115,13 @@ export interface ReplToolDeps {
   readonly signal?: AbortSignal;
   readonly onUsage?: (usage: Usage, role: "sub") => void;
   readonly ensureContext?: () => Promise<void>;
-  /** Register a reset hook for sandbox death/dispose (e.g. load_library slot counter). */
+  /** Register a reset hook for sandbox death/dispose (e.g. add_context prefix cache). */
   readonly registerDiscardHook?: (reset: () => void) => void;
+  /**
+   * Hands the live add_context bundle to the extension so the cwd seed can
+   * markLoaded("") / markSeededCwd(abs) — without this, add_context(".") doubles the tree.
+   */
+  readonly registerContextBundle?: (bundle: AddContextHandlerBundle) => void;
 }
 
 export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplToolParams, ReplDetails> {
@@ -159,15 +164,15 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     signal,
     onUsage,
     runChild,
-    // The session sandbox's context is the child's world. Read lazily so a load_library from an
+    // The session sandbox's context is the child's world. Read lazily so an add_context from an
     // earlier repl() reaches a child spawned in a later one. Populated before any interrupt can
     // fire: execute() awaits ensureContext() before getOrCreate().
     getChildContext: () => sandboxManager.contextPayload ?? undefined,
     trackDetached: (task) => background.track(task),
   });
 
-  const libraryBundle = getConfig().libraryLoader
-    ? buildLibraryHandler({
+  const contextBundle = getConfig().contextLoader
+    ? buildAddContextHandler({
         getCwd: () => sessionCwd,
         getEmitter: () => bridgeState.currentEmitter,
         // Refuse pre-flight whatever the worker would reject, so host idempotency is never
@@ -177,14 +182,20 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         signal,
         // Keep the manager's replay copy in step with the worker's live `context`, and with it
         // whatever a child spawned after this load will inherit.
-        onLoaded: (payload) => { sandboxManager.appendLibrary(payload); },
+        onLoaded: (payload) => { sandboxManager.appendContext(payload); },
       })
     : undefined;
-  if (libraryBundle) {
+  if (contextBundle) {
     // Re-derive the loaded-prefix cache from the payload that will actually be replayed —
-    // clearing it outright would make the host re-clone a library the recreated worker already has.
-    const bundle = libraryBundle;
-    deps.registerDiscardHook?.(() => bundle.reset(libraryPrefixesIn(sandboxManager.contextPayload)));
+    // clearing it outright would make the host re-clone a source the recreated worker already has.
+    // Re-plant the cwd sentinel if the seed is still in the payload (un-prefixed files).
+    const bundle = contextBundle;
+    deps.registerDiscardHook?.(() => {
+      const prefixes = contextPrefixesIn(sandboxManager.contextPayload);
+      bundle.reset(prefixes);
+      if (bundle.seededCwd() !== undefined) bundle.markLoaded("");
+    });
+    deps.registerContextBundle?.(contextBundle);
   }
 
   return {
@@ -192,14 +203,15 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     label: "REPL",
     description:
       "PRIMARY tool for ALL repository reading and analysis (read/grep are disabled in RLM mode). " +
-      "Persistent Python sandbox with every file pre-loaded in `context`. Locate first with the " +
-      "free primitives search(query) / grep_context(pattern) / outline(path), then delegate the " +
-      "semantic reading to map_files / llm_query / llm_query_batched / llm_query_chunked " +
-      "(rlm_query for iterative sub-tasks) — stdout returned to you is hard-capped at 4K chars, " +
-      "so printing file bodies is useless. Variables, imports, and the `answers`/`plan` memo " +
-      "persist across calls. Also supports load_library.",
+      "Persistent Python sandbox with loaded files in `context` (starts empty; cwd seeds on first " +
+      "call). Locate first with the free primitives search(query) / grep_context(pattern) / " +
+      "outline(path), then delegate the semantic reading to map_files / llm_query / " +
+      "llm_query_batched / llm_query_chunked (rlm_query for iterative sub-tasks) — stdout " +
+      "returned to you is hard-capped at 4K chars, so printing file bodies is useless. " +
+      "Variables, imports, and the `answers`/`plan` memo persist across calls. Also supports " +
+      "add_context for external dirs/files/git URLs and document conversion.",
     promptSnippet:
-      "repl: run Python in a persistent sandbox holding the whole repository in `context`; " +
+      "repl: run Python in a persistent sandbox holding loaded files in `context`; " +
       "search/grep_context/outline to locate, map_files/llm_query* to read.",
     promptGuidelines: [
       "In RLM mode, read the repository through `repl` only — `read`/`grep` and bash readers are blocked.",
@@ -271,7 +283,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         await deps.ensureContext?.();
         await sandboxManager.getOrCreate({
           ...subcallHandlers,
-          ...(libraryBundle?.handlers ?? {}),
+          ...(contextBundle?.handlers ?? {}),
         });
 
         // Detect queue contention AFTER sandbox init (initPromise settled, isExecuting now accurate)

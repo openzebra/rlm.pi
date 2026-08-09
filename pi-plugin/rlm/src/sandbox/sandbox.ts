@@ -24,7 +24,7 @@ import { pinContext, type PinnedContext } from "./context-file.ts";
 import { REJECT, serviceInterrupt, type ReplyBody, type SubLlmHandlers } from "./interrupts.ts";
 import { trace, traceEnabled } from "../util/trace.ts";
 
-export type { LibraryLoadResult, SubcallOpts, SubLlmHandlers } from "./interrupts.ts";
+export type { AddContextResult, SubcallOpts, SubLlmHandlers } from "./interrupts.ts";
 
 export interface SandboxOptions {
   /** Sandbox recursion depth label (passed to the worker, used in interrupt routing). */

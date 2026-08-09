@@ -34,7 +34,7 @@
 - **根编排器**模型逐轮驱动一个**持久化的 Python REPL**。
 - 长上下文工作通过 `llm_query` / `llm_query_batched` **委派**给廉价的工作模型。
 - 困难的子问题通过 `rlm_query` **递归**到子 RLM 中（设有深度限制）。子 RLM 继承父级的 `context`
-  ——仓库以及通过 `load_library()` 加载的所有库——因此可以在相同的路径上使用相同的检索原语。
+  ——已加载的文件以及通过 `add_context()` 追加的来源——因此可以在相同的路径上使用相同的检索原语。
   继承不消耗额外的 token：内容存放在沙箱中，模型只看到一行大小信息。
 - 所有内容均**在进程内**运行 —— 唯一的外部进程是一个本地的 `python3` worker。
 
@@ -174,7 +174,7 @@ src/
   text/       parsing (repl blocks) · tokens · preview
   tool/       repl-tool · repl-result · repl-render · rlm-tool · rlm-events · rlm-aggregator · subcall-store · background-tasks
   config/     defaults · settings (rlm.json persistence + validation)
-  context/    repomix repository packing + library context merge
+  context/    native walker + anydoc document conversion + add_context
   ui/         status · model-picker · config-panel · intro · theme
   commands/   rlm · rlm-config
   mode/       rlm-mode (controller) · worker-model (cheapest pick) · native-guards

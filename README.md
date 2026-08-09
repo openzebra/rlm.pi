@@ -50,9 +50,9 @@ sub-LLM calls, hence the name.
 - A **root orchestrator** model drives a **persistent Python REPL** turn-by-turn.
 - Long-context work is **delegated** to cheap worker models via `llm_query` / `llm_query_batched`.
 - Hard sub-problems **recurse** into child RLMs via `rlm_query` (depth-capped). A child inherits
-  its parent's `context` — the repository plus every library loaded with `load_library()` — so it
-  runs the same retrieval primitives over the same paths. Inheritance costs no extra tokens: the
-  content lives in the sandbox, and only a size line reaches the model.
+  its parent's `context` — every file loaded so far, including sources added with `add_context()` —
+  so it runs the same retrieval primitives over the same paths. Inheritance costs no extra tokens:
+  the content lives in the sandbox, and only a size line reaches the model.
 - Everything runs **in-process** — the only external process is one local `python3` worker.
 
 > This is a Pi-plugin reimplementation of the RLM method (see the [RLM paper](https://arxiv.org/abs/2512.24601)).

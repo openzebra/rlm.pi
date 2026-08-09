@@ -46,7 +46,7 @@ def _chunk_text(text: str, chunk_chars: int) -> list[str]:
 
 
 _INDEX_WINDOW_LINES = 40       # a window is the retrieval unit: big enough to carry meaning
-_INDEX_MAX_WINDOWS = 20_000    # ceiling so a huge load_library() cannot exhaust worker memory
+_INDEX_MAX_WINDOWS = 20_000    # ceiling so a huge add_context() cannot exhaust worker memory
 _SNIPPET_CHARS = 400
 _GREP_HARD_CAP = 200           # absolute ceiling on returned grep hits, whatever k asks for
 _BM25_K1 = 1.2

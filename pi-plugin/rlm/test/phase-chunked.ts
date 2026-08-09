@@ -98,7 +98,8 @@ async function main() {
   // 4. Prompt surface — both headless and native variants advertise the helper.
   const sys = buildRlmSystemPrompt({ contextType: "json", contextChars: 10 }, {});
   check("headless prompt documents llm_query_chunked", sys.includes("llm_query_chunked"), "");
-  check("headless prompt notes context exclusions", sys.includes("NOT in `context`"), "");
+  check("headless prompt notes context exclusions",
+    sys.includes("Gitignored files") || sys.includes("starts empty"), "");
   check("native prompt documents llm_query_chunked", NATIVE_PROMPT_STATIC.includes("llm_query_chunked"), "");
 
   console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);

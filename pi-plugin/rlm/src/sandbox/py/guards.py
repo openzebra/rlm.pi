@@ -86,7 +86,7 @@ RESERVED = frozenset(
         "spawn", "rlm_await", "rlm_await_all",
         "map_files", "llm_map_reduce",
         "search", "grep_context", "outline",
-        "load_library",
+        "add_context",
         "SHOW_VARS", "answer", "context",
     }
 )

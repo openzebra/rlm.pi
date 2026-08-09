@@ -17,7 +17,7 @@ const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const SUITES: readonly string[] = Object.freeze([
   "phase1.ts", "phase2.ts", "phase3.ts", "phase3-render.ts", "phase4.ts",
   "phase-chunked.ts", "phase-async.ts", "phase-batch-gate.ts", "phase-guards.ts",
-  "phase-library.ts", "phase-retrieval.ts", "phase-llm-model.ts",
+  "phase-context.ts", "phase-retrieval.ts", "phase-llm-model.ts",
   "native-mode.ts", "native-smoke.ts",
 ]);
 
@@ -30,7 +30,7 @@ async function assertEditSurfaceRemoved(): Promise<void> {
   try {
     const gone = await sandbox.exec("print(stage_edit)");
     check("smoke — stage_edit is removed from the sandbox", gone.raised && gone.stderr.includes("NameError"));
-    const alive = await sandbox.exec("print(callable(llm_query), callable(SHOW_VARS), callable(load_library))");
+    const alive = await sandbox.exec("print(callable(llm_query), callable(SHOW_VARS), callable(add_context))");
     check("smoke — core REPL surface intact", !alive.raised && alive.stdout.includes("True True True"));
   } finally {
     await sandbox.dispose();

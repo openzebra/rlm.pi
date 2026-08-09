@@ -15,7 +15,10 @@ import { markdownTheme } from "./ui/theme-adapter.ts";
 import { SandboxManager } from "./sandbox/sandbox-manager.ts";
 import { createSubcallGates } from "./util/concurrency.ts";
 import { BackgroundTasks } from "./tool/background-tasks.ts";
-import { packRepository, formatForLLM, serializeForSandbox } from "./context/repomix-context.ts";
+import { resolve } from "node:path";
+import { resolveSource } from "./context/resolve.ts";
+import { formatContextListing } from "./context/listing.ts";
+import type { AddContextHandlerBundle } from "./bridge/add-context.ts";
 import { buildNativeSystemPrompt, NATIVE_TURN_REMINDER } from "./prompts/native.ts";
 import { bashCommandFromInput, isFileReadingCommand, capToolResultText, BASH_BLOCK_REASON } from "./mode/native-guards.ts";
 import { errorMessage } from "./util/errors.ts";
@@ -57,22 +60,37 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   }, WATCHDOG_HEARTBEAT_MS);
   watchdogHeartbeat.unref();
 
-  let packedContextText: string | undefined;
-  let contextPackPromise: Promise<string | undefined> | undefined;
-  const ensureRepositoryContext = async (cwd: string): Promise<string | undefined> => {
-    if (packedContextText !== undefined && sandboxManager.contextPayload !== null) return packedContextText;
-    contextPackPromise ??= packRepository(cwd)
+  /** Memoised cwd seed — one resolveSource(pathPrefix:"") per session. */
+  let seedPromise: Promise<void> | undefined;
+  let cwdSeeded = false;
+  /** Live add_context bundle — seed plants the "" sentinel here so add_context(".") is a no-op. */
+  let contextBundleRef: AddContextHandlerBundle | undefined;
+  /**
+   * Payload identity last injected into the context hook. Re-inject only when the payload
+   * reference changes (seed, add_context, reset) — not every turn. Keeps the root window small.
+   */
+  let listingPayloadRef: unknown = undefined;
+  let listingInjected = false;
+  const seedContext = async (cwd: string): Promise<void> => {
+    if (cwdSeeded) return;
+    if (!controller.config.autoSeedCwd) {
+      cwdSeeded = true;
+      return;
+    }
+    seedPromise ??= resolveSource(cwd, { cwd, pathPrefix: "" })
       .then((result) => {
+        // Sticky either way: a failed seed must not re-walk the whole repo on every repl().
+        cwdSeeded = true;
         if (!result.ok) {
-          console.warn(`[rlm] repository context pack failed: ${result.error}`);
-          return undefined;
+          console.warn(`[rlm] context seed failed: ${result.error}`);
+          return;
         }
-        sandboxManager.contextPayload = serializeForSandbox(result.value);
-        packedContextText = formatForLLM(result.value);
-        return packedContextText;
+        sandboxManager.contextPayload = result.value.payload;
+        // Register the cwd seed with the bridge so add_context(".") cannot double the tree.
+        contextBundleRef?.markSeededCwd(resolve(cwd));
       })
-      .finally(() => { contextPackPromise = undefined; });
-    return contextPackPromise;
+      .finally(() => { seedPromise = undefined; });
+    await seedPromise;
   };
 
   // Load persisted settings async — applied before session_start handler reads controller state
@@ -152,9 +170,16 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           gates,
           background,
           registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
+          registerContextBundle: (bundle) => {
+            contextBundleRef = bundle;
+            // Tool re-registers each session; re-plant sentinel if seed already landed.
+            if (cwdSeeded && Array.isArray(sandboxManager.contextPayload)
+              && sandboxManager.contextPayload.length > 0) {
+              bundle.markSeededCwd(resolve(ctx.cwd ?? process.cwd()));
+            }
+          },
           ensureContext: async () => {
-            const contextText = await ensureRepositoryContext(ctx.cwd ?? process.cwd());
-            if (contextText === undefined) throw new Error("repository context could not be loaded into RLM sandbox");
+            await seedContext(ctx.cwd ?? process.cwd());
           },
         }));
       } catch (err) {
@@ -184,9 +209,10 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     return { systemPrompt: event.systemPrompt + "\n\n" + buildNativeSystemPrompt() };
   });
 
-  // ── Context injection: repo listing for the main agent ──
-  let contextInjected = false;
-  pi.on("context", async (event, ctx) => {
+  // ── Context injection: listing of whatever is currently loaded ──
+  // Re-inject only when the payload identity changes (seed / add_context), not every turn —
+  // the listing can be up to 200 file lines and the plugin exists to shrink the root window.
+  pi.on("context", async (event) => {
     const filtered = event.messages.filter(
       (message) =>
         !(message.role === "custom" && message.customType === "rlm-intro")
@@ -196,25 +222,24 @@ export default function rlmExtension(pi: ExtensionAPI): void {
 
     type PiMessage = (typeof filtered)[number];
 
-    // Inject repository context as a compact listing (once per session)
-    if (!contextInjected) {
-      const cwd = ctx.cwd ?? process.cwd();
-      const contextText = await ensureRepositoryContext(cwd);
-      if (contextText !== undefined) {
-        contextInjected = true;
-        const instruction = [
-          "ANALYZE THIS REPOSITORY using repl({code}) — read/grep are DISABLED.",
-          "Repository contents are pre-loaded in the Python REPL `context` variable.",
-          "Locate with search()/grep_context()/outline() (free), then delegate bulk reading to",
-          "map_files()/llm_query_batched(). If credits exhausted → report and stop.",
-          "",
-        ].join("\n");
-        filtered.unshift({
-          role: "user" as const,
-          content: instruction + contextText,
-          timestamp: 0,
-        } as PiMessage);
-      }
+    const payload = sandboxManager.contextPayload;
+    if (!listingInjected || payload !== listingPayloadRef) {
+      listingInjected = true;
+      listingPayloadRef = payload;
+      const listing = formatContextListing(payload);
+      const instruction = [
+        "ANALYZE with repl({code}) — read/grep are DISABLED.",
+        "Files you have loaded live in the Python REPL `context` variable (starts empty; cwd seeds on first repl()).",
+        "Locate with search()/grep_context()/outline() (free), then delegate bulk reading to",
+        "map_files()/llm_query_batched(). Use add_context(path) for external dirs/files/docs/git URLs.",
+        "If credits exhausted → report and stop.",
+        "",
+      ].join("\n");
+      filtered.unshift({
+        role: "user" as const,
+        content: instruction + listing,
+        timestamp: 0,
+      } as PiMessage);
     }
 
     // Per-turn last-position reminder (not persisted — context hook rebuilds every request)
@@ -236,7 +261,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     if (BLOCKED_NATIVE_TOOLS.has(event.toolName)) {
       return {
         block: true,
-        reason: "RLM mode active. Use repl({code}) to read files and search the repository — all files are pre-loaded in the REPL `context` variable. Use `edit`/`write` for file changes. If sub-LLM credits are exhausted, report to the user.",
+        reason: "RLM mode active. Use repl({code}) to read files and search the repository — loaded files live in the REPL `context` variable (cwd seeds on first call). Use `edit`/`write` for file changes. If sub-LLM credits are exhausted, report to the user.",
       };
     }
     const bashCommand = event.toolName === "bash" ? bashCommandFromInput(event.input) : undefined;
@@ -264,9 +289,11 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     clearInterval(watchdogHeartbeat);
     background.dispose();
     await sandboxManager.dispose();
-    contextInjected = false;
-    packedContextText = undefined;
-    contextPackPromise = undefined;
-    sandboxManager.contextPayload = null;
+    cwdSeeded = false;
+    seedPromise = undefined;
+    contextBundleRef = undefined;
+    listingPayloadRef = undefined;
+    listingInjected = false;
+    sandboxManager.contextPayload = [];
   });
 }

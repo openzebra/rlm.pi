@@ -28,7 +28,7 @@ export interface SystemPromptOptions {
   readonly orchestrator?: boolean;
   readonly recursion?: boolean;
   readonly maxPromptChars?: number;
-  readonly libraryLoader?: boolean;
+  readonly contextLoader?: boolean;
   /** depth > 0 — this run is an rlm_query child and its `context` is the parent's world. */
   readonly child?: boolean;
 }
@@ -70,7 +70,7 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
     howToRunCode(),
     "",
     replGlossary(
-      kind, recursion, opts.libraryLoader ?? false, opts.child ?? false,
+      kind, recursion, opts.contextLoader ?? false, opts.child ?? false,
     ),
     "",
     "REPL stdout over ~800 characters is truncated to a short excerpt — large results stay in your",

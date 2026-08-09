@@ -20,7 +20,7 @@ import { displayModelRef, modelRef, resolveModelId } from "../config/settings.ts
 import { type ChatMsg, modelComplete } from "./model.ts";
 import { previewText } from "../text/preview.ts";
 import { checkResourceLimits } from "../core/resource-limits.ts";
-import { filterContextByPaths } from "../context/library-context.ts";
+import { filterContextByPaths } from "../context/merge.ts";
 import type { RlmInput, RlmResult, Sampling } from "../core/types.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
 import type { SubcallOpts, SubLlmHandlers } from "../sandbox/sandbox.ts";

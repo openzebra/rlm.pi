@@ -12,7 +12,7 @@ import { modelRef, resolveModelId, saveSettings } from "../config/settings.ts";
 import { createEngine } from "../core/engine.ts";
 import { limitsFromConfig } from "../core/limits.ts";
 import type { RlmConfig, RlmResult } from "../core/types.ts";
-import { packRepository, serializeForSandbox } from "../context/repomix-context.ts";
+import { resolveSource } from "../context/resolve.ts";
 import { RlmEmitter } from "../tool/rlm-events.ts";
 import { formatError } from "../util/errors.ts";
 import { cheapestModel } from "./llm-model.ts";
@@ -87,13 +87,14 @@ export class RlmController {
     this.active = abortController;
 
     const done = (async () => {
-      // Auto-pack empty/undefined context via repomix; pass explicit context through.
+      // Auto-seed empty/undefined context from cwd (same resolveSource path as native mode);
+      // pass explicit context through.
       let contextValue: unknown = input.context;
       if (contextValue === undefined || (typeof contextValue === "string" && contextValue.trim() === "")) {
         const cwd = ctx.cwd ?? process.cwd();
-        const result = await packRepository(cwd, abortController.signal);
+        const result = await resolveSource(cwd, { cwd, pathPrefix: "", signal: abortController.signal });
         contextValue = result.ok
-          ? serializeForSandbox(result.value)
+          ? result.value.payload
           : formatError(`failed to pack repository — ${result.error}`);
       }
       const engine = createEngine({

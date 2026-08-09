@@ -2,12 +2,12 @@
  * Temp-file transport for sandbox context payloads, with refcounted sharing.
  *
  * Two callers, two ownership models, one writer:
- *  - `writeContextTempFile` — non-owning. `load_library` uses it because the WORKER unlinks
- *    that file after reading it (see sandbox.ts serviceInterrupt / worker.py `_load_library`).
+ *  - `writeContextTempFile` — non-owning. `add_context` uses it because the WORKER unlinks
+ *    that file after reading it (see sandbox.ts serviceInterrupt / worker.py `_add_context`).
  *  - `pinContext` — refcounted. Every child RLM of one node inherits the SAME payload, so an
  *    18-way fan-out would otherwise cost 18 serializations and 18 files. Pins are keyed by
- *    payload identity, which is a free version key: `mergeLibraryIntoContext` always returns a
- *    NEW array, so loading a library mints a new key and old holders keep their own file.
+ *    payload identity, which is a free version key: `mergeIntoContext` always returns a
+ *    NEW array, so adding a source mints a new key and old holders keep their own file.
  *
  * Serialization is chunked with an await between chunks so the event loop is never blocked for
  * more than ~SERIALIZE_CHUNK entries. A Worker Thread was considered and rejected: posting the

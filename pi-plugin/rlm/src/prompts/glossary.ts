@@ -82,13 +82,13 @@ export const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
  */
 export const RECURSION_CONTEXT_LINES: readonly string[] = Object.freeze([
   "",
-  "  **What a child sees:** it inherits YOUR `context` — the repository plus every library you",
-  "  loaded (`lib/<id>/…`) — and runs `search` / `grep_context` / `outline` / `map_files` over the",
-  "  same paths. So send instructions, never file bodies: pasting content you already share costs",
-  "  your tokens twice and buys nothing. Your prompt becomes the child's question.",
-  "  Narrow its world with `rlm_query(prompt, paths=['src/auth/', 'lib/x-9f3a/'])` — path PREFIXES,",
+  "  **What a child sees:** it inherits YOUR `context` — every file you have loaded, including",
+  "  sources under `ctx/<id>/…` — and runs `search` / `grep_context` / `outline` / `map_files`",
+  "  over the same paths. So send instructions, never file bodies: pasting content you already",
+  "  share costs your tokens twice and buys nothing. Your prompt becomes the child's question.",
+  "  Narrow its world with `rlm_query(prompt, paths=['src/auth/', 'ctx/x-9f3a/'])` — path PREFIXES,",
   "  not globs. Omit `paths` to hand over everything.",
-  "  Inheritance is one-way: libraries the child loads, and its whole REPL, die with it — only its",
+  "  Inheritance is one-way: sources the child loads, and its whole REPL, die with it — only its",
   "  final answer string returns.",
   "  At the depth cap `rlm_query` degrades to a plain sub-LLM call with NO context, which is why",
   "  this section disappears at the last recursive depth.",
@@ -99,14 +99,17 @@ export const RECURSION_CONTEXT_LINES: readonly string[] = Object.freeze([
  * than a repository the run packed for itself.
  */
 export const CHILD_CONTEXT_LINES: readonly string[] = Object.freeze([
-  "  You are a sub-RLM. This `context` is your parent's world — the repository plus every library",
-  "  it loaded (paths under `lib/<id>/…`). Answer only the question above; your REPL and anything",
-  "  you load die with you, and only your final answer string returns to the parent.",
+  "  You are a sub-RLM. This `context` is your parent's world — every file it has loaded (cwd",
+  "  paths un-prefixed; external sources under `ctx/<id>/…`). Answer only the question above;",
+  "  your REPL and anything you load die with you, and only your final answer string returns.",
 ]);
 
 /** Why a file the user mentioned may be missing from `context`. */
-export const CONTEXT_EXCLUSION_NOTE =
-  "  NOTE: files larger than 1MB and gitignored files are NOT in `context` — they exist only on disk.";
+export const CONTEXT_EXCLUSION_NOTE = [
+  "  NOTE: `context` holds only the files you have loaded (starts empty; cwd seeds on first use).",
+  "  Gitignored files and files larger than 1MB of plain text are skipped. Binary documents",
+  "  (PDF, DOCX, XLSX, PPTX, CSV, …) ARE included — converted to Markdown on the way in.",
+].join("\n");
 
 /** The large-on-disk-file protocol (headless + native). */
 export const LARGE_FILE_RULE_LINES: readonly string[] = Object.freeze([
@@ -200,7 +203,7 @@ export function howToRunCode(): string {
 export function replGlossary(
   kind: ContextKind,
   recursion: boolean,
-  libraryLoader: boolean,
+  contextLoader: boolean,
   child: boolean,
 ): string {
   const lines = ["Available in the REPL:"];
@@ -212,10 +215,10 @@ export function replGlossary(
     );
   } else {
     lines.push(
-      "- `context`: list[dict] — a pre-packed JSON array of every file in the repository. Each dict has",
-      "  keys: `path` (relative file path, str), `content` (file text, str), `tokens` (estimated count, int).",
-      "  For large repos, chunk `context` into batches and delegate to sub-LLMs — never dump raw file",
-      "  bodies into your own output.",
+      "- `context`: list[dict] — the files you have loaded (starts empty; cwd seeds on first use).",
+      "  Each dict has keys: `path` (str), `content` (str), `tokens` (int).",
+      "  Cwd paths are un-prefixed (real paths for edit/write); external sources land under",
+      "  `ctx/<source_id>/…`. For large sets, chunk and delegate — never dump raw file bodies.",
       CONTEXT_EXCLUSION_NOTE,
     );
     if (child) lines.push(...CHILD_CONTEXT_LINES);
@@ -240,22 +243,22 @@ export function replGlossary(
     ...SPAWN_GLOSSARY_LINES,
     ...DELEGATION_GLOSSARY_LINES,
   );
-  if (libraryLoader) {
+  if (contextLoader) {
     lines.push(
-      "- `load_library(source: str) -> dict`: load an EXTERNAL library, source tree, or document and",
-      "  **APPEND its files into the existing `context` list** (same shape: path/content/tokens).",
-      "  `source` may be a local directory (repomix-packed), a single file path, or an https/git@ URL",
-      "  (shallow-cloned, then packed). Paths are namespaced under `lib/<source_id>/…` so you can filter",
-      "  by prefix. Returns metadata only:",
-      "  {\"source\", \"source_id\", \"path_prefix\", \"files\", \"chars\", \"context_len\", \"already_loaded\"}",
-      "  or an \"Error: ...\" string. **Never treat the return value as the file list** — always search",
-      "  and chunk the single variable `context`. Do not invent `context_1` / aliases; do not call",
-      "  globals()/locals(). Idempotent: re-loading the same source is a no-op.",
+      "- `add_context(source: str) -> dict`: load a dir, file, document, or git URL and **APPEND its",
+      "  files into `context`** (same shape: path/content/tokens). Documents (PDF, DOCX, XLSX, PPTX,",
+      "  CSV, …) are converted to Markdown automatically and cached until the source file changes.",
+      "  Paths are namespaced under `ctx/<source_id>/…` so you can filter by prefix. Returns metadata:",
+      "  {\"source\", \"source_id\", \"path_prefix\", \"files\", \"chars\", \"context_len\", \"already_loaded\",",
+      "  \"documents\", \"converted\", \"skipped\"} or an \"Error: ...\" string. `documents` is how many",
+      "  document-type files landed (incl. cache hits); `converted` is how many were freshly converted",
+      "  this call. **Never treat the return value as the file list** — always search and chunk the",
+      "  single variable `context`. Idempotent: re-loading the same source is a no-op.",
       "",
       "  ```python",
-      "  info = load_library(\"/path/to/other-project\")",
+      '  info = add_context("/path/to/other-project")',
       "  # info is metadata; files are already in context under info[\"path_prefix\"]",
-      "  lib_files = [f for f in context if f[\"path\"].startswith(info[\"path_prefix\"])]",
+      '  lib_files = [f for f in context if f["path"].startswith(info["path_prefix"])]',
       "  ```",
     );
   }

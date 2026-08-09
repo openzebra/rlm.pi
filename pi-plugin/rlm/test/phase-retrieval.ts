@@ -127,7 +127,7 @@ async function main(): Promise<void> {
       'context.append({"path": "lib/x/a.py", "content": "def brandnewsymbol():\\n    pass\\n", "tokens": 5})\n'
       + 'print(json.dumps([h["path"] for h in search("brandnewsymbol", k=2)]))',
     );
-    check("search index invalidates when context grows (load_library path)",
+    check("search index invalidates when context grows (add_context path)",
       JSON.stringify(parsePrinted(r.stdout)) === '["lib/x/a.py"]', r.stdout.trim());
 
     // ── map_files: one batch, not one call per file ──────────────────────────────────────

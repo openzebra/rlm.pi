@@ -1,23 +1,30 @@
 {
   "name": "@hicaru/pi-rlm",
-  "version": "0.2.2",
-  "type": "module",
-  "description": "Save 99% tokens, Recursive Language Model (RLM) for the Pi",
-  "license": "MIT",
+  "version": "0.3.0",
   "author": "hicaru",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openzebra/rlm.pi.git"
   },
-  "homepage": "https://github.com/openzebra/rlm.pi",
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
   "bugs": {
     "url": "https://github.com/openzebra/rlm.pi/issues"
   },
+  "description": "Save 99% tokens, Recursive Language Model (RLM) for the Pi",
   "files": [
     "src/",
     "README.md",
     "LICENSE"
   ],
+  "homepage": "https://github.com/openzebra/rlm.pi",
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -25,11 +32,7 @@
     "recursive",
     "ai-agent"
   ],
-  "scripts": {
-    "check": "tsc --noEmit",
-    "test": "bun run test/smoke.ts",
-    "prepublishOnly": "npm run check"
-  },
+  "license": "MIT",
   "pi": {
     "extensions": [
       "./src/index.ts"
@@ -38,16 +41,16 @@
   "publishConfig": {
     "access": "public"
   },
-  "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "bun run test/smoke.ts",
+    "prepublishOnly": "npm run check"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
-    "repomix": "^1.15.0"
-  },
-  "devDependencies": {
-    "typescript": "^5.0.0"
+    "@firecrawl/anydoc": "^0.1.7"
   }
 }
