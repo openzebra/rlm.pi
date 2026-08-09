@@ -44,6 +44,7 @@ from guards import (
     REAL_STDERR as _REAL_STDERR,
     REAL_STDIN as _REAL_STDIN,
 )
+from hostio import read_host_payload
 from retrieval import (
     _Bm25Index,
     _chunk_text,
@@ -591,8 +592,7 @@ class Worker:
         if not isinstance(path, str):
             return "Error: malformed add_context reply (no path)"
         try:
-            with io.open(path, "r") as f:
-                payload = json.load(f) if r.get("json") else f.read()
+            payload = read_host_payload(path, bool(r.get("json")))
         finally:
             try:
                 os.remove(path)  # worker owns temp-file cleanup (host does NOT unlink)
@@ -706,8 +706,7 @@ class Worker:
         `index` is accepted for protocol compatibility but ignored — there is only
         one context slot. Sources are merged on the host (or via add_context).
         """
-        with open(path, "r") as f:
-            payload = json.load(f) if is_json else f.read()
+        payload = read_host_payload(path, bool(is_json))
         self._context_payload = payload
         self.ns["context"] = payload
         # Drop legacy multi-slot names if present.

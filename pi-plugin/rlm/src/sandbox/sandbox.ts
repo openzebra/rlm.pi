@@ -111,6 +111,11 @@ export class PythonSandbox {
     this.initTimeoutMs = opts.initTimeoutMs ?? 30_000;
     const python = opts.python ?? "python3";
     const workerArgs = [
+      // -X utf8=1: the scaffold states its own encoding explicitly (py/hostio.py), but MODEL
+      // code gets a real open() — guards.py exposes it deliberately — and on Windows that
+      // would default to cp1252 (issue #7). UTF-8 mode covers the whole interpreter; the
+      // scaffold's explicit encoding= still wins where PYTHONIOENCODING would override this.
+      "-X", "utf8=1",
       "-u", WORKER_PATH,
       "--depth", String(opts.depth ?? 1),
       "--timeout", String(opts.execTimeoutS ?? 600),
@@ -124,7 +129,9 @@ export class PythonSandbox {
     this.proc = spawn(
       python,
       workerArgs,
-      { stdio: ["pipe", "pipe", "pipe"], env: sanitizedEnv() },
+      // windowsHide: without it each sandbox flashes a console window on Windows (pi sets
+      // this on every spawn — bash.ts / shell.ts). Same Windows surface as issue #7.
+      { stdio: ["pipe", "pipe", "pipe"], env: sanitizedEnv(), windowsHide: true },
     ) as ChildProcessWithoutNullStreams;
 
     this.proc.stdout.setEncoding("utf8");

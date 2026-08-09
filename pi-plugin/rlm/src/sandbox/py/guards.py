@@ -19,6 +19,13 @@ import sys
 from contextlib import contextmanager
 from typing import Any
 
+from hostio import pin_stdio_utf8
+
+# Pin UTF-8 before anything reads or writes a frame. On Windows these three default to the
+# locale encoding (cp1252), while the JSONL protocol Node speaks is UTF-8 both ways — see
+# issue #7. reconfigure() mutates in place, so the REAL_* captures below are the same objects.
+pin_stdio_utf8()
+
 # Capture the REAL stdio before exec() redirects sys.stdout/sys.stderr into buffers.
 # All protocol writes must go to the real stdout even while user code's prints are captured.
 REAL_STDOUT = sys.stdout
