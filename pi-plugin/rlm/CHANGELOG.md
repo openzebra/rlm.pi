@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Atomic writes for rlm.json.** Settings are now written to a `.tmp` file then renamed —
+  if Pi crashes mid-write, the previous config survives instead of being truncated.
+- **Immediate model-choice persistence.** When you pick a sub-LLM model in
+  `/rlm-config`, the choice is saved to disk BEFORE the config panel opens — if the
+  panel fails or Pi exits before you close it, the model pin survives.
+- **Model picker no longer defaults to "cheapest" when the pinned model is absent.**
+  If your saved model is temporarily unavailable (e.g. API key not loaded yet),
+  the picker pre-selects the first real model instead of "cheapest auto" —
+  accidental Enter won't wipe the pin.
 - **Thinking/CoT guidance in native prompt.** A `THINKING RULE` section tells the model
   when to plan out loud (complex decomposition, uncertainty) vs. jump to `repl()` (simple
   lookups, known paths). Prevents premature repl() calls on uncertain targets.

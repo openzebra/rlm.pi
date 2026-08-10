@@ -68,6 +68,13 @@ export async function runRlmConfig(controller: RlmController, ctx: ExtensionCont
   // Choosing cheapest must NOT wipe subSampling.reasoning (null !== undefined used to).
   applyLlmSelection(controller, llm);
 
+  // Persist model choice immediately — if showConfigPanel throws or process exits before it
+  // returns, the pin survives (Root Cause #2, v0.3.2).
+  if (llm !== undefined) {
+    const saved = await controller.persist();
+    if (!saved) ctx.ui.notify("RLM: failed to save llm setting", "error");
+  }
+
   controller.setConfig(await showConfigPanel(ctx, controller.config));
 
   const persisted = await controller.persist();

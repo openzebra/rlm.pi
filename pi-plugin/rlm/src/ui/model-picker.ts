@@ -68,7 +68,11 @@ export function initialModelPickerIndex(
   const ref = current ? `${current.provider}/${current.id}` : currentRef;
   if (!ref) return 0;
   const idx = models.findIndex((m) => `${m.provider}/${m.id}` === ref);
-  if (idx < 0) return 0;
+  // When a saved ref exists but the model is absent from the current catalog
+  // (e.g. provider not refreshed yet), pre-select the first real model — NOT
+  // "cheapest auto". Accidentally hitting Enter on cheapest would wipe the pin
+  // silently (Root Cause #4, v0.3.2).
+  if (idx < 0) return ref ? offset : 0;
   return idx + offset;
 }
 
