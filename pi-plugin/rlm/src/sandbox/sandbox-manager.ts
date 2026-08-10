@@ -21,6 +21,8 @@ export interface SandboxManagerConfig {
   readonly maxPromptChars: number;
   /** Max seconds the worker waits for a host reply while parked in await_task. */
   readonly awaitTimeoutS: number;
+  /** Max seconds the worker idles before it pings the parent for liveness. */
+  readonly idleTimeoutS?: number;
   readonly signal?: AbortSignal;
   readonly onSandboxDiscarded?: () => void;
 }
@@ -29,6 +31,11 @@ export class SandboxManager {
   private sandbox: PythonSandbox | null = null;
   private disposed = false;
   private initPromise: Promise<PythonSandbox> | null = null;
+  /**
+   * Aborts an in-flight spawn when dispose() races it — the spawned child is SIGKILLed
+   * via the sandbox's own signal wiring instead of leaking unattached.
+   */
+  private spawnAbort: AbortController | null = null;
   /** Serialized execution queue — concurrent repl() calls wait for predecessor. */
   private execQueue: Promise<void> = Promise.resolve();
   private pendingExecCount = 0;
@@ -96,27 +103,49 @@ export class SandboxManager {
 
     if (this.initPromise) return this.initPromise;
 
+    // Bug-fix: a dispose() racing the spawn must abort it. The spawned child is SIGKILLed
+    // via the sandbox's signal wiring instead of leaking as an unattached orphan.
+    const spawnAbort = new AbortController();
+    this.spawnAbort = spawnAbort;
+
     this.initPromise = PythonSandbox.spawn({
       execTimeoutS: this.config.execTimeoutS,
       requestTimeoutMs: this.config.requestTimeoutMs,
       python: this.config.python,
-      signal: this.config.signal,
+      signal: combineAbortSignals(this.config.signal, spawnAbort.signal),
       initTimeoutMs: this.config.sandboxInitTimeoutMs,
       maxPromptChars: this.config.maxPromptChars,
       awaitTimeoutS: this.config.awaitTimeoutS,
+      idleTimeoutS: this.config.idleTimeoutS,
       handlers,
     }).then(async (s) => {
-      // Load context on first creation if available (empty list is a valid starting value).
-      if (this.contextPayload !== undefined) {
-        await s.loadContext(this.contextPayload);
-        this.contextLoaded = true;
+      // Bug-fix: dispose() may have raced the spawn. The child was SIGKILLed via
+      // spawnAbort, but dispose it explicitly too so no resource outlives the manager.
+      if (this.disposed) {
+        await s.dispose().catch(() => {});
+        throw new Error("SandboxManager disposed during spawn");
+      }
+
+      try {
+        // Load context on first creation if available (empty list is a valid starting value).
+        if (this.contextPayload !== undefined) {
+          await s.loadContext(this.contextPayload);
+          this.contextLoaded = true;
+        }
+      } catch (err) {
+        // Bug-fix: loadContext failed after spawn — dispose the child instead of
+        // leaking it (the .catch below only resets initPromise and can't reach `s`).
+        await s.dispose().catch(() => {});
+        throw err;
       }
       this.sandbox = s;
       this.initPromise = null;
+      this.spawnAbort = null;
       return s;
     }).catch((err) => {
       this.contextLoaded = false;
       this.initPromise = null;
+      this.spawnAbort = null;
       throw err;
     });
 
@@ -196,6 +225,9 @@ export class SandboxManager {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    // Abort an in-flight spawn: the child is SIGKILLed and the .then guard above throws,
+    // so a dispose racing getOrCreate can never leave an unattached sandbox behind.
+    this.spawnAbort?.abort();
     await this.sandbox?.dispose();
     if (this.sandbox !== null) {
       this.sandbox = null;
@@ -203,4 +235,23 @@ export class SandboxManager {
       this.config.onSandboxDiscarded?.();
     }
   }
+}
+
+/**
+ * Combine AbortSignals so aborting any of them aborts the result.
+ * Returns undefined when there is nothing to combine (spawn without a signal).
+ */
+function combineAbortSignals(...signals: (AbortSignal | undefined)[]): AbortSignal | undefined {
+  const present = signals.filter((s): s is AbortSignal => s !== undefined);
+  if (present.length === 0) return undefined;
+  if (present.length === 1) return present[0];
+  const combined = new AbortController();
+  for (const s of present) {
+    if (s.aborted) {
+      combined.abort();
+      break;
+    }
+    s.addEventListener("abort", () => combined.abort(), { once: true });
+  }
+  return combined.signal;
 }

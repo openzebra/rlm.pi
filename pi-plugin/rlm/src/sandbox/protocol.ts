@@ -44,7 +44,7 @@ export interface LlmReply {
   readonly error?: string;
 }
 
-export type ParentMessage = WorkerRequest | LlmReply;
+export type ParentMessage = WorkerRequest | LlmReply | Pong;
 
 /** A normal response to a request (keyed by the request `id`). */
 export interface WorkerResponse {
@@ -122,7 +122,21 @@ export type WorkerInterrupt =
   | FinishInterrupt
   | AddContextInterrupt;
 
-export type WorkerMessage = WorkerResponse | WorkerInterrupt;
+/**
+ * Worker idle-heartbeat: sent after `idle_timeout_s` of silence on stdin.
+ * The parent must answer with a `pong` so a live-but-quiet parent keeps the
+ * worker alive; a dead/migrated parent never answers and the worker exits.
+ */
+export interface WorkerHeartbeat {
+  readonly type: "ping";
+}
+
+/** Parent reply to a worker `ping`. */
+export interface Pong {
+  readonly type: "pong";
+}
+
+export type WorkerMessage = WorkerResponse | WorkerInterrupt | WorkerHeartbeat;
 
 export const INTERRUPT_KINDS = Object.freeze(
   new Set<InterruptKind>([
@@ -155,7 +169,12 @@ export function isInterrupt(msg: unknown): msg is WorkerInterrupt {
 }
 
 export function isWorkerMessage(msg: unknown): msg is WorkerMessage {
-  return isWorkerResponse(msg) || isInterrupt(msg);
+  return isWorkerResponse(msg) || isInterrupt(msg) || isHeartbeat(msg);
+}
+
+/** True for the idle-heartbeat `ping` frame (no id/rid, type only). */
+export function isHeartbeat(msg: unknown): msg is WorkerHeartbeat {
+  return isRecord(msg) && msg.type === "ping";
 }
 
 /** Result of a single `repl` block execution, surfaced to the engine/tool. */

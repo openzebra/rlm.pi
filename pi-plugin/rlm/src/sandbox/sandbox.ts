@@ -12,6 +12,7 @@ import { once } from "node:events";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  isHeartbeat,
   isInterrupt,
   isWorkerMessage,
   type ParentMessage,
@@ -48,6 +49,12 @@ export interface SandboxOptions {
    * (await_task / sync sub-call). Defaults to the worker's own RLM_AWAIT_TIMEOUT_S (600).
    */
   readonly awaitTimeoutS?: number;
+  /**
+   * Max seconds the worker idles before it pings the parent for liveness. A parent that
+   * never answers (dead/migrated) lets the worker exit instead of lingering as a zombie.
+   * Defaults to the worker's own RLM_IDLE_TIMEOUT_S (600).
+   */
+  readonly idleTimeoutS?: number;
 }
 
 const WORKER_PATH = join(dirname(fileURLToPath(import.meta.url)), "py", "worker.py");
@@ -125,6 +132,9 @@ export class PythonSandbox {
     }
     if (opts.awaitTimeoutS !== undefined) {
       workerArgs.push("--await-timeout", String(opts.awaitTimeoutS));
+    }
+    if (opts.idleTimeoutS !== undefined) {
+      workerArgs.push("--idle-timeout", String(opts.idleTimeoutS));
     }
     this.proc = spawn(
       python,
@@ -404,9 +414,16 @@ export class PythonSandbox {
           detached: msg.detached === true,
           prompts: "prompts" in msg ? msg.prompts?.length : 1,
         });
+      } else if (isHeartbeat(msg)) {
+        trace("frame.in", { frame: "ping" });
       } else {
         trace("frame.in", { frame: "response", id: msg.id, ok: msg.ok });
       }
+    }
+    if (isHeartbeat(msg)) {
+      // Idle probe from the worker — answer so a live parent keeps it alive.
+      this.send({ type: "pong" });
+      return;
     }
     if (isInterrupt(msg)) {
       this.touchPending();

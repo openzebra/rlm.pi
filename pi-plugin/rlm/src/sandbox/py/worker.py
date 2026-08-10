@@ -25,6 +25,7 @@ import argparse
 import io
 import json
 import os
+import select
 import signal
 import sys
 import time
@@ -824,12 +825,70 @@ class Worker:
         }
 
 
+def _readline_idle(idle_timeout_s: float) -> str | None:
+    """Read one line from the parent, or None after `idle_timeout_s` of silence.
+
+    Uses select() so a silent-but-alive parent does not block forever. None means
+    the idle window elapsed with no input — the caller should ping the parent.
+    On platforms where select() cannot watch stdin (Windows pipes), falls back to
+    a plain blocking readline(), i.e. the pre-watchdog behaviour.
+    """
+    try:
+        readable, _, _ = select.select([_REAL_STDIN], [], [], idle_timeout_s)
+    except (OSError, ValueError):
+        return _REAL_STDIN.readline()
+    if not readable:
+        return None
+    return _REAL_STDIN.readline()
+
+
+def _ping_parent(worker: "Worker", pong_timeout_s: float) -> bool:
+    """Ask the parent for a pong; False when it is gone (exit) and True when alive.
+
+    Sends {"type":"ping"} and waits up to `pong_timeout_s` for a matching pong.
+    Any other frame arriving meanwhile is parked like a mid-exec frame (_pump),
+    so a request racing the heartbeat is not lost. On platforms without select()
+    on stdin, assumes the parent is alive (never probes) — same as pre-watchdog.
+    """
+    _send({"type": "ping"})
+    deadline = time.monotonic() + pong_timeout_s
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            readable, _, _ = select.select([_REAL_STDIN], [], [], remaining)
+        except (OSError, ValueError):
+            return True
+        if not readable:
+            return False
+        line = _REAL_STDIN.readline()
+        if not line:
+            return False  # parent closed the pipe
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(msg, dict) and msg.get("type") == "pong":
+            return True
+        if worker.park_reply(msg):
+            continue
+        if isinstance(msg, dict) and "type" in msg:
+            # A request arriving during the heartbeat probe: replay it in main().
+            worker._deferred.append(msg)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--depth", type=int, default=int(os.environ.get("RLM_DEPTH", "1")))
     ap.add_argument("--timeout", type=float, default=float(os.environ.get("RLM_EXEC_TIMEOUT_S", "600")))
     ap.add_argument("--await-timeout", type=float,
                     default=float(os.environ.get("RLM_AWAIT_TIMEOUT_S", "600")))
+    ap.add_argument("--idle-timeout", type=float,
+                    default=float(os.environ.get("RLM_IDLE_TIMEOUT_S", "600")))
     ap.add_argument("--max-prompt-chars", type=int,
                     default=int(os.environ.get("RLM_MAX_PROMPT_CHARS", "400000")))
     args = ap.parse_args()
@@ -839,11 +898,23 @@ def main() -> None:
                     await_timeout_s=args.await_timeout)
     _send({"id": "_init", "ok": True})
 
+    # Idle watchdog: if the parent has been silent for idle_timeout_s, ping it.
+    # A live parent answers with a pong; a dead/migrated parent does not, and the
+    # worker exits instead of lingering forever as a zombie (stdin pipe writable
+    # end can be inherited by unrelated processes, so EOF is not a reliable exit).
+    idle_timeout_s = args.idle_timeout
+    pong_timeout_s = 5.0
+
     while True:
         # Requests that arrived mid-exec were parked by _pump; replay them before reading.
         req = worker.take_deferred()
         if req is None:
-            line = _REAL_STDIN.readline()
+            line = _readline_idle(idle_timeout_s)
+            if line is None:
+                # Idle timeout — probe the parent. Exit only if it is truly gone.
+                if not _ping_parent(worker, pong_timeout_s):
+                    return
+                continue
             if not line:
                 return
             raw = line.strip()
