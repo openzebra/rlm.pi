@@ -1,6 +1,6 @@
 /** Persist RLM settings (tunable config + pinned sub-LLM model id). */
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
@@ -9,8 +9,9 @@ import { DEFAULT_CONFIG } from "./defaults.ts";
 
 export interface PersistedSettings {
   readonly config: Partial<RlmConfig>;
-  /** "provider/id" of the pinned sub-LLM, or undefined for "cheapest (auto)". */
-  readonly llm?: string;
+  /** "provider/id" of the pinned sub-LLM, or undefined for "cheapest (auto)".
+   *  `null` = explicit "cheapest" clear (omit key on disk). */
+  readonly llm?: string | null;
 }
 
 type MutablePartialRlmConfig = { -readonly [K in keyof RlmConfig]?: RlmConfig[K] };
@@ -132,10 +133,17 @@ export async function loadSettings(): Promise<PersistedSettings> {
 export async function saveSettings(s: PersistedSettings): Promise<boolean> {
   try {
     const p = settingsPath();
-    const tmp = `${p}.tmp`;
     await mkdir(dirname(p), { recursive: true });
-    await writeFile(tmp, `${JSON.stringify(s, null, 2)}\n`);
-    await rename(tmp, p);
+    const body: Record<string, unknown> = { config: s.config };
+    if (s.llm !== undefined) {
+      // Explicit: string → write pin, null → omit key (cheapest).
+      if (s.llm !== null) body.llm = s.llm;
+    } else {
+      // Merge: preserve existing disk pin so config-only saves never strip it.
+      const existing = await loadSettings();
+      if (existing.llm) body.llm = existing.llm;
+    }
+    await writeFile(p, `${JSON.stringify(body, null, 2)}\n`);
     return true;
   } catch {
     return false;

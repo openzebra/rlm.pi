@@ -124,16 +124,6 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     await seedPromise;
   };
 
-  // Load persisted settings async — applied before session_start handler reads controller state
-  const settingsReady = loadSettings()
-    .then((persisted) => {
-      controller.config = mergeConfig(persisted.config);
-      controller.savedLlmRef = persisted.llm;
-    })
-    .catch((err) => {
-      console.warn(`[rlm] settings load failed: ${errorMessage(err)}`);
-    });
-
   // ── Message renderers ──
   // Markdown themes are derived from the injected `theme`, never pi's module-global
   // `getMarkdownTheme()` — under jiti that global can be undefined inside a plugin.
@@ -162,8 +152,11 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   let guidePosted = false;
 
   pi.on("session_start", async (_event, ctx) => {
-    // Wait for persisted settings before reading controller state
-    await settingsReady;
+    // Re-read settings fresh from disk each session so a pin or config change
+    // made during a previous session takes effect.
+    const persisted = await loadSettings();
+    controller.config = mergeConfig(persisted.config);
+    controller.savedLlmRef = persisted.llm ?? undefined;
 
     // An explicit --rlm flag wins over the persisted setting for this session.
     const flag = pi.getFlag("rlm");

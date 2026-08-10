@@ -30,6 +30,8 @@ export interface StartInput {
 export class RlmController {
   llmModel: Model<Api> | undefined;
   savedLlmRef: string | undefined;
+  /** Set by applyLlmSelection when the user explicitly picks "cheapest (auto)". */
+  explicitClearPin = false;
   private active: AbortController | null = null;
 
   constructor(public config: RlmConfig) {}
@@ -58,7 +60,10 @@ export class RlmController {
   async persist(): Promise<boolean> {
     return await saveSettings({
       config: this.config,
-      llm: modelRef(this.llmModel) ?? this.savedLlmRef,
+      // null → explicit clear; undefined → merge from disk; string → set pin
+      llm: this.explicitClearPin
+        ? null
+        : (modelRef(this.llmModel) ?? this.savedLlmRef),
     });
   }
 
