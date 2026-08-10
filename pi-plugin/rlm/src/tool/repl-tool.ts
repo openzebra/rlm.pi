@@ -6,7 +6,7 @@
  * and collects sub-calls manually from emitter events. No RlmEventAggregator is used
  * (ReplDetails ≠ RlmDetails structural mismatch).
  *
- * Sub-call handling itself lives in bridge/subcall-handlers.ts; this file only supplies the
+ * Sub-call handling lives in bridge/handlers/ (createSubcallHandlers); this file only supplies the
  * per-invocation Invocation those handlers resolve against, swapping it inside the
  * serialized exec slot so a queued repl() cannot claim the running one's emitter.
  *
@@ -27,7 +27,7 @@ import { LimitGuard, limitsFromConfig } from "../core/limits.ts";
 import type { RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
 import { SandboxManager } from "../sandbox/sandbox-manager.ts";
 import type { SubcallOpts } from "../sandbox/sandbox.ts";
-import { createSubcallHandlers, type Invocation } from "../bridge/subcall-handlers.ts";
+import { createSubcallHandlers, type Invocation } from "../bridge/handlers/index.ts";
 import { BackgroundTasks } from "./background-tasks.ts";
 import type { ReplResult } from "../sandbox/protocol.ts";
 import { RlmEmitter } from "./rlm-events.ts";
@@ -202,20 +202,19 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     name: "repl",
     label: "REPL",
     description:
-      "PRIMARY tool for ALL repository reading and analysis (read/grep are disabled in RLM mode). " +
-      "Persistent Python sandbox with loaded files in `context` (starts empty; cwd seeds on first " +
-      "call). Locate first with the free primitives search(query) / grep_context(pattern) / " +
-      "outline(path), then delegate the semantic reading to map_files / llm_query / " +
-      "llm_query_batched / llm_query_chunked (rlm_query for iterative sub-tasks) — stdout " +
-      "returned to you is hard-capped at 4K chars, so printing file bodies is useless. " +
-      "Variables, imports, and the `answers`/`plan` memo persist across calls. Also supports " +
-      "add_context for external dirs/files/git URLs and document conversion.",
+      "PRIMARY tool for bulk repository analysis (orchestrator). " +
+      "Persistent Python sandbox: free locate with search/grep_context/outline, then ALWAYS-SPAWN " +
+      "fan-out — llm_query/llm_batch/map_files/llm_query_chunked/rlm_query/rlm_batch return Task " +
+      "immediately (↯bg); collect with await_task. Prefer rlm_batch for ≥2 independent multi-step " +
+      "module studies; map_files/llm_batch for one-shot extracts. Fire independent Tasks first, " +
+      "free work, then await — never treat Task as the answer. Stdout hard-capped ~4K (no file dumps). " +
+      "`answers`/`plan` persist. add_context for external dirs/files/git/docs.",
     promptSnippet:
-      "repl: run Python in a persistent sandbox holding loaded files in `context`; " +
-      "search/grep_context/outline to locate, map_files/llm_query* to read.",
+      "repl: free search/outline; fire rlm_batch|map_files|llm_batch as Task (BG); await_task for results.",
     promptGuidelines: [
-      "In RLM mode, read the repository through `repl` only — `read`/`grep` and bash readers are blocked.",
-      "Inside `repl`, locate with search()/grep_context()/outline() before delegating bulk reading to map_files()/llm_query_batched().",
+      "Multi-area analysis: rlm_batch([...]) or map_files(paths, q); free search; await_task — not serial native read.",
+      "Always-spawn tools return Task; only await_task has content. Fire-all independent work before await.",
+      "llm_query/llm_batch have no disk — never 'Read path/to/file.ts'; use map_files or rlm_* (see context).",
     ],
     parameters: ReplToolParams,
 

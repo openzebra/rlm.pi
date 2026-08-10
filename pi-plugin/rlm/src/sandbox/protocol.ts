@@ -4,12 +4,20 @@
  * Newline-delimited JSON over the worker's stdin/stdout — no sockets, no HTTP.
  * Parent -> worker: requests (exec/load_context/shutdown) and llm replies.
  * Worker -> parent: request responses and mid-exec sub-LLM interrupts.
+ *
+ * Canonical api_v5 kinds only — no legacy `*_query_batched` wire names.
  */
 
 /** Requests the parent sends to the worker. */
 export type WorkerRequest =
   | { readonly id: string; readonly type: "exec"; readonly code: string }
-  | { readonly id: string; readonly type: "load_context"; readonly path: string; readonly index?: number; readonly json: boolean }
+  | {
+      readonly id: string;
+      readonly type: "load_context";
+      readonly path: string;
+      readonly index?: number;
+      readonly json: boolean;
+    }
   | { readonly id: string; readonly type: "shutdown" };
 
 /** Reply the parent sends to satisfy a sub-LLM interrupt. */
@@ -50,27 +58,27 @@ export interface WorkerResponse {
   readonly answer_content?: string;
   readonly raised?: boolean;
   readonly execution_time?: number;
-  // user-created variable names after this exec (filters builtins/context) — Metadata(stdout) for history orientation
+  // user-created variable names after this exec
   readonly var_names?: readonly string[];
   // load_context:
   readonly index?: number;
 }
 
-/** Kinds of sub-LLM interrupt the worker can raise mid-exec. */
+/** Canonical interrupt kinds (api_v5). */
 export type InterruptKind =
   | "llm_query"
-  | "llm_query_batched"
   | "rlm_query"
-  | "rlm_query_batched"
+  | "llm_batch"
+  | "rlm_batch"
+  | "await"
+  | "finish"
   | "add_context";
 
 interface InterruptBase {
   readonly rid: string;
   readonly depth: number;
   /**
-   * Started via `spawn()`: the request may outlive the `exec` that issued it, so the host
-   * must not attach it to that invocation's emitter or LimitGuard. Absent on the
-   * synchronous path.
+   * Detached work may outlive the exec that issued it.
    */
   readonly detached?: boolean;
 }
@@ -78,19 +86,29 @@ interface InterruptBase {
 interface PromptInterrupt extends InterruptBase {
   readonly type: "llm_query" | "rlm_query";
   readonly prompt?: string;
-  /**
-   * `rlm_query` only — path prefixes narrowing the child's inherited context. Never sent for
-   * `llm_query`, whose frame stays byte-identical to before.
-   */
+  /** `rlm_query` only — path prefixes narrowing the child's inherited context. */
   readonly paths?: readonly string[];
 }
 
-interface BatchedPromptInterrupt extends InterruptBase {
-  readonly type: "llm_query_batched" | "rlm_query_batched";
+interface BatchInterrupt extends InterruptBase {
+  readonly type: "llm_batch" | "rlm_batch";
   readonly prompts?: readonly string[];
-  /** `rlm_query_batched` only — one prefix set shared by every prompt in the batch. */
+  readonly tasks?: readonly string[];
   readonly paths?: readonly string[];
 }
+
+interface AwaitInterrupt extends InterruptBase {
+  readonly type: "await";
+  readonly task_id?: string;
+  readonly task_ids?: readonly string[];
+  readonly timeout_s?: number;
+}
+
+interface FinishInterrupt extends InterruptBase {
+  readonly type: "finish";
+  readonly summary?: string;
+}
+
 export interface AddContextInterrupt extends InterruptBase {
   readonly type: "add_context";
   readonly source?: string;
@@ -99,18 +117,24 @@ export interface AddContextInterrupt extends InterruptBase {
 /** A mid-exec sub-LLM/tool request from the worker. */
 export type WorkerInterrupt =
   | PromptInterrupt
-  | BatchedPromptInterrupt
+  | BatchInterrupt
+  | AwaitInterrupt
+  | FinishInterrupt
   | AddContextInterrupt;
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
 
-export const INTERRUPT_KINDS = Object.freeze(new Set<InterruptKind>([
-  "llm_query",
-  "llm_query_batched",
-  "rlm_query",
-  "rlm_query_batched",
-  "add_context",
-]));
+export const INTERRUPT_KINDS = Object.freeze(
+  new Set<InterruptKind>([
+    "llm_query",
+    "rlm_query",
+    "llm_batch",
+    "rlm_batch",
+    "await",
+    "finish",
+    "add_context",
+  ]),
+);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -121,11 +145,13 @@ function isWorkerResponse(value: unknown): value is WorkerResponse {
 }
 
 export function isInterrupt(msg: unknown): msg is WorkerInterrupt {
-  return isRecord(msg)
-    && typeof msg.type === "string"
-    && INTERRUPT_KINDS.has(msg.type as InterruptKind)
-    && typeof msg.rid === "string"
-    && typeof msg.depth === "number";
+  return (
+    isRecord(msg) &&
+    typeof msg.type === "string" &&
+    INTERRUPT_KINDS.has(msg.type as InterruptKind) &&
+    typeof msg.rid === "string" &&
+    typeof msg.depth === "number"
+  );
 }
 
 export function isWorkerMessage(msg: unknown): msg is WorkerMessage {

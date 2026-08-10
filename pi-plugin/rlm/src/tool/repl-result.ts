@@ -46,10 +46,10 @@ export function buildReplResultText(
   const nudge = answerSubmitted ? undefined : replDelegationNudge(rawText.length, delegated);
   const failedBg = subcalls.filter((s) => s.id.startsWith("bg") && s.status === "error").length;
   const pendingLine = backgroundPending > 0
-    ? `\n\n[rlm] ${backgroundPending} background task(s) still running — rlm_await_all(tasks) to collect.`
+    ? `\n\n[rlm] ${backgroundPending} background task(s) still running — await_task(tasks) to collect.`
     : "";
   const failedLine = failedBg > 0
-    ? `\n[rlm] ${failedBg} background sub-call(s) FAILED — their rlm_await value is an "Error: …" string, not data.`
+    ? `\n[rlm] ${failedBg} background sub-call(s) FAILED — their await_task value is an "Error: …" string, not data.`
     : "";
   return { text: cappedText + (nudge ?? "") + pendingLine + failedLine };
 }

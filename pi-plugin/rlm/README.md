@@ -110,14 +110,18 @@ These functions are injected into the model's Python namespace inside the REPL:
 | Function | Signature | Description |
 |---|---|---|
 | `context` | `list[dict]` | Loaded files as `[{"path","content","tokens"}, …]` — starts empty; cwd seeds on first `repl()` |
-| `llm_query` | `(prompt) -> str` | One-shot sub-LLM call (configured RLM LLM) |
-| `llm_query_batched` | `(prompts) -> list[str]` | Concurrent sub-LLM calls (pool-bounded) |
-| `llm_query_chunked` | `(text, prompt) -> list[str]` | Split large text into cap-sized chunks and fan out via sub-LLMs |
-| `rlm_query` | `(prompt, paths=None) -> str` | Recursive child RLM with its own sandbox (depth-capped). Inherits your `context`; `paths` narrows it by prefix |
-| `rlm_query_batched` | `(prompts, paths=None) -> list[str]` | Concurrent recursive child RLMs, sharing one `paths` slice |
+| `llm_query` | `(prompt) -> Task` | Always spawn one sub-LLM; `await_task` → `str` |
+| `llm_batch` | `(prompts) -> Task` | Always spawn many sub-LLMs in parallel; `await_task` → `list[str]` |
+| `llm_query_chunked` | `(text, prompt) -> Task` | Always spawn; split large text into cap-sized chunks; `await_task` → `list[str]` |
+| `map_files` | `(files, prompt) -> Task` | Always spawn; ask `prompt` of many files; `await_task` → `dict[path, answer]` |
+| `rlm_query` | `(prompt, paths=None) -> Task` | Always spawn recursive child RLM; `await_task` → report `str` |
+| `rlm_batch` | `(prompts, paths=None) -> Task` | Always spawn many child RLMs; `await_task` → `list[str]` |
+| `await_task` | `(Task \| list[Task])` | Collect result(s) from always-spawn tools |
 | `add_context` | `(source) -> dict \| str` | Append a dir, file, document, or git URL into `context` under `ctx/<id>/` |
 | `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
 | `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
+
+Fan-out posts run **detached** (BG / ↯bg): fire several Tasks, do free `search`/`grep`, then `await_task([...])`.
 
 ### Adding context
 
@@ -165,6 +169,31 @@ inherited by every child spawned afterwards.
 > cold start). Children are bounded separately (`maxConcurrentChildren`, default 6) because
 > each holds a full Python process and its own copy of the inherited context. Error and
 > wall-clock caps (above) still bound a runaway tree.
+
+## Prompt Architecture
+
+The system prompt is structured around a **contract / routing / examples / rules** pattern
+(api_v5, modeled on the best-performing arm from the RLM paper bake-off):
+
+| Section | Purpose |
+|---|---|
+| `<contract>` | Hard invariant: every heavy call returns a `Task`, never the answer. Only `await_task` returns content. |
+| `<routing>` | Decision tree: which tool for which job. Includes negative guidance ("NOT for") so the model knows when NOT to pick a tool. |
+| `<examples>` | Concrete E1–E7 patterns: good decompositions (rlm_batch for parallel studies, map_files for one-shot extracts) alongside anti-patterns with WHY each fails. |
+| `<rules>` | Standing orders: locate-then-delegate, memoize into `answers`, cap concurrent workers, author edits yourself. |
+
+Key design decisions (v0.3.2):
+
+- **Thinking rule:** the prompt tells the model *when* to plan out loud (complex decomposition,
+  uncertain targets) vs. when to jump straight to `repl()` (known paths, cheap lookups).
+- **Depth visibility:** child RLMs see `Recursion depth: N` in their system prompt and
+  calibrate ambition — they delegate only when their assigned task itself decomposes.
+- **Children are sandboxed:** the prompt explicitly states children cannot mutate the parent's
+  `answers`, `plan`, or REPL variables. Inheritance is one-way (read-only context).
+- **Root tasks wrapped in `<task>` XML tags** so the model cleanly separates user intent from
+  system instructions.
+- **`answer["ready"]` nudge:** runs that never finalize are wasted — the prompt reinforces
+  the contract with an explicit "You MUST flip" directive.
 
 ## Subagents and environment
 

@@ -6,8 +6,8 @@ This is NOT a security sandbox: __import__ and open are available, so code can i
 
 Protocol (parent -> worker):  {"id","type":"exec"|"load_context"|"shutdown", ...}
 Protocol (worker -> parent):  {"id","ok",...result}            # response to a request
-                              {"type":"llm_query"|"llm_query_batched"|"rlm_query"|
-                               "rlm_query_batched"|"add_context","rid",...}
+                              {"type":"llm_query"|"llm_batch"|"rlm_query"|
+                               "rlm_batch"|"add_context","rid",...}
                                                                 # mid-exec helper request
 When sandbox code calls llm_query/rlm_query/add_context, the worker writes a
 request line and BLOCKS reading stdin until the matching {"type":"llm_reply","rid",...} arrives.
@@ -15,7 +15,7 @@ The parent services the request in-process (it holds API keys).
 
 Requests and replies are decoupled: `_post` writes a request and returns its rid without
 waiting, and replies are parked in `_inbox` keyed by rid until something asks for them. That
-is what makes `spawn()` / `rlm_await()` / `rlm_await_all()` possible — many requests can be
+is what makes `spawn()` / `await_task()` / `await_task()` possible — many requests can be
 in flight at once (the parent already services interrupts concurrently), and a task may be
 awaited in a LATER exec than the one that started it.
 """
@@ -100,12 +100,13 @@ class Worker:
         # Replies parked by rid until something awaits them. Unbounded by design: a task
         # the model spawns and never awaits keeps its entry for the life of the process.
         # Bounded in practice by session length; evicting would silently hang a later
-        # rlm_await, which is strictly worse than the memory.
+        # await_task, which is strictly worse than the memory.
         self.inbox: dict[str, dict[str, Any]] = {}
         self._inflight: set[str] = set()
         # Requests (exec/shutdown) that arrived mid-exec; main() replays them.
         self._deferred: list[Any] = []
-        # True only while spawn() runs a builder — marks requests that may outlive this exec.
+        # Kept for spawn() compatibility; sub-LLM kinds always post detached=true so fan-out
+        # outlives the repl cell and shows ↯bg (see _post).
         self._detached = False
         self.ns: dict[str, Any] = {}
         self._setup()
@@ -127,13 +128,13 @@ class Worker:
         # Re-inject any scaffolding the user code clobbered.
         ns = self.ns
         ns["llm_query"] = self._llm_query
-        ns["llm_query_batched"] = self._llm_query_batched
+        ns["llm_batch"] = self._llm_batch
         ns["llm_query_chunked"] = self._llm_query_chunked
         ns["rlm_query"] = self._rlm_query
-        ns["rlm_query_batched"] = self._rlm_query_batched
+        ns["rlm_batch"] = self._rlm_batch
         ns["spawn"] = self._spawn
-        ns["rlm_await"] = self._await_task
-        ns["rlm_await_all"] = self._await_all
+        # One collect API: await_task(Task) or await_task([Task, ...])
+        ns["await_task"] = self._await_task
         ns["map_files"] = self._map_files
         ns["llm_map_reduce"] = self._llm_map_reduce
         ns["search"] = self._search
@@ -184,14 +185,19 @@ class Worker:
 
     # ---- sub-LLM bridge over stdio --------------------------------------------------------
 
+    # Sub-LLM fan-out always runs detached (session BG registry + ↯bg), whether called
+    # as llm_batch(...) or via map_files internals — not only when wrapped in spawn().
+    _DETACHED_KINDS = frozenset({"llm_query", "llm_batch", "rlm_query", "rlm_batch"})
+
     def _post(self, kind: str, payload: dict[str, Any]) -> str:
         """Write one parent request and return its rid WITHOUT waiting for the reply."""
         self._rid += 1
         rid = f"q{self._rid}"
         # Register only after the write succeeds — a broken pipe must not leave an
         # _inflight entry that nothing will ever settle.
+        detached = self._detached or kind in self._DETACHED_KINDS
         _send({"type": kind, "rid": rid, "depth": self.depth,
-               "detached": self._detached, **payload})
+               "detached": detached, **payload})
         self._inflight.add(rid)
         return rid
 
@@ -295,17 +301,17 @@ class Worker:
     def _start_rlm_query(self, prompt, paths=None) -> Task:
         return self._start_prompt("rlm_query", prompt, paths)
 
-    def _start_llm_query_batched(self, prompts) -> Task:
-        return self._start_prompts("llm_query_batched", prompts)
+    def _start_llm_batch(self, prompts) -> Task:
+        return self._start_prompts("llm_batch", prompts)
 
-    def _start_rlm_query_batched(self, prompts, paths=None) -> Task:
-        return self._start_prompts("rlm_query_batched", prompts, paths)
+    def _start_rlm_batch(self, prompts, paths=None) -> Task:
+        return self._start_prompts("rlm_batch", prompts, paths)
 
     def _start_llm_query_chunked(self, text, prompt: str) -> Task:
         """Split oversized text into cap-sized chunks and post EVERY batch at once.
 
         One answer per chunk, order preserved. No exceptions escape: errors come back as
-        "Error: ..." strings per chunk (same contract as llm_query_batched). Because all
+        "Error: ..." strings per chunk (same contract as llm_batch). Because all
         batches go on the wire together, a large input costs one round-trip of latency
         rather than one per 20 chunks.
 
@@ -334,7 +340,7 @@ class Worker:
                 f"{prompt}\n\n[chunk {i + j + 1}/{total} of the input]\n{c}"
                 for j, c in enumerate(chunks[i:i + _MAX_CHUNK_BATCH])
             ]
-            rids.append(self._post("llm_query_batched", {"prompts": batch}))
+            rids.append(self._post("llm_batch", {"prompts": batch}))
             sizes.append(len(batch))
         return Task(self, "llm_query_chunked", tuple(rids), _reduce_chunked(sizes), f"{total} chunks")
     def _builder_for(self, name: str):
@@ -342,17 +348,17 @@ class Worker:
         # depends on its own map results, so it cannot be one (rids, pure reduce) Task.
         return {
             "llm_query": self._start_llm_query,
-            "llm_query_batched": self._start_llm_query_batched,
+            "llm_batch": self._start_llm_batch,
             "llm_query_chunked": self._start_llm_query_chunked,
             "map_files": self._start_map_files,
             "rlm_query": self._start_rlm_query,
-            "rlm_query_batched": self._start_rlm_query_batched,
+            "rlm_batch": self._start_rlm_batch,
         }.get(name)
 
     def _spawn(self, fn, *args, **kwargs) -> Task:
         """Start a sub-call without waiting for it. `fn` is the scaffold function itself.
 
-        Returns a Task for rlm_await / rlm_await_all, possibly in a later ```repl``` block.
+        Returns a Task for await_task, possibly in a later ```repl``` block.
         Misuse returns an already-resolved error Task rather than raising, matching the
         "Error: ..." contract of the synchronous helpers.
         """
@@ -360,11 +366,10 @@ class Worker:
         builder = self._builder_for(name) if isinstance(name, str) else None
         if builder is None:
             return Task.resolved(self, "spawn", _surfaced_error(
-                "spawn() takes llm_query, llm_query_batched, llm_query_chunked, map_files, "
-                "rlm_query or rlm_query_batched — not llm_map_reduce, whose reduce step depends "
+                "spawn() takes llm_query, llm_batch, llm_query_chunked, map_files, "
+                "rlm_query or rlm_batch — not llm_map_reduce, whose reduce step depends "
                 "on its own map results and so cannot be a single Task"))
-        # Mark every request this builder posts as detached: the parent routes them to its
-        # session-scoped registry, since they may outlive the exec that started them.
+        # Sub-LLM kinds already post detached via _post; keep the flag for clarity / future kinds.
         self._detached = True
         try:
             return builder(*args, **kwargs)
@@ -373,34 +378,48 @@ class Worker:
         finally:
             self._detached = False
 
-    def _await_task(self, task) -> Any:
-        """Block until `task` has its result. Idempotent — the value is memoized."""
-        if not isinstance(task, Task):
-            return _surfaced_error(
-                f"rlm_await expects a Task from spawn(), got {type(task).__name__}"
-            )
+    def _await_one(self, task: Task) -> Any:
+        """Block until one Task has its result. Idempotent — the value is memoized."""
         if not task._settled:
             self._drain_until(task._rids)
             task._value = task._reduce(self._take(task._rids))
             task._settled = True
         return task._value
 
-    def _await_all(self, tasks) -> list:
-        """Block until every task has its result. Order matches the input."""
-        tasks = list(tasks)
-        # One union drain so the tasks overlap instead of settling one after another.
-        union: list[str] = []
-        seen: set[str] = set()
-        for t in tasks:
-            if not isinstance(t, Task) or t._settled:
-                continue
-            for rid in t._rids:
-                if rid not in seen:
-                    seen.add(rid)
-                    union.append(rid)
-        if union:
-            self._drain_until(union)
-        return [self._await_task(t) for t in tasks]
+    def _await_task(self, task_or_tasks) -> Any:
+        """Collect result(s). Accepts a single Task or a list/tuple of Tasks.
+
+        Canonical name for the model: await_task(...). (bare `await` is a Python keyword.)
+        """
+        if isinstance(task_or_tasks, Task):
+            return self._await_one(task_or_tasks)
+        if isinstance(task_or_tasks, (list, tuple)):
+            tasks = list(task_or_tasks)
+            union: list[str] = []
+            seen: set[str] = set()
+            for t in tasks:
+                if not isinstance(t, Task) or t._settled:
+                    continue
+                for rid in t._rids:
+                    if rid not in seen:
+                        seen.add(rid)
+                        union.append(rid)
+            if union:
+                self._drain_until(union)
+            out: list[Any] = []
+            for t in tasks:
+                if isinstance(t, Task):
+                    out.append(self._await_one(t))
+                else:
+                    out.append(
+                        _surfaced_error(
+                            f"await_task expects Task items, got {type(t).__name__}"
+                        )
+                    )
+            return out
+        return _surfaced_error(
+            f"await_task expects a Task or list of Tasks, got {type(task_or_tasks).__name__}"
+        )
 
     # ---- deterministic retrieval (no sub-LLM calls, no root tokens) -----------------------
 
@@ -488,20 +507,21 @@ class Worker:
         sizes: list[int] = []
         for i in range(0, len(requests), _MAX_CHUNK_BATCH):
             batch = requests[i:i + _MAX_CHUNK_BATCH]
-            rids.append(self._post("llm_query_batched", {"prompts": batch}))
+            rids.append(self._post("llm_batch", {"prompts": batch}))
             sizes.append(len(batch))
         return Task(self, "map_files", tuple(rids),
                     _reduce_map_files(sizes, spans), f"{len(by_path)} files")
 
     @_spawnable("map_files")
-    def _map_files(self, files: Any, prompt: str) -> dict[str, str]:
-        """Ask `prompt` of every given file, batched, and return {path: answer}.
+    def _map_files(self, files: Any, prompt: str) -> Task:
+        """Always spawn. Collect with await_task(t) → dict[path, answer].
 
         `files` accepts context entries (dicts), paths (strings), or a mix — the whole
         chunk/batch/collect loop the system prompt used to spell out, as one call.
         Oversized files are split and their per-chunk answers joined.
+        Posts are detached (↯bg) so fan-out outlives the repl cell.
         """
-        return self._await_task(self._start_map_files(files, prompt))
+        return self._start_map_files(files, prompt)
 
     def _llm_map_reduce(
         self,
@@ -532,27 +552,36 @@ class Worker:
                 f"{map_prompt}\n\n[{labels[i + j]}]\n{t}"
                 for j, t in enumerate(texts[i:i + _MAX_CHUNK_BATCH])
             ]
-            mapped.extend(self._llm_query_batched(batch))
+            # Core tools always return Task — helpers must await explicitly.
+            part = self._await_task(self._start_llm_batch(batch))
+            mapped.extend(part if isinstance(part, list) else [str(part)])
         joined = "\n\n".join(f"[{labels[i]}]\n{a}" for i, a in enumerate(mapped))
-        return self._llm_query(f"{reduce_prompt}\n\nPartial answers:\n{joined}")
+        reduced = self._await_task(
+            self._start_llm_query(f"{reduce_prompt}\n\nPartial answers:\n{joined}")
+        )
+        return str(reduced)
 
-    # ---- sync helpers: await(start(...)), so there is exactly one code path -----------------
+    # ---- Core tools: ALWAYS spawn (return Task). Collect with await_task only. ------------
 
     @_spawnable("llm_query")
-    def _llm_query(self, prompt: str) -> str:
-        return self._await_task(self._start_llm_query(prompt))
+    def _llm_query(self, prompt: str) -> Task:
+        """Always spawn. Collect with await_task(t). Never auto-awaits."""
+        return self._start_llm_query(prompt)
 
-    @_spawnable("llm_query_batched")
-    def _llm_query_batched(self, prompts) -> list[str]:
-        return self._await_task(self._start_llm_query_batched(prompts))
+    @_spawnable("llm_batch")
+    def _llm_batch(self, prompts) -> Task:
+        """Always spawn. Collect with await_task(t) → ordered list[str]."""
+        return self._start_llm_batch(prompts)
 
     @_spawnable("llm_query_chunked")
-    def _llm_query_chunked(self, text, prompt: str) -> list[str]:
-        return self._await_task(self._start_llm_query_chunked(text, prompt))
+    def _llm_query_chunked(self, text, prompt: str) -> Task:
+        """Always spawn. Collect with await_task(t) → list[str] (one answer per chunk)."""
+        return self._start_llm_query_chunked(text, prompt)
 
     @_spawnable("rlm_query")
-    def _rlm_query(self, prompt: str, paths=None) -> str:
-        return self._await_task(self._start_rlm_query(prompt, paths))
+    def _rlm_query(self, prompt: str, paths=None) -> Task:
+        """Always spawn. Collect with await_task(t)."""
+        return self._start_rlm_query(prompt, paths)
     def _add_context(self, source: str) -> dict[str, Any] | str:
         """Pack an external dir/file/git-URL on the host and append it into `context`.
 
@@ -691,9 +720,11 @@ class Worker:
                 out.append(item)
         return out
 
-    @_spawnable("rlm_query_batched")
-    def _rlm_query_batched(self, prompts, paths=None) -> list[str]:
-        return self._await_task(self._start_rlm_query_batched(prompts, paths))
+    @_spawnable("rlm_batch")
+    def _rlm_batch(self, prompts, paths=None) -> Task:
+        """Always spawn. Collect with await_task(t) → ordered list of reports."""
+        return self._start_rlm_batch(prompts, paths)
+
     # ---- context + execution --------------------------------------------------------------
 
     def load_context(self, path: str, index: int | None = None, is_json: bool = False) -> int:
@@ -753,7 +784,7 @@ class Worker:
             return []
         return [
             f"[rlm] huge raw-text variable(s): {', '.join(names)} — do NOT analyze them yourself; "
-            'delegate with llm_query_chunked(name, "your question") or slice + llm_query_batched.'
+            'delegate with llm_query_chunked(name, "your question") or slice + llm_batch.'
         ]
 
     def execute(self, code: str) -> dict[str, Any]:
@@ -824,7 +855,7 @@ def main() -> None:
                 _send({"id": "?", "ok": False, "error": f"bad json: {e}"})
                 continue
         # A task spawned in an earlier exec settling while the worker is idle. Park it for
-        # a later rlm_await; without this it would fall through to "unknown type" and the
+        # a later await_task; without this it would fall through to "unknown type" and the
         # result would be lost.
         if worker.park_reply(req):
             continue

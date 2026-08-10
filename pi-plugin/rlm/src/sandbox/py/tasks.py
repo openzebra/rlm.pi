@@ -42,7 +42,7 @@ def _reduce_batch(n: int):
 
 
 def _reduce_chunked(sizes: list[int], drop_empty: bool = True):
-    """Concatenate several llm_query_batched replies back into one flat chunk list.
+    """Concatenate several llm_batch replies back into one flat chunk list.
 
     drop_empty=True (llm_query_chunked): filter "" replies so results never degrade
     to blank entries; the flattened list may then be shorter than the chunk count,

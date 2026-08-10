@@ -73,7 +73,7 @@ export class DepthGates {
 
 /** Session-wide sub-call admission. Construct once; pass explicitly — never default one in. */
 export interface SubcallGates {
-  /** llm_query / llm_query_batched completions — terminal, so one shared gate. */
+  /** llm_query / llm_batch completions — terminal, so one shared gate. */
   readonly leaf: Semaphore;
   /** Recursive child engines — one gate per depth, see DepthGates. */
   readonly rlm: DepthGates;

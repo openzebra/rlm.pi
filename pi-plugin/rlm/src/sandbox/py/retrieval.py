@@ -15,7 +15,7 @@ from typing import Any
 
 
 _CHUNK_HEADER_OVERHEAD = 64
-_MAX_CHUNK_BATCH = 20          # fan-out per llm_query_batched call (matches prompt guidance)
+_MAX_CHUNK_BATCH = 20          # fan-out per llm_batch call (matches prompt guidance)
 _MAX_CHUNKS = 500              # ceiling: above this, force pre-filtering in Python
 _NUDGE_CHARS = 500_000         # str/bytes vars above this trigger a one-time stdout hint
 
@@ -167,11 +167,14 @@ class _Bm25Index:
         out: list[dict[str, Any]] = [None] * len(top)  # type: ignore[list-item]
         for i, (idx, score) in enumerate(top):
             text = self.texts[idx]
+            snip = text[:_SNIPPET_CHARS]
+            # Both `snippet` and `text` so agents never KeyError mixing search vs grep shapes.
             out[i] = {
                 "path": self.paths[idx],
                 "line": self.starts[idx],
                 "score": round(score, 3),
-                "snippet": text[:_SNIPPET_CHARS],
+                "snippet": snip,
+                "text": snip,
             }
         return out
 
@@ -179,8 +182,8 @@ class _Bm25Index:
 def search(entries: list[tuple[str, str]], index: _Bm25Index, query: str, k: int = 10, path_glob: str | None = None) -> list[dict[str, Any]]:
     """Rank `context` windows against a natural-language query (BM25).
 
-    Returns [{path, line, score, snippet}] — pointers, not bodies. Follow up by slicing the
-    named files out of `context` and delegating them to llm_query / map_files.
+    Returns [{path, line, score, snippet, text}] — pointers, not bodies.
+    `text` is an alias of `snippet` (same as grep_context hits).
     """
     terms = _tokenize(str(query))
     if not terms:
@@ -201,9 +204,9 @@ def grep_context(
 ) -> dict[str, Any]:
     """Regex over `context`, capped and shaped.
 
-    Returns {"hits": [{path, line, text}], "counts": {path: n}, "total": n, "truncated": bool}.
-    `counts` is complete even when `hits` is capped, so a wide pattern reports its shape
-    instead of flooding stdout.
+    Returns {"hits": [{path, line, text, snippet}], "counts": {path: n}, "total": n, "truncated": bool}.
+    `snippet` is an alias of `text` (same as search hits) to avoid KeyError footguns.
+    `counts` is complete even when `hits` is capped.
     """
     try:
         rx = re.compile(pattern)
@@ -234,7 +237,13 @@ def grep_context(
                 continue
             lo = max(0, i - pad_before)
             hi = min(len(lines), i + pad_after + 1)
-            hits.append({"path": path, "line": i + 1, "text": "\n".join(lines[lo:hi])[:_SNIPPET_CHARS]})
+            body = "\n".join(lines[lo:hi])[:_SNIPPET_CHARS]
+            hits.append({
+                "path": path,
+                "line": i + 1,
+                "text": body,
+                "snippet": body,
+            })
     return {"hits": hits, "counts": counts, "total": total, "truncated": total > len(hits)}
 
 def outline(entries: list[tuple[str, str]], path: str) -> str:

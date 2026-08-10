@@ -15,7 +15,8 @@ export interface ModelSelection {
 const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 type SelectableThinkingLevel = (typeof LEVELS)[number];
 
-const CHEAPEST_VALUE = "__rlm_cheapest__";
+/** Sentinel SelectList value for "always use cheapest available". */
+export const CHEAPEST_VALUE = "__rlm_cheapest__";
 
 /**
  * Models Pi itself would offer for this session, cheapest-first.
@@ -51,6 +52,24 @@ function items(models: readonly Model<Api>[], includeCheapest: boolean): SelectI
     { value: CHEAPEST_VALUE, label: "⟳ cheapest (auto)", description: "Always use the cheapest model with a configured key" },
     ...modelItems,
   ];
+}
+
+/**
+ * Index to pre-select in the model list (with cheapest row at 0 when included).
+ * Without this, the list always opens on "cheapest (auto)" and Enter silently unpins.
+ */
+export function initialModelPickerIndex(
+  models: readonly Model<Api>[],
+  current?: Model<Api>,
+  currentRef?: string,
+  includeCheapest = true,
+): number {
+  const offset = includeCheapest ? 1 : 0;
+  const ref = current ? `${current.provider}/${current.id}` : currentRef;
+  if (!ref) return 0;
+  const idx = models.findIndex((m) => `${m.provider}/${m.id}` === ref);
+  if (idx < 0) return 0;
+  return idx + offset;
 }
 
 function supportedThinkingLevels(model: Model<Api>): SelectableThinkingLevel[] {
@@ -106,6 +125,7 @@ export async function selectModel(
   models: readonly Model<Api>[],
   current?: Model<Api>,
   currentThinking?: ThinkingLevel,
+  currentRef?: string,
 ): Promise<ModelSelection | null | undefined> {
   if (models.length === 0) {
     ctx.ui.notify("RLM: no models available (add a provider key in Pi, or widen --models / enabledModels)", "warning");
@@ -114,7 +134,11 @@ export async function selectModel(
   if (ctx.mode !== "tui") {
     const fallback = models[0];
     if (!fallback) return undefined;
-    const model = current ?? fallback;
+    // Prefer an explicit pin (resolved model or saved ref) over "first = cheapest".
+    const fromRef = currentRef
+      ? models.find((m) => `${m.provider}/${m.id}` === currentRef)
+      : undefined;
+    const model = current ?? fromRef ?? fallback;
     return { model, thinkingLevel: await selectThinkingLevel(ctx, model, currentThinking) };
   }
 
@@ -134,6 +158,8 @@ export async function selectModel(
       scrollInfo: (t) => theme.fg("dim", t),
       noMatch: (t) => theme.fg("warning", t),
     });
+    const initial = initialModelPickerIndex(models, current, currentRef, true);
+    if (initial > 0) list.setSelectedIndex(initial);
     const isFilterText = (s: string): boolean => {
       const sanitized = s.replace(/ /g, "");
       return sanitized.length > 0 && Array.from(sanitized).every((char) => char >= " " && char !== "\x7f");

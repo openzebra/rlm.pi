@@ -1,5 +1,5 @@
 /**
- * Batch-gate regression — `llm_query_batched` must not re-enter the leaf gate.
+ * Batch-gate regression — `llm_batch` must not re-enter the leaf gate.
  *
  * A batch used to be wrapped in `gates.leaf.map(...)` while every `complete1` inside it took a
  * second slot on the SAME semaphore. Outer and inner acquisitions interleave, so effective
@@ -18,7 +18,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
-import { createSubcallHandlers, limitsFromRemaining } from "../src/bridge/subcall-handlers.ts";
+import { createSubcallHandlers, limitsFromRemaining } from "../src/bridge/handlers/index.ts";
 import { createSubcallGates } from "../src/util/concurrency.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import type { SubcallOpts } from "../src/sandbox/sandbox.ts";
@@ -98,8 +98,16 @@ const handlers = createSubcallHandlers({
 
 const prompts = Array.from({ length: BATCH }, (_, i) => `question ${i}`);
 const started = Date.now();
+/** api_v5: batch returns SpawnResult; collect via awaitTask. */
+async function runBatchAndAwait(): Promise<readonly string[] | null> {
+  const spawned = await handlers.llmBatch(prompts, 0, ATTACHED);
+  if (!spawned.ok || spawned.task_id === null) return null;
+  const collected = await handlers.awaitTask(spawned.task_id, undefined, undefined, 0, ATTACHED);
+  if (!collected.ok || collected.results === undefined) return null;
+  return collected.results;
+}
 const outcome = await Promise.race([
-  handlers.llmQueryBatched(prompts, 0, ATTACHED),
+  runBatchAndAwait(),
   sleep(DEADLOCK_MS).then((): null => null),
 ]);
 const elapsed = Date.now() - started;
@@ -117,8 +125,15 @@ check(
 check("leaf gate bound respected", peak > 0 && peak <= GATE_LIMIT, `peak=${peak}`);
 
 // A single llm_query must still work through the same gate.
+async function runSingleAndAwait(): Promise<string> {
+  const spawned = await handlers.llmQuery("one", 0, ATTACHED);
+  if (!spawned.ok || spawned.task_id === null) return `spawn-fail:${spawned.error ?? "?"}`;
+  const collected = await handlers.awaitTask(spawned.task_id, undefined, undefined, 0, ATTACHED);
+  if (!collected.ok) return collected.error ?? "await-fail";
+  return collected.result ?? "";
+}
 const single = await Promise.race([
-  handlers.llmQuery("one", 0, ATTACHED),
+  runSingleAndAwait(),
   sleep(DEADLOCK_MS).then((): string => "TIMEOUT"),
 ]);
 check("single llm_query still completes", single === "ok", single.slice(0, 60));
@@ -147,8 +162,15 @@ const childHandlers = createSubcallHandlers({
 });
 
 const childPrompts = Array.from({ length: 8 }, (_, i) => `child ${i}`);
+async function runChildBatch(): Promise<readonly string[] | null> {
+  const spawned = await childHandlers.rlmBatch(childPrompts, 0, ATTACHED);
+  if (!spawned.ok || spawned.task_id === null) return null;
+  const collected = await childHandlers.awaitTask(spawned.task_id, undefined, undefined, 0, ATTACHED);
+  if (!collected.ok || collected.results === undefined) return null;
+  return collected.results;
+}
 const childOut = await Promise.race([
-  childHandlers.rlmQueryBatched(childPrompts, 0, ATTACHED),
+  runChildBatch(),
   sleep(DEADLOCK_MS).then((): null => null),
 ]);
 check("child batch completes through the per-depth gate", childOut !== null);

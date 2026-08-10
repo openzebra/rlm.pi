@@ -23,7 +23,7 @@ export function formatContextListing(context: unknown): string {
       'Use `add_context("/path/to/dir")` / `add_context("docs.pdf")` / `add_context("https://…")` for external sources.',
       "Documents (PDF, DOCX, XLSX, PPTX, CSV, …) are converted to Markdown on the way in.",
       "",
-      "Use repl({code}) and delegate semantic reading to llm_query / llm_query_batched / llm_query_chunked.",
+      "Use repl({code}) and delegate semantic reading to llm_query / llm_batch / llm_query_chunked.",
     ].join("\n");
   }
 
@@ -53,7 +53,7 @@ export function formatContextListing(context: unknown): string {
     truncated,
     "",
     "File contents are loaded in the REPL `context` variable — file-reading tools are disabled.",
-    "Use repl({code}) and delegate semantic reading to llm_query / llm_query_batched / llm_query_chunked.",
+    "Use repl({code}) and delegate semantic reading to llm_query / llm_batch / llm_query_chunked.",
   ].join("\n");
 }
 

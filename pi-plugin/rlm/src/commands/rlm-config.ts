@@ -8,7 +8,7 @@ import type { RlmController } from "../mode/rlm-mode.ts";
 import { cheapestModel } from "../mode/llm-model.ts";
 import { setRlmModeStatus } from "../ui/status.ts";
 import { showConfigPanel } from "../ui/config-panel.ts";
-import { pickableModels, selectModel } from "../ui/model-picker.ts";
+import { pickableModels, selectModel, type ModelSelection } from "../ui/model-picker.ts";
 
 /** Newer Pi hosts expose session-scoped models; 0.79 peers do not — duck-type safely. */
 function sessionScopedModels(
@@ -16,6 +16,34 @@ function sessionScopedModels(
 ): readonly { readonly model: Model<Api> }[] | undefined {
   const scoped: unknown = Reflect.get(ctx, "scopedModels");
   return Array.isArray(scoped) ? scoped as readonly { readonly model: Model<Api> }[] : undefined;
+}
+
+/**
+ * Apply a model-picker result to controller pin state.
+ *
+ * - `null` → explicit "cheapest (auto)" (clear pin; leave reasoning alone)
+ * - `ModelSelection` → pin that model (and its thinking level, which may be undefined)
+ * - `undefined` → ESC / no change
+ */
+export function applyLlmSelection(
+  controller: RlmController,
+  llm: ModelSelection | null | undefined,
+): void {
+  if (llm === undefined) return;
+  if (llm === null) {
+    controller.llmModel = undefined;
+    controller.savedLlmRef = undefined;
+    return;
+  }
+  controller.llmModel = llm.model;
+  controller.savedLlmRef = modelRef(llm.model);
+  controller.setConfig(Object.freeze({
+    ...controller.config,
+    subSampling: Object.freeze({
+      ...controller.config.subSampling,
+      reasoning: llm.thinkingLevel,
+    }),
+  }));
 }
 
 export async function runRlmConfig(controller: RlmController, ctx: ExtensionContext): Promise<boolean> {
@@ -34,22 +62,13 @@ export async function runRlmConfig(controller: RlmController, ctx: ExtensionCont
     models,
     controller.llmModel,
     controller.config.subSampling.reasoning,
+    controller.savedLlmRef,
   );
-  if (llm !== undefined) {
-    controller.llmModel = llm?.model;
-    controller.setConfig(Object.freeze({
-      ...controller.config,
-      subSampling: Object.freeze({ ...controller.config.subSampling, reasoning: llm?.thinkingLevel }),
-    }));
-  }
+  // Only an explicit choice touches the pin. ESC leaves model + reasoning alone.
+  // Choosing cheapest must NOT wipe subSampling.reasoning (null !== undefined used to).
+  applyLlmSelection(controller, llm);
 
   controller.setConfig(await showConfigPanel(ctx, controller.config));
-
-  // Only an explicit choice touches the persisted pin. ESC (`undefined`) used to fall through
-  // here and freeze whatever cheapest resolved to at that moment, which silently ended
-  // "cheapest (auto)" for every later session — including once a cheaper model appeared.
-  if (llm === null) controller.savedLlmRef = undefined;          // "⟳ cheapest (auto)"
-  else if (llm !== undefined) controller.savedLlmRef = modelRef(llm.model);
 
   const persisted = await controller.persist();
   if (!persisted) ctx.ui.notify("RLM: failed to save settings to ~/.pi/agent/rlm.json", "error");

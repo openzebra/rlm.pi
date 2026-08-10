@@ -55,7 +55,7 @@ export interface RlmConfig {
    *  Keeps each turn short so the next turn's input stays manageable.
    *  `reasoning` is read from `smartReasoning` if omitted here. */
   readonly rootSampling?: Readonly<Sampling>;
-  /** System prompt injected into every llm_query / llm_query_batched sub-call.
+  /** System prompt injected into every llm_query / llm_batch sub-call.
    *  Instructs the worker model to respond concisely.
    *  undefined = no system prompt (raw completion). */
   readonly subSystemPrompt?: string;

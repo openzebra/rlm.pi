@@ -88,10 +88,13 @@ for _blocked in ("eval", "exec", "compile", "input", "globals", "locals"):
 
 RESERVED = frozenset(
     {
-        "llm_query", "llm_query_batched", "llm_query_chunked",
-        "rlm_query", "rlm_query_batched",
-        "spawn", "rlm_await", "rlm_await_all",
-        "map_files", "llm_map_reduce",
+        # Canonical api_v5
+        "llm_query", "llm_batch",
+        "rlm_query", "rlm_batch",
+        "await_task", "finish",
+        "spawn",
+        # Helpers (not the old *_query_batched API)
+        "llm_query_chunked", "map_files", "llm_map_reduce",
         "search", "grep_context", "outline",
         "add_context",
         "SHOW_VARS", "answer", "context",
@@ -126,7 +129,7 @@ def _stall_alarm(exec_timeout_s: float, stall_timeout_s: float):
     def _fire(signum, frame):  # noqa: ARG001
         raise _StallTimeout(
             f"sub-call stalled — no reply from the host for {stall_timeout_s:g}s "
-            "(the task may still be running; rlm_await it again in a later block)"
+            "(the task may still be running; await_task it again in a later block)"
         )
 
     old = signal.signal(signal.SIGALRM, _fire) if use else None

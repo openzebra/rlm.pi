@@ -5,32 +5,102 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.2] — 2025-08-10
+
+### Added
+
+- **Thinking/CoT guidance in native prompt.** A `THINKING RULE` section tells the model
+  when to plan out loud (complex decomposition, uncertainty) vs. jump to `repl()` (simple
+  lookups, known paths). Prevents premature repl() calls on uncertain targets.
+- **Depth visibility for child RLMs.** Sub-RLMs now see `Recursion depth: N` in their
+  system prompt with scoped ambition instructions — delegate only if the task itself must
+  decompose further.
+- **"NOT for" column in the Always-spawn tool table.** Each tool now has negative guidance
+  (e.g., `llm_query` — NOT for reading files; `rlm_batch` — NOT for trivia/one-shots).
+- **Context read-only contract.** Children are explicitly sandboxed: they cannot mutate
+  the parent's `answers`, `plan`, or REPL variables. Only the return string survives.
+- **answer["ready"] finalization nudge.** An explicit "You MUST flip" directive reinforces
+  the answer contract — runs that never finalize are discarded.
 
 ### Changed
 
-- **No per-call model override on REPL sub-calls.** `llm_query`, `llm_query_batched`,
-  `llm_query_chunked`, `map_files`, `llm_map_reduce`, `rlm_query`, and `rlm_query_batched`
-  no longer accept a `model=` argument. Every leaf completion uses the configured RLM LLM
-  (`/rlm-config` / `rlm.json` pin, else cheapest). Recursive children inherit the parent root
-  model. Removes the `"unknown model override"` failure path when agents invent bare model IDs.
+- **Root tasks wrapped in `<task>` XML tags** instead of `Answer the following:` prefix.
+  Cleanly separates user intent from system instructions (Anthropic Ch 04 pattern).
+- **Anti-pattern examples (E4–E7) now include WHY each fails** — consequence lines explain
+  the silent failure mode (e.g., "→ You'll read a Task repr, not the data. Silent garbage.").
+- **Native prompt budget remains at 9,500 chars** after all additions (currently 8,563).
 
 ### Fixed
 
-- **Subagent / process-boundary children stay able to read files.** RLM's native mode
-  blocks `read`/`grep` and routes through `repl`. That trade is only valid when `repl` is
-  actually in the **active** tool set. Official pi subagent spawns (`--tools read,…` with no
-  env flag) previously inherited the extension, lost `repl` to the allowlist, and still had
-  readers blocked — a blind child. Two layers:
-  1. **Env fast path** (PR
-     [#9](https://github.com/openzebra/rlm.pi/pull/9)): `PI_SUBAGENT_CHILD=1` bypasses RLM
-     entirely. Experimental `PI_RLM_FORCE_IN_SUBAGENT=1` is now **depth-gated** via
-     `PI_RLM_DEPTH` against `maxDepth` and **consumed** on activate so env inheritance cannot
-     unbounded-recurse across process trees (paper §7 exploding costs).
-  2. **Capability gate**: even when RLM loads, native reader blocks / caps / prompt addenda
-     apply only when `repl` is active (`pi.getActiveTools()`). Fail-open otherwise.
-  `test/subagent-bypass.ts` is wired into the smoke harness.
+- **native-smoke.ts assertion strings** updated for the api_v5 prompt restructure:
+  `"REPL Environment"` → `"REPL surface"`, `"Choosing Between Tools"` → `"Always-spawn fan-out"`,
+  `"Worked pattern"` → `"E1 multi-area study"`, `"Decomposition doctrine"` → `"LOCATE-THEN-DELEGATE"`.
 
+## [Unreleased]
+
+### Added
+
+- **Always-spawn fan-out (breaking).** `llm_query` / `llm_batch` / `rlm_query` /
+  `rlm_batch` / **`map_files` / `llm_query_chunked`** always return a Python `Task` —
+  never auto-await. Collect with `await_task(t)`. Only `llm_map_reduce` still blocks
+  (map then reduce). Fire independent Tasks, do free `search`/`grep`, then await once.
+- **Always-detached sub-LLM posts.** Bare `llm_batch` / `map_files` (not only
+  `spawn(...)`) post `detached=true` → host BG registry, **↯bg** marker, work outlives
+  the `repl()` cell. Fixes “looks serial / no BG” when agents call `map_files(...)`.
+- **Search/grep hit shape unified.** Both expose `snippet` and `text` keys (aliases) to
+  prevent `KeyError: 'snippet'` when agents mix the two APIs.
+
+
+- **api_v5 async-by-default subcall surface.** Canonical tools only:
+  `llm_query` / `llm_batch` / `rlm_query` / `rlm_batch` + `await_task` (Python; bare `await`
+  is a keyword) / `finish`. Host handlers live under `bridge/handlers/` (`completion`,
+  `emitting`, `task-registry`, `llm-query`, `rlm-query`, `await`, `finish`, assembly in
+  `index.ts`). Wire protocol kinds match worker + `interrupts.ts` (no legacy
+  `*_query_batched` names).
+- **Context refresh after native `edit`/`write`.** Disk mutations re-read into
+  `contextPayload` and the live worker REPL `context` so `search` / `grep_context` /
+  `map_files` / sub-LLMs no longer see pre-edit file bodies. See `context/refresh.ts` and
+  `SandboxManager.refreshFileFromDisk`.
+- **Unawaited-task runtime reminders** in the headless engine: between turns, if the run’s
+  task registry still has pending ids, inject
+  `[runtime] Unawaited task_ids: … — call await before finish.`
+- **Tests:** `phase-context-refresh.ts`, `phase-finish-warn.ts`; smoke harness updated.
+  Batch-gate / phase4 / async suites updated for SpawnResult + `awaitTask`.
+
+### Changed
+
+- **Native/headless prompts → api_v5 style (rlm_test bake-off winner).** Front-loaded
+  `<contract>` / `<routing>` / few-shots: multi-area work prefers `rlm_batch` /
+  `rlm_query` as always-spawn Tasks (fire → free locate → `await_task`), not serial
+  `repl` + native `read`. `repl` tool description and per-turn reminder match.
+  Explicit ban: path-only `llm_query("Read src/foo.ts…")` (no disk); use `map_files` /
+  `rlm_*` which attach `context`.
+- **Removed hard-blocks on native `read` / `grep` and bash readers.** Soft stdout caps remain
+  (`tool_result` for bash/find/ls/read/grep). Prompts no longer mention allow/deny of native
+  readers — prefer `repl` for bulk, tools stay available.
+- **Canonical batch names (breaking for model-facing REPL).** `llm_query_batched` →
+  `llm_batch`, `rlm_query_batched` → `rlm_batch`. No aliases. Collect with `await_task(Task)`
+  or `await_task([…])`.
+- **Leaf concurrency:** `complete1` takes `gates.leaf` once per completion; batches do not
+  double-acquire (deadlock fix retained). `childRun` uses per-depth `gates.rlm`.
+- **`finish` soft policy:** always succeeds; if pending tasks remain, returns `warning` listing
+  unawaited ids (does not auto-drain into the summary).
+- **No per-call model override on REPL sub-calls.** Leaf completions use the configured RLM LLM
+  only (`/rlm-config` / `rlm.json` pin, else cheapest). Recursive children inherit the parent
+  root model.
+- Deleted monolithic `bridge/subcall-handlers.ts` in favor of `bridge/handlers/` (single import
+  path).
+
+### Fixed
+
+- **Sub-LLM pin no longer resets to cheapest on every `/rlm-config`.** The model
+  picker always opened on "⟳ cheapest (auto)" and never pre-selected the current
+  pin, so Enter while reopening config silently cleared `rlm.json` `llm`. Now the
+  list starts on the pinned model (or saved ref); choosing cheapest no longer
+  wipes `subSampling.reasoning`; unresolved pins warn once and stay on disk.
+- **Host↔worker batch wire replies.** Interrupt layer maps handler returns to
+  `{ response }` / `{ responses: string[] }` (and unwraps SpawnResult via `awaitTask`) so the
+  worker reducers no longer see `malformed batched response` / double-quoted strings.
 - **Windows/cp1252 sandbox transport (issue
   [#7](https://github.com/openzebra/rlm.pi/issues/7), thanks [@eglove](https://github.com/eglove)).**
   Node always speaks UTF-8 on the host↔worker pipe and in context temp files, but Python text
@@ -44,6 +114,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   UTF-8, so a decode error is a transport bug and replacing would feed the model mojibake'd
   source. Also sets `windowsHide: true` on the worker spawn (matches pi) so each sandbox does
   not flash a console window on Windows.
+
+### Removed
+
+- Legacy model-facing names: `llm_query_batched`, `rlm_query_batched`, `rlm_await` /
+  `rlm_await_all` (use `await_task`), and the old hard-block native-reader policy.
 
 ## [0.3.0] - 2026-08-10
 

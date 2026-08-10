@@ -53,7 +53,7 @@ listing.split("\n").slice(0, 3).forEach(l => console.log(`  ${l.slice(0, 100)}`)
 check("formatContextListing — non-empty on real project", listing.length > 100);
 check("formatContextListing — contains 'Context:'", listing.includes("Context:"));
 check("formatContextListing — contains file paths", listing.includes(".ts") || listing.includes(".json"));
-check("formatContextListing — contains repl delegation hint", listing.includes("llm_query_batched"));
+check("formatContextListing — contains repl delegation hint", listing.includes("llm_batch"));
 
 if (totalFiles > 200) {
   check("formatContextListing — truncates large projects", listing.includes("more files"));
@@ -169,10 +169,10 @@ check("SandboxManager — disposed", !mgr.isAlive);
 const nativeOnly = buildNativeSystemPrompt();
 check("native prompt — within the documented budget", nativeOnly.length < NATIVE_PROMPT_BUDGET,
       ` (${nativeOnly.length.toLocaleString()} / ${NATIVE_PROMPT_BUDGET.toLocaleString()} chars)`);
-check("native prompt — includes REPL glossary", nativeOnly.includes("REPL Environment"));
-check("native prompt — includes the decomposition doctrine", nativeOnly.includes("Decomposition doctrine"));
-check("native prompt — includes worked pattern", nativeOnly.includes("Worked pattern"));
-check("native prompt — includes tool table", nativeOnly.includes("Choosing Between Tools"));
+check("native prompt — includes REPL glossary", nativeOnly.includes("REPL surface"));
+check("native prompt — includes the decomposition doctrine", nativeOnly.includes("LOCATE-THEN-DELEGATE"));
+check("native prompt — includes worked examples", nativeOnly.includes("E1 multi-area study"));
+check("native prompt — includes tool table", nativeOnly.includes("Always-spawn fan-out"));
 check("native prompt — guides native edit/write", nativeOnly.includes("edit") && nativeOnly.includes("write"));
 
 // ── Results ──

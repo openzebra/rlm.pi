@@ -7,6 +7,10 @@
 import { PythonSandbox, type SubLlmHandlers } from "./sandbox.ts";
 import type { ReplResult } from "./protocol.ts";
 import { mergeIntoContext } from "../context/merge.ts";
+import {
+  patchContextExecCode,
+  upsertContextFile,
+} from "../context/refresh.ts";
 
 /** Static configuration for sandbox creation — set once, reused across getOrCreate calls. */
 export interface SandboxManagerConfig {
@@ -15,7 +19,7 @@ export interface SandboxManagerConfig {
   readonly python: string;
   readonly sandboxInitTimeoutMs: number;
   readonly maxPromptChars: number;
-  /** Max seconds the worker waits for a host reply while parked in rlm_await. */
+  /** Max seconds the worker waits for a host reply while parked in await_task. */
   readonly awaitTimeoutS: number;
   readonly signal?: AbortSignal;
   readonly onSandboxDiscarded?: () => void;
@@ -48,6 +52,27 @@ export class SandboxManager {
    */
   appendContext(payload: unknown): void {
     this.contextPayload = mergeIntoContext(this.contextPayload, payload);
+  }
+
+  /**
+   * After native edit/write: replace file body in the host snapshot **and** the live worker.
+   * Rebuilds a new context list so BM25 index stamps invalidate.
+   */
+  async refreshFileFromDisk(
+    filePath: string,
+    content: string,
+    cwd: string,
+  ): Promise<void> {
+    this.contextPayload = upsertContextFile(this.contextPayload, filePath, content, cwd);
+    if (!this.sandbox || this.disposed) return;
+    // Avoid interleaving with an in-flight repl exec: queue like exec().
+    const code = patchContextExecCode(filePath, content, cwd);
+    try {
+      await this.execQueued(code);
+    } catch {
+      // Worker may be dead; next getOrCreate reloads contextPayload.
+      this.contextLoaded = false;
+    }
   }
 
   /**

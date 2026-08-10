@@ -7,8 +7,11 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { check, failureCount } from "./helpers.ts";
+import { applyLlmSelection } from "../src/commands/rlm-config.ts";
+import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
+import { RlmController } from "../src/mode/rlm-mode.ts";
 import { cheapestModel, compareLlm, isFreeModel } from "../src/mode/llm-model.ts";
-import { pickableModels } from "../src/ui/model-picker.ts";
+import { initialModelPickerIndex, pickableModels } from "../src/ui/model-picker.ts";
 
 interface ModelSpec {
   readonly provider: string;
@@ -127,6 +130,60 @@ check(
   pickableModels(reg, []).map(ref).join(",") === "vendor/cheap,vendor/dear",
 );
 check("pickableModels empty available yields empty", pickableModels(registryOf([])).length === 0);
+
+// ── Picker preselect: without this, Enter on reopen always unpins to cheapest ──
+{
+  const list = [cheapPaid, dearPaid];
+  check(
+    "no pin → preselect cheapest row (index 0)",
+    initialModelPickerIndex(list) === 0,
+  );
+  check(
+    "pinned model preselects its row (offset +1 for cheapest)",
+    initialModelPickerIndex(list, dearPaid) === 2,
+    String(initialModelPickerIndex(list, dearPaid)),
+  );
+  check(
+    "saved ref alone preselects when model object is missing",
+    initialModelPickerIndex(list, undefined, "vendor/dear") === 2,
+  );
+  check(
+    "unknown pin falls back to cheapest row",
+    initialModelPickerIndex(list, undefined, "missing/x") === 0,
+  );
+  check(
+    "without cheapest row, pin is the bare list index",
+    initialModelPickerIndex(list, dearPaid, undefined, false) === 1,
+  );
+}
+
+// ── applyLlmSelection: pin / cheapest / ESC must not silently wipe the wrong thing ──
+{
+  const ctrl = new RlmController({
+    ...DEFAULT_CONFIG,
+    subSampling: { ...DEFAULT_CONFIG.subSampling, reasoning: "high" },
+  });
+  ctrl.llmModel = dearPaid;
+  ctrl.savedLlmRef = "vendor/dear";
+
+  applyLlmSelection(ctrl, undefined);
+  check("ESC leaves pin and reasoning alone",
+    ctrl.savedLlmRef === "vendor/dear"
+    && ctrl.llmModel === dearPaid
+    && ctrl.config.subSampling.reasoning === "high");
+
+  applyLlmSelection(ctrl, null);
+  check("cheapest (auto) clears pin only",
+    ctrl.savedLlmRef === undefined
+    && ctrl.llmModel === undefined
+    && ctrl.config.subSampling.reasoning === "high");
+
+  applyLlmSelection(ctrl, { model: cheapPaid, thinkingLevel: "low" });
+  check("explicit model pins ref and updates reasoning",
+    ctrl.savedLlmRef === "vendor/cheap"
+    && ref(ctrl.llmModel) === "vendor/cheap"
+    && ctrl.config.subSampling.reasoning === "low");
+}
 
 console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
 process.exit(failureCount() === 0 ? 0 : 1);

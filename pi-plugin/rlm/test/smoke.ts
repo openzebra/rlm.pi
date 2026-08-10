@@ -17,7 +17,9 @@ const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const SUITES: readonly string[] = Object.freeze([
   "phase1.ts", "phase2.ts", "phase3.ts", "phase3-render.ts", "phase4.ts",
   "phase-chunked.ts", "phase-async.ts", "phase-batch-gate.ts", "phase-guards.ts",
-  "phase-context.ts", "phase-encoding.ts", "phase-retrieval.ts", "phase-llm-model.ts",
+  "phase-context.ts", "phase-context-refresh.ts", "phase-finish-warn.ts",
+  "phase-always-spawn.ts",
+  "phase-encoding.ts", "phase-retrieval.ts", "phase-llm-model.ts",
   "native-mode.ts", "native-smoke.ts", "subagent-bypass.ts",
 ]);
 
