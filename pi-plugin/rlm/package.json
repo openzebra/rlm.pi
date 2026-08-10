@@ -36,7 +36,8 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/openzebra/rlm.pi/main/assets/plugin-cover.png"
   },
   "publishConfig": {
     "access": "public"
