@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] — 2025-08-10
+
+### Fixed
+
+- **Pin wipe on toggle / config save.** `setEnabled()` and config-panel saves could write
+  `rlm.json` without the `llm` key if they fired before persisted settings loaded, silently
+  reverting to "cheapest" on the next session. `saveSettings` now merges the existing disk
+  `llm` when the caller provides no explicit pin, so config-only saves never strip it.
+- **Stale pin across sessions.** Settings were loaded once at extension boot; a pin set
+  during one session was invisible to the next session inside the same Pi process.
+  `session_start` now re-reads `rlm.json` from disk every session.
+- **No signal for explicit cheapest clear.** The pin-clear path (user picks "cheapest") was
+  indistinguishable from "not loaded yet", so a merge-only fix would also preserve a pin the
+  user wanted to remove. A new `explicitClearPin` flag on `RlmController` disambiguates:
+  explicit clear writes `null` (omit `llm` from disk), while no-op writes `undefined`
+  (trigger merge).
+- **Removed tmp+rename atomic writes.** Direct `writeFile` now. Simpler, no `.tmp` litter,
+  and the merge guards against partial writes — a zero-byte file is still a valid `{}`.
+
 ## [0.3.2] — 2025-08-10
 
 ### Added

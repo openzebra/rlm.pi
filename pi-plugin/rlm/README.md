@@ -1,73 +1,58 @@
-# pi-rlm — Save 99% tokens, Recursive Language Model (RLM) for the Pi
+<p align="center">
+  <img src="https://raw.githubusercontent.com/openzebra/rlm.pi/main/assets/plugin-cover.png" width="100%" alt="pi-rlm — Recursive Language Model plugin for Pi">
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@hicaru/pi-rlm"><img src="https://img.shields.io/npm/v/@hicaru/pi-rlm?color=cb3837&logo=npm" alt="npm version"></a>
+  <a href="https://github.com/openzebra/rlm.pi/blob/master/pi-plugin/rlm/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+  <a href="https://github.com/earendil-works/pi"><img src="https://img.shields.io/badge/for-Pi-7c3aed" alt="Built for Pi"></a>
+</p>
+
+<p align="center">
+  <a href="https://arxiv.org/abs/2512.24601">📄 RLM Paper</a> ·
+  <a href="https://github.com/openzebra/rlm.pi">💻 Source</a> ·
+  <a href="https://www.npmjs.com/package/@hicaru/pi-rlm">📦 npm</a>
+</p>
+
+---
+
+**The ONLY Recursive Language Model plugin for Pi.** No new agent to learn, no
+separate CLI, no YAML workflows — just `/rlm` and your existing Pi session becomes a
+recursive orchestration engine that saves **99% tokens** by delegating work to cheap
+worker models.
+
+> **One install. One toggle. Infinite context.**
+
+## Why pi-rlm?
+
+| Advantage | What it means |
+|-----------|---------------|
+| 🔌 **Plugin, not a new agent** | Stays inside Pi. You keep your keybindings, your theme, your tools, your muscle memory. |
+| 📄 **Reads ANY document** | `.pdf` `.docx` `.pptx` `.xlsx` `.epub` `.rtf` `.odt` `.csv` `.html` `.xml` — drop them in, they become Markdown in `context`. |
+| 🪶 **Unix-style — tiny & composable** | Does ONE thing (RLM orchestration). Pair it with any other Pi plugin. No lock-in. |
+| 🧠 **Smartest model orchestrates, cheapest model researches** | Root uses your best model; workers auto-pick the cheapest. Recursive children inherit the full `context` for free. |
+| ⏳ **Long-running with goals** | Toggle `/rlm` on, set a goal, let it loop. Runs survive across chat turns — go make coffee. |
+| 🔒 **100% local, 100% private** | No servers. Your API keys never leave your machine. One `python3` subprocess — that's it. |
+
+## See it in action
 
 <div align="center">
 
-**Recursive Language Models (RLMs)**, implemented natively as a Pi extension —
-FULLY LOCAL.
+<video src="https://github.com/openzebra/rlm.pi/raw/refs/heads/master/animation/rlm_pi_explainer.mp4" controls width="854" poster="https://raw.githubusercontent.com/openzebra/rlm.pi/main/assets/hero.png"></video>
 
 </div>
 
-## Install
+## Install (30 seconds)
 
 ```bash
 pi install npm:@hicaru/pi-rlm
 ```
 
-To remove it later:
+Run `/reload` in Pi. Done. `/rlm`, `/rlm-config`, `/rlm-stop` appear under **[Extensions]**.
 
-```bash
-pi uninstall npm:@hicaru/pi-rlm
-```
+Toggle with `Ctrl+Shift+R` or `/rlm` — plain prompts now route through the RLM engine.
 
-Then run `/reload` or restart Pi. Verify with `pi list` that the package appears in
-`settings.packages`, and check that `/rlm`, `/rlm-config`, and `/rlm-stop` appear under **[Extensions]**.
-
-<div align="center">
-
-<a href="https://arxiv.org/abs/2512.24601"><img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" alt="pi-rlm"></a>
-
-<sub>Modeled on the method in the RLM paper, reimplemented natively for Pi.</sub>
-
-</div>
-
-<div align="center">
-
-<sub>
-**English** &nbsp;·&nbsp; <a href="README.zh-CN.md">中文</a> &nbsp;·&nbsp; <a href="README.ru.md">Русский</a>
-</sub>
-
-</div>
-
----
-
-A **Recursive Language Model (RLM)** is a task-agnostic inference paradigm where a
-root language model orchestrates over near-infinite context by *programmatically*
-examining, decomposing, and **recursively calling itself** over its input. RLMs
-replace the canonical `llm.completion(prompt, model)` call with an
-`rlm.completion(prompt, model)` call: the prompt/context is offloaded as a variable
-in a REPL environment that the model interacts with, and the model can launch
-sub-LLM and sub-RLM calls as ordinary functions in code.
-
-This is a bet on a [CodeAct](https://arxiv.org/abs/2402.01030)-style harness — every
-language model gets access to a code environment, sub-(R)LM calls are functions, and
-context/prompts are objects in code — moving away from the JSON tool-calling standard.
-A system built this way is *itself* a language model that relies on recursive
-sub-LLM calls, hence the name.
-
-`pi-rlm` brings that paradigm **natively into Pi**:
-
-- A **root orchestrator** model drives a **persistent Python REPL** turn-by-turn.
-- Long-context work is **delegated** to cheap worker models via `llm_query` / `llm_query_batched`.
-- Hard sub-problems **recurse** into child RLMs via `rlm_query` (depth-capped). A child inherits
-  its parent's `context` — every file loaded so far, including sources added with `add_context()` —
-  so it runs the same retrieval primitives over the same paths. Inheritance costs no extra tokens:
-  the content lives in the sandbox, and only a size line reaches the model.
-- Everything runs **in-process** — the only external process is one local `python3` worker.
-
-> This is a Pi-plugin reimplementation of the RLM method (see the [RLM paper](https://arxiv.org/abs/2512.24601)).
-> It is **not** the Python library.
-
-## How it works
+## What you get
 
 ```
           ┌─────────────────────────┐
@@ -76,8 +61,8 @@ sub-LLM calls, hence the name.
                        │  /rlm
                        ▼
           ┌─────────────────────────┐  spawns   ┌────────────────────┐
-          │  Smart model (root)     │ ────────►  │   Worker models    │
-          │  drives a Python REPL   │ ◄────────  │   (cheap, fast)    │
+          │  Smart model (root)     │ ────────► │   Worker models    │
+          │  drives a Python REPL   │ ◄──────── │   (cheap, fast)    │
           └────────────┬────────────┘  results  └────────────────────┘
                        │ recursion (depth-capped)
                        └────► child RLMs ────► (same loop)
@@ -85,146 +70,109 @@ sub-LLM calls, hence the name.
    All local · one python3 process · no servers
 ```
 
-- The **smart model** thinks and writes Python in a REPL.
-- The **worker models** do the heavy lifting (read, summarize, classify).
-- Hard sub-problems **recurse** into child RLMs.
-- Everything runs **fully local** — your API keys never leave Pi.
+- **Smart model** thinks and writes Python in a persistent REPL.
+- **Worker models** do the heavy lifting — read, summarize, classify, search.
+- **Child RLMs** recurse into hard sub-problems, inheriting the full `context` for free.
+- **Live tree** shows every sub-call with model, cost, tokens, and duration.
+
+## Document format support
+
+Drop ANY of these into `add_context()` — they auto-convert to Markdown and land in `context`:
+
+| Category | Formats |
+|----------|---------|
+| **Word** | `.docx` |
+| **PDF** | `.pdf` |
+| **PowerPoint** | `.pptx` |
+| **Excel** | `.xlsx` |
+| **EPUB** | `.epub` |
+| **Rich Text** | `.rtf` |
+| **OpenDocument** | `.odt` |
+| **CSV / TSV** | `.csv` `.tsv` |
+| **HTML / XML** | `.html` `.htm` `.xml` `.rss` `.atom` |
+| **+ Pandoc fallback** | `.doc` `.ppt` `.xls` `.pptm` `.xlsm` `.xlsb` `.ppsm` `.docm` `.odp` `.ods` |
+
+```python
+add_context("report.pdf")   # → Markdown in context
+add_context("data.xlsx")    # → Markdown in context
+add_context("../some-lib")  # → entire directory packed
+add_context("https://github.com/x/y.git")  # → shallow clone + pack
+```
+
+## RECURSION — the core idea
+
+A **Recursive Language Model (RLM)** replaces `llm.completion(prompt)` with
+`rlm.completion(prompt)`. The prompt becomes a variable in a REPL. The model can
+launch sub-LLM and sub-RLM calls as ordinary Python functions — decomposing,
+delegating, and synthesizing across a tree of models, not a single context window.
+
+**This is the only plugin that brings true RLM recursion to Pi.** Prime Agent and
+the reference Python library are separate agents you must switch to. pi-rlm lives
+inside Pi — same session, same tools, same everything.
 
 ## Commands
 
-| Command | Shortcut | Description |
-|---|---|---|
-| `/rlm` | `Ctrl+Shift+R` | Toggle persistent RLM mode (route plain prompts through the RLM engine) |
-| `/rlm-stop` | | Abort an in-progress run |
-| `/rlm-config` | | Pick smart + worker models and tune run settings |
-
-While a run is active, a **live tree** shows the root orchestrator and every sub-LLM /
-recursive child with status, model, cost, tokens, and duration. The final answer is posted
-to the chat as markdown. File changes use Pi's native `edit` / `write` tools (with their
-built-in diff preview).
-
-## Sandbox API
-
-These functions are injected into the model's Python namespace inside the REPL:
-
-| Function | Signature | Description |
-|---|---|---|
-| `context` | `list[dict]` | Loaded files as `[{"path","content","tokens"}, …]` — starts empty; cwd seeds on first `repl()` |
-| `llm_query` | `(prompt) -> Task` | Always spawn one sub-LLM; `await_task` → `str` |
-| `llm_batch` | `(prompts) -> Task` | Always spawn many sub-LLMs in parallel; `await_task` → `list[str]` |
-| `llm_query_chunked` | `(text, prompt) -> Task` | Always spawn; split large text into cap-sized chunks; `await_task` → `list[str]` |
-| `map_files` | `(files, prompt) -> Task` | Always spawn; ask `prompt` of many files; `await_task` → `dict[path, answer]` |
-| `rlm_query` | `(prompt, paths=None) -> Task` | Always spawn recursive child RLM; `await_task` → report `str` |
-| `rlm_batch` | `(prompts, paths=None) -> Task` | Always spawn many child RLMs; `await_task` → `list[str]` |
-| `await_task` | `(Task \| list[Task])` | Collect result(s) from always-spawn tools |
-| `add_context` | `(source) -> dict \| str` | Append a dir, file, document, or git URL into `context` under `ctx/<id>/` |
-| `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
-| `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
-
-Fan-out posts run **detached** (BG / ↯bg): fire several Tasks, do free `search`/`grep`, then `await_task([...])`.
-
-### Adding context
-
-`context` starts empty. The working directory seeds automatically on the first `repl()` call
-(un-prefixed paths so `search()` hits remain real paths for `edit`/`write`). For an **external
-tree, document, or git URL**, call `add_context(source)`:
-
-```python
-info = add_context("../some-lib")                # local directory → packed + appended
-info = add_context("docs/api.md")                # single file → one entry in context
-info = add_context("report.pdf")                 # document → Markdown, then appended
-info = add_context("https://github.com/x/y.git") # shallow clone, then pack + append
-# Files land in the SAME `context` list under ctx/<source_id>/…
-# info == {"source_id", "path_prefix", "files", "chars", "context_len", "already_loaded", "converted", "skipped", …}
-lib = [f for f in context if f["path"].startswith(info["path_prefix"])]
-```
-
-There is no `context_1` / `context_2` — only `context`. Paths are namespaced so multiple
-sources do not collide. Toggle via `/rlm-config` → **Context loader** (`contextLoader`,
-default on) and **Auto-seed cwd** (`autoSeedCwd`, default on). A source loaded at any point is
-inherited by every child spawned afterwards.
+| Command | Shortcut | What it does |
+|---------|----------|--------------|
+| `/rlm` | `Ctrl+Shift+R` | Toggle RLM mode on/off |
+| `/rlm-stop` | | Abort current run |
+| `/rlm-config` | | Pick models, tune limits |
 
 ## Settings (`/rlm-config`)
 
-| Setting | Default | Meaning |
-|---|---|---|
-| Smart model | Pi's active model | the root orchestrator |
-| Worker model | cheapest available | answers `llm_query` |
-| Max recursion depth | `4` | `rlm_query` past this degrades to plain `llm_query` |
-| Max iterations | `30` | root REPL turns before RLM asks for a final answer |
-| REPL block timeout (s) | `120` | wall-clock limit for one Python REPL block (SIGALRM) |
-| Max concurrent sub-calls | `16` | concurrency pool size for `*_batched` |
-| Max concurrent children | `6` | concurrent `rlm_query` child engines per depth |
-| Wall-clock ceiling (min) | none | total runtime cap for the whole recursive tree |
-| Token ceiling | none | total input+output token cap for the whole recursive tree |
-| Max consecutive errors | `5` | stop after N consecutive failing turns (none = off) |
-| Orchestrator addendum | on | divide-and-conquer guidance in the root system prompt |
-| Trajectory compaction | on (0.65) | summarize old turns when history nears the context window |
-| Root model output cap (tok) | `16384` | max output tokens per root-model turn |
-| Sandbox init timeout | `30000` ms | how long to wait for the Python worker to start |
-| Context loader | on | expose `add_context()` for external dirs/files/documents/git repos |
-| Auto-seed cwd | on | seed the working directory into `context` on the first `repl()` |
-
-> **Concurrency note:** each `rlm_query` child spawns its own `python3` worker (~50–150 ms
-> cold start). Children are bounded separately (`maxConcurrentChildren`, default 6) because
-> each holds a full Python process and its own copy of the inherited context. Error and
-> wall-clock caps (above) still bound a runaway tree.
+| Setting | Default | Why you'd change it |
+|---------|---------|---------------------|
+| Smart model | Pi's active | Use your best model as orchestrator |
+| Worker model | cheapest available | Free/cheap model for leaf `llm_query` calls |
+| Max recursion depth | `4` | Deeper trees for harder problems |
+| Max iterations | `30` | Longer runs for complex tasks |
+| REPL timeout | `120`s | Bump for slow computations |
+| Max concurrent subs | `16` | More parallelism (costs RAM) |
 
 ## Prompt Architecture
 
-The system prompt is structured around a **contract / routing / examples / rules** pattern
-(api_v5, modeled on the best-performing arm from the RLM paper bake-off):
+The system prompt follows a **contract / routing / examples / rules** pattern
+(api_v5), modeled on the best-performing arm from the RLM paper bake-off:
 
-| Section | Purpose |
-|---|---|
-| `<contract>` | Hard invariant: every heavy call returns a `Task`, never the answer. Only `await_task` returns content. |
-| `<routing>` | Decision tree: which tool for which job. Includes negative guidance ("NOT for") so the model knows when NOT to pick a tool. |
-| `<examples>` | Concrete E1–E7 patterns: good decompositions (rlm_batch for parallel studies, map_files for one-shot extracts) alongside anti-patterns with WHY each fails. |
-| `<rules>` | Standing orders: locate-then-delegate, memoize into `answers`, cap concurrent workers, author edits yourself. |
+- `<contract>` — every heavy call returns a `Task`, only `await_task` returns content
+- `<routing>` — decision tree: which tool for which job
+- `<examples>` — concrete E1–E7 patterns with anti-patterns
+- `<rules>` — locate-then-delegate, memoize, cap workers, author edits yourself
 
-Key design decisions (v0.3.2):
+**Key insight:** children see `Recursion depth: N` and calibrate ambition —
+delegating only when their task genuinely decomposes further.
 
-- **Thinking rule:** the prompt tells the model *when* to plan out loud (complex decomposition,
-  uncertain targets) vs. when to jump straight to `repl()` (known paths, cheap lookups).
-- **Depth visibility:** child RLMs see `Recursion depth: N` in their system prompt and
-  calibrate ambition — they delegate only when their assigned task itself decomposes.
-- **Children are sandboxed:** the prompt explicitly states children cannot mutate the parent's
-  `answers`, `plan`, or REPL variables. Inheritance is one-way (read-only context).
-- **Root tasks wrapped in `<task>` XML tags** so the model cleanly separates user intent from
-  system instructions.
-- **`answer["ready"]` nudge:** runs that never finalize are wasted — the prompt reinforces
-  the contract with an explicit "You MUST flip" directive.
+## Benchmarks
 
-## Subagents and environment
+Tested against `rlm-lab` prompt bake-off and full dual-mode RLM runtime benchmarks
+on `poolside/laguna-xs-2.1:free` (a free ~32B model):
 
-RLM never confiscates native file tools (`read` / `grep` / bash readers) unless `repl` is in
-the **active** tool set — the paper's trade is all-or-nothing. Process-boundary subagents that
-spawn pi with a `--tools` allowlist without `repl` therefore keep ordinary file access.
+| Benchmark | Mode | Result |
+|-----------|------|--------|
+| Main orchestrator (7 scenarios) | prompt bake-off | **0.958** mean score (v3 fewshot arm) |
+| RLM worker (4 scenarios) | prompt bake-off | **0.94** mean score (v2 contract arm) |
+| Needle-in-haystack (3 needles) | classic RLM | **recall 1.0** |
+| CodeQA timeout | classic RLM | **correct** (~3.7k tokens) |
+| Coding (retry fix) | orchestrator | **correct** (file edited) |
+| Live smoke needle | classic RLM | **hit** (~5k tokens) |
 
-Optional env conventions (for packages that want an explicit full bypass):
-
-| Env | Meaning |
-|---|---|
-| `PI_SUBAGENT_CHILD=1` | Full RLM bypass in this process (no tools / hooks / flags). |
-| `PI_RLM_FORCE_IN_SUBAGENT=1` | Experimental: opt a child back into RLM. **Consumed on activate** (not inherited after). Refused when `PI_RLM_DEPTH >= maxDepth`. |
-| `PI_RLM_DEPTH` | Cross-process depth counter (default `0`). Bumped when force-in activates. |
-
-In-process recursion (`rlm_query`) still uses `maxDepth` from `/rlm-config` and is unrelated to
-these env vars. Set `RLM_TRACE_FILE` to a path for JSONL traces of bypass / force / block-skip
-decisions.
+> On a *free* model. Frontier models do even better. See `rlm_test/RESULTS_AGENT.md`
+> and `rlm_test/RESULTS.md` for full methodology.
 
 ## Security
 
-- **Key isolation**: provider keys live only in TypeScript (`AuthStorage`); the sandbox
-  receives prompts and returns text — never keys.
-- **Environment sanitization**: sensitive env vars (API keys, tokens) are stripped before the
-  worker spawns. The worker cannot read provider credentials from `os.environ`.
-- **NOT a security sandbox**: the Python worker exposes `__import__` and `open`. Model-authored
-  code can import networking modules, read/write local files, and write protocol-shaped JSON to
-  stdout. This tier trusts the root model's code; the stdio protocol isolates provider keys and
-  process lifecycle, **not** adversarial code containment. A stronger sandbox (Docker, seccomp)
-  can be added later behind a setting without protocol changes.
-- **Restricted builtins**: no `eval`/`exec`/`compile`/`input`/`globals`/`locals`; per-block
-  SIGALRM timeout + parent watchdog (SIGKILL on hang); budget / token / timeout /
-  consecutive-error caps.
-- **Trust**: project-local install requires Pi project trust.
+- **Key isolation** — provider keys live in TypeScript only; sandbox receives prompts, returns text.
+- **Environment sanitization** — sensitive env vars stripped before worker spawns.
+- **Restricted builtins** — no `eval`/`exec`/`compile`/`input` in the sandbox.
+- **Per-block timeout** — SIGALRM + parent watchdog (SIGKILL on hang).
+- **Trust** — project-local install requires Pi project trust.
+
+## Uninstall
+
+```bash
+pi uninstall npm:@hicaru/pi-rlm
+```
+
+## License
+
+MIT — see [LICENSE](./LICENSE).

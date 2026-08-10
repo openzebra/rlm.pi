@@ -33,10 +33,12 @@ export function applyLlmSelection(
   if (llm === null) {
     controller.llmModel = undefined;
     controller.savedLlmRef = undefined;
+    controller.explicitClearPin = true;
     return;
   }
   controller.llmModel = llm.model;
   controller.savedLlmRef = modelRef(llm.model);
+  controller.explicitClearPin = false;
   controller.setConfig(Object.freeze({
     ...controller.config,
     subSampling: Object.freeze({
