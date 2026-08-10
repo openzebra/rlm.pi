@@ -1,6 +1,6 @@
 /** Persist RLM settings (tunable config + pinned sub-LLM model id). */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
@@ -132,8 +132,10 @@ export async function loadSettings(): Promise<PersistedSettings> {
 export async function saveSettings(s: PersistedSettings): Promise<boolean> {
   try {
     const p = settingsPath();
+    const tmp = `${p}.tmp`;
     await mkdir(dirname(p), { recursive: true });
-    await writeFile(p, `${JSON.stringify(s, null, 2)}\n`);
+    await writeFile(tmp, `${JSON.stringify(s, null, 2)}\n`);
+    await rename(tmp, p);
     return true;
   } catch {
     return false;
