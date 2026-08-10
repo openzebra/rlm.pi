@@ -90,7 +90,7 @@ export const RECURSION_CONTEXT_LINES: readonly string[] = Object.freeze([
   "  Narrow its world with `rlm_query(prompt, paths=['src/auth/', 'ctx/x-9f3a/'])` — path PREFIXES,",
   "  not globs. Omit `paths` to hand over everything.",
   "  Inheritance is one-way: sources the child loads, and its whole REPL, die with it — only its",
-  "  final answer string returns.",
+  "  final answer string returns. The child cannot write to your `answers` or `plan`.",
   "  At the depth cap `rlm_query` degrades to a plain sub-LLM call with NO context, which is why",
   "  this section disappears at the last recursive depth.",
 ]);
@@ -281,6 +281,7 @@ export function replGlossary(
     "- `SHOW_VARS() -> str`: list every variable currently in the REPL.",
     '- `answer`: a dict initialized to {"content": "", "ready": False}. To submit your final answer,',
     '  set `answer["content"]` to the answer text and `answer["ready"] = True`.',
+    '  **You MUST flip `answer["ready"] = True` — runs that never finalize are discarded.**',
   );
   return lines.join("\n");
 }

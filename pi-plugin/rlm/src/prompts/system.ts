@@ -31,6 +31,8 @@ export interface SystemPromptOptions {
   readonly contextLoader?: boolean;
   /** depth > 0 — this run is an rlm_query child and its `context` is the parent's world. */
   readonly child?: boolean;
+  /** The recursion depth of this run (0 = root, 1 = first child, etc.). */
+  readonly depth?: number;
 }
 
 function orchestratorAddendum(maxPromptChars: number): string {
@@ -69,6 +71,15 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
   const maxPromptChars = opts.maxPromptChars ?? DEFAULT_PROMPT_CAP;
   const parts = [
     INTRO,
+  ];
+  if ((opts.depth ?? 0) > 0) {
+    parts.push(
+      "",
+      `**Recursion depth: ${opts.depth}.** You are a sub-RLM — focus narrowly on your assigned`,
+      "task. Delegate (rlm_query/rlm_batch) only if the task itself must decompose further.",
+    );
+  }
+  parts.push(
     "",
     howToRunCode(),
     "",
@@ -81,7 +92,7 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
     "dump a whole sub-LLM result. The full content persists across turns in REPL variables (call `SHOW_VARS()`).",
     "",
     "Start by probing `context` (print a few lines, count items). Then build up an answer to the query.",
-  ];
+  );
   if (opts.orchestrator ?? true) {
     // Two counterweights, both required (paper App. B): the addendum bounds OVER-recursion
     // (batching/cost), ENV_TIPS bounds UNDER-recursion (solving it yourself).
@@ -105,5 +116,5 @@ export function buildMetadataLine(meta: PromptMeta, maxPromptChars = DEFAULT_PRO
     ? ` Your context has ${meta.contextStats.files} files; per-file tokens run min ${meta.contextStats.min.toLocaleString()} / median ${meta.contextStats.median.toLocaleString()} / max ${meta.contextStats.max.toLocaleString()} — use this to gauge how many files fit per batch.`
     : "";
   const body = `${contextDesc} ${tail}${dist}`;
-  return meta.rootPrompt ? `Answer the following: ${meta.rootPrompt}\n\n${body}` : body;
+  return meta.rootPrompt ? `<task>${meta.rootPrompt}</task>\n\n${body}` : body;
 }

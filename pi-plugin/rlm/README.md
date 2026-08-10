@@ -170,6 +170,31 @@ inherited by every child spawned afterwards.
 > each holds a full Python process and its own copy of the inherited context. Error and
 > wall-clock caps (above) still bound a runaway tree.
 
+## Prompt Architecture
+
+The system prompt is structured around a **contract / routing / examples / rules** pattern
+(api_v5, modeled on the best-performing arm from the RLM paper bake-off):
+
+| Section | Purpose |
+|---|---|
+| `<contract>` | Hard invariant: every heavy call returns a `Task`, never the answer. Only `await_task` returns content. |
+| `<routing>` | Decision tree: which tool for which job. Includes negative guidance ("NOT for") so the model knows when NOT to pick a tool. |
+| `<examples>` | Concrete E1–E7 patterns: good decompositions (rlm_batch for parallel studies, map_files for one-shot extracts) alongside anti-patterns with WHY each fails. |
+| `<rules>` | Standing orders: locate-then-delegate, memoize into `answers`, cap concurrent workers, author edits yourself. |
+
+Key design decisions (v0.3.2):
+
+- **Thinking rule:** the prompt tells the model *when* to plan out loud (complex decomposition,
+  uncertain targets) vs. when to jump straight to `repl()` (known paths, cheap lookups).
+- **Depth visibility:** child RLMs see `Recursion depth: N` in their system prompt and
+  calibrate ambition — they delegate only when their assigned task itself decomposes.
+- **Children are sandboxed:** the prompt explicitly states children cannot mutate the parent's
+  `answers`, `plan`, or REPL variables. Inheritance is one-way (read-only context).
+- **Root tasks wrapped in `<task>` XML tags** so the model cleanly separates user intent from
+  system instructions.
+- **`answer["ready"]` nudge:** runs that never finalize are wasted — the prompt reinforces
+  the contract with an explicit "You MUST flip" directive.
+
 ## Subagents and environment
 
 RLM never confiscates native file tools (`read` / `grep` / bash readers) unless `repl` is in

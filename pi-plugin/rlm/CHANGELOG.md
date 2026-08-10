@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — 2025-08-10
+
+### Added
+
+- **Thinking/CoT guidance in native prompt.** A `THINKING RULE` section tells the model
+  when to plan out loud (complex decomposition, uncertainty) vs. jump to `repl()` (simple
+  lookups, known paths). Prevents premature repl() calls on uncertain targets.
+- **Depth visibility for child RLMs.** Sub-RLMs now see `Recursion depth: N` in their
+  system prompt with scoped ambition instructions — delegate only if the task itself must
+  decompose further.
+- **"NOT for" column in the Always-spawn tool table.** Each tool now has negative guidance
+  (e.g., `llm_query` — NOT for reading files; `rlm_batch` — NOT for trivia/one-shots).
+- **Context read-only contract.** Children are explicitly sandboxed: they cannot mutate
+  the parent's `answers`, `plan`, or REPL variables. Only the return string survives.
+- **answer["ready"] finalization nudge.** An explicit "You MUST flip" directive reinforces
+  the answer contract — runs that never finalize are discarded.
+
+### Changed
+
+- **Root tasks wrapped in `<task>` XML tags** instead of `Answer the following:` prefix.
+  Cleanly separates user intent from system instructions (Anthropic Ch 04 pattern).
+- **Anti-pattern examples (E4–E7) now include WHY each fails** — consequence lines explain
+  the silent failure mode (e.g., "→ You'll read a Task repr, not the data. Silent garbage.").
+- **Native prompt budget remains at 9,500 chars** after all additions (currently 8,563).
+
+### Fixed
+
+- **native-smoke.ts assertion strings** updated for the api_v5 prompt restructure:
+  `"REPL Environment"` → `"REPL surface"`, `"Choosing Between Tools"` → `"Always-spawn fan-out"`,
+  `"Worked pattern"` → `"E1 multi-area study"`, `"Decomposition doctrine"` → `"LOCATE-THEN-DELEGATE"`.
+
 ## [Unreleased]
 
 ### Added

@@ -177,6 +177,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         maxPromptChars: deps.config.maxPromptChars,
         contextLoader: deps.config.contextLoader,
         child: input.depth > 0,
+        depth: input.depth,
       });
 
       const contextHandlers = deps.config.contextLoader
