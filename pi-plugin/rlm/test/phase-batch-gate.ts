@@ -16,7 +16,8 @@
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { MOCK_REGISTRY } from "./helpers.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import { createSubcallHandlers, limitsFromRemaining } from "../src/bridge/handlers/index.ts";
 import { createSubcallGates } from "../src/util/concurrency.ts";
@@ -89,7 +90,7 @@ const emitter = new RlmEmitter();
 const handlers = createSubcallHandlers({
   resolve: (_opts, depth) => ({ emitter, parentId: undefined, depth, limits: limitsFromRemaining() }),
   gates: createSubcallGates(GATE_LIMIT),
-  registry: ModelRegistry.create(AuthStorage.create()),
+  registry: MOCK_REGISTRY,
   getLlmModel: () => fakeModel,
   getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 2 }),
 });
@@ -148,7 +149,7 @@ let childActive = 0;
 const childHandlers = createSubcallHandlers({
   resolve: (_opts, depth) => ({ emitter, parentId: undefined, depth, limits: limitsFromRemaining() }),
   gates: childGates,
-  registry: ModelRegistry.create(AuthStorage.create()),
+  registry: MOCK_REGISTRY,
   getLlmModel: () => fakeModel,
   getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 4 }),
   runChild: async () => {

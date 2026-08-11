@@ -12,7 +12,7 @@ export interface ModelSelection {
   readonly thinkingLevel?: ThinkingLevel;
 }
 
-const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 type SelectableThinkingLevel = (typeof LEVELS)[number];
 
 /** Sentinel SelectList value for "always use cheapest available". */

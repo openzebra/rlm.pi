@@ -148,8 +148,11 @@ check("pickableModels empty available yields empty", pickableModels(registryOf([
     initialModelPickerIndex(list, undefined, "vendor/dear") === 2,
   );
   check(
-    "unknown pin falls back to cheapest row",
-    initialModelPickerIndex(list, undefined, "missing/x") === 0,
+    // v0.3.2+ behavior (Root Cause #4): unknown saved ref pre-selects the FIRST real
+    // model (index 1 with cheapest row) — NOT "cheapest auto". Accidental Enter on
+    // cheapest would wipe the pin silently.
+    "unknown pin preselects first real model (not cheapest auto)",
+    initialModelPickerIndex(list, undefined, "missing/x") === 1,
   );
   check(
     "without cheapest row, pin is the bare list index",

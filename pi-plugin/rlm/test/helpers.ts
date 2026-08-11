@@ -51,6 +51,11 @@ export const MOCK_MODEL = {
 export const MOCK_REGISTRY = {
   getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "x", headers: {} }),
   find: () => undefined,
+  // 0.84.x migration: registry is constructed via `new ModelRegistry(runtime)`; the old
+  // `ModelRegistry.create(AuthStorage.create())` helper is gone. Tests that only need a
+  // registry for wiring (getAvailable/cheapestModel) can use these mock rows.
+  getAvailable: () => [MOCK_MODEL],
+  getAll: () => [MOCK_MODEL],
 } as unknown as ModelRegistry;
 
 /** Wrap code in the fenced block the engine's turn parser looks for. */

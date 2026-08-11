@@ -9,15 +9,12 @@ import { check, failureCount } from "./helpers.ts";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  AuthStorage,
   createAgentSession,
-  DefaultResourceLoader,
   getAgentDir,
+  ModelRuntime,
   type ModelRegistry as ModelRegistryType,
-  ModelRegistry,
-  SessionManager,
-  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { MOCK_REGISTRY } from "./helpers.ts";
 import { createEngine } from "../src/core/engine.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { loadSettings, mergeConfig } from "../src/config/settings.ts";
@@ -31,25 +28,19 @@ function capableModel(reg: ModelRegistryType) {
 
 
 async function main() {
-  const authStorage = AuthStorage.create();
-  const modelRegistry = ModelRegistry.create(authStorage);
+  const modelRegistry = MOCK_REGISTRY;
   const live = process.env.RLM_TEST_LIVE === "1";
   const model = live ? capableModel(modelRegistry) : cheapestModel(modelRegistry);
 
-  const loader = new DefaultResourceLoader({
-    cwd: process.cwd(),
-    agentDir: getAgentDir(),
-    extensionFactories: [rlmExtension],
-  });
-  await loader.reload();
-
+  // 0.84.x: createAgentSession no longer takes resourceLoader/sessionManager/settingsManager
+  // or an authStorage+registry pair — the SDK owns its own ModelRuntime (auth.json at agentDir)
+  // and extension loading. The global @hicaru/pi-rlm install is picked up from agentDir, which
+  // makes the suite skip via the tool-conflict branch below on hosts that already have rlm.
+  const modelRuntime = await ModelRuntime.create({ authPath: join(getAgentDir(), "auth.json") });
   const { session, extensionsResult } = await createAgentSession({
-    resourceLoader: loader,
+    agentDir: getAgentDir(),
     model,
-    authStorage,
-    modelRegistry,
-    sessionManager: SessionManager.inMemory(),
-    settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
+    modelRuntime,
   });
 
   const installedPackagePath = join(getAgentDir(), "npm", "node_modules", "@hicaru", "pi-rlm");
