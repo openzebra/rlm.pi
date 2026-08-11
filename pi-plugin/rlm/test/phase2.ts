@@ -5,7 +5,8 @@
  * RLM_TEST_LIVE=1. Run: RLM_TEST_LIVE=1 bun run pi-plugin/rlm/test/phase2.ts
  */
 
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { MOCK_REGISTRY } from "./helpers.ts";
 import {
   createSubcallHandlers,
   limitsFromRemaining,
@@ -15,8 +16,7 @@ import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 
 async function main() {
-  const authStorage = AuthStorage.create();
-  const registry = ModelRegistry.create(authStorage);
+  const registry = MOCK_REGISTRY;
   const models = registry.getAvailable();
   console.log(`available models: ${models.length}`);
   for (const m of models.slice(0, 8)) console.log(`  - ${m.provider}/${m.id}`);

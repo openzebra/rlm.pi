@@ -7,7 +7,8 @@
  * engine, and answer submission. Bounded to cheap models + few iterations.
  */
 
-import { AuthStorage, type ModelRegistry, ModelRegistry as MR } from "@earendil-works/pi-coding-agent";
+import { type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { MOCK_REGISTRY } from "./helpers.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { createEngine } from "../src/core/engine.ts";
@@ -74,7 +75,7 @@ function rlmOnlyHandlers(opts: {
   return createSubcallHandlers({
     resolve: (_o, depth) => ({ emitter, parentId: undefined, depth, limits }),
     gates: createSubcallGates(2),
-    registry: MR.create(AuthStorage.create()),
+    registry: MOCK_REGISTRY,
     getLlmModel: () => {
       throw new Error("leaf completion must not be reached in the recursion tests");
     },
@@ -354,8 +355,7 @@ async function main() {
   const guardOk = await testPreSpawnGuard();
   if (!guardOk) process.exit(1);
 
-  const authStorage = AuthStorage.create();
-  const registry = MR.create(authStorage);
+  const registry = MOCK_REGISTRY;
   const available = registry.getAvailable();
   if (available.length > 0) {
     const fallbackModel = available[0];

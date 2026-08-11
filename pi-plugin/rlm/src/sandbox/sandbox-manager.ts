@@ -106,10 +106,23 @@ export class SandboxManager {
       awaitTimeoutS: this.config.awaitTimeoutS,
       handlers,
     }).then(async (s) => {
+      // ②A: a dispose racing an in-flight spawn must not leak the worker — kill it the
+      // instant it resolves. dispose() awaits initPromise so this always runs before it returns.
+      if (this.disposed) {
+        await s.dispose().catch(() => {});
+        throw new Error("SandboxManager disposed during spawn");
+      }
       // Load context on first creation if available (empty list is a valid starting value).
-      if (this.contextPayload !== undefined) {
-        await s.loadContext(this.contextPayload);
-        this.contextLoaded = true;
+      try {
+        if (this.contextPayload !== undefined) {
+          await s.loadContext(this.contextPayload);
+          this.contextLoaded = true;
+        }
+      } catch (err) {
+        // ②B: never leak a spawned worker whose context load failed.
+        await s.dispose().catch(() => {});
+        this.initPromise = null;
+        throw err;
       }
       this.sandbox = s;
       this.initPromise = null;
@@ -196,6 +209,11 @@ export class SandboxManager {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    // ②A: a spawn in flight finishes after this.disposed was set — await it so the guard
+    // inside getOrCreate disposes its worker before dispose() returns (no leaked process).
+    if (this.initPromise) {
+      try { await this.initPromise; } catch { /* spawn failed or was disposed */ }
+    }
     await this.sandbox?.dispose();
     if (this.sandbox !== null) {
       this.sandbox = null;

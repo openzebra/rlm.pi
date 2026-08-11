@@ -3,7 +3,8 @@
  * Run: bun run pi-plugin/rlm/test/phase-finish-warn.ts
  */
 
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { MOCK_REGISTRY } from "./helpers.ts";
 import { check, failureCount } from "./helpers.ts";
 import {
   createSubcallHandlers,
@@ -27,7 +28,7 @@ const handlers = createSubcallHandlers(
       limits: limitsFromRemaining(),
     }),
     gates: createSubcallGates(2),
-    registry: ModelRegistry.create(AuthStorage.create()),
+    registry: MOCK_REGISTRY,
     getLlmModel: () => {
       throw new Error("should not complete");
     },
