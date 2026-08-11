@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] — 2026-08-11
+
+### Added
+
+- **`max` thinking level.** `reasoning: max` is now accepted by the settings validator
+  (`settings.ts`) and exposed in the `/rlm-config` model picker. Previously a hand-edited
+  `rlm.json` carrying `max` was silently dropped as an unknown level — only `off` remains
+  excluded (it is not a ThinkingLevel).
+
+### Changed
+
+- **pi-ai 0.84.1 compatibility.** `completeSimple` and the completion types now import from
+  `@earendil-works/pi-ai/compat` instead of the package root — the root re-export of these
+  symbols was removed upstream. Requires the 0.84.x peer line.
+- **Test migration to the 0.84.x `ModelRegistry` constructor.** The deprecated
+  `ModelRegistry.create(AuthStorage.create())` helper is gone; tests now share a
+  `MOCK_REGISTRY` (`helpers.ts`) that supplies `getAvailable`/`getAll` for wiring.
+
+### Fixed
+
+- **Worker leak when `dispose()` races an in-flight spawn.** If `SandboxManager.dispose()`
+  fired while a Python worker was still spawning, the freshly-resolved process was never
+  killed — it leaked. `dispose()` now awaits the pending `initPromise`, and the spawn guard
+  disposes the worker the instant it resolves, so no process survives teardown.
+- **Worker leak on failed context load.** If `loadContext` threw during first spawn, the
+  spawned worker was abandoned without disposal. It is now disposed and the `initPromise`
+  is cleared, so the next call can retry cleanly.
+
+### Docs
+
+- **READMEs rewritten** (root, `pi-plugin/rlm`): added benchmark tables, supported document
+  formats, and a "Why pi-rlm?" section; new plugin cover image.
+
 ## [0.3.3] — 2025-08-10
 
 ### Fixed
