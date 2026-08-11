@@ -19,7 +19,7 @@ const CHOICES = Object.freeze({
   compactionThresholdPct: Object.freeze(["50", "65", "80", "90"]),
   rootSamplingMaxTokens: Object.freeze(["4096", "8192", "16384", "32768"]),
   sandboxInitTimeoutMs: Object.freeze(["10000", "30000", "60000", "120000"]),
-  requestTimeoutMs: Object.freeze(["2", "5", "10", "20"]),
+  requestTimeoutMs: Object.freeze(["2", "5", "10", "15", "20"]),
   contextLoader: Object.freeze(["on", "off"]),
   autoSeedCwd: Object.freeze(["on", "off"]),
 });

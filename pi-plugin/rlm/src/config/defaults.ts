@@ -11,7 +11,7 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   maxDepth: 4,
   maxIterations: 30,
   execTimeoutS: 120,
-  requestTimeoutMs: 10 * 60_000,
+  requestTimeoutMs: 15 * 60_000,
   // Session-wide, not per-batch: spawn() puts many requests on the wire at once, so this is
   // the only thing bounding leaf fan-out.
   maxConcurrentSubcalls: 16,
