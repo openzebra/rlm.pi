@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/openzebra/rlm.pi/master/assets/plugin-cover.png" width="100%" alt="pi-rlm — Recursive Language Model plugin for Pi">
+  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/plugin-cover.png?raw=true" width="100%" alt="pi-rlm — Recursive Language Model plugin for Pi">
 </p>
 
 <p align="center">

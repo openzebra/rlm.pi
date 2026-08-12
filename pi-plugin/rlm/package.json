@@ -1,6 +1,6 @@
 {
 	"name": "@hicaru/pi-rlm",
-	"version": "0.3.5",
+	"version": "0.3.6",
 	"author": "hicaru",
 	"repository": {
 		"type": "git",
@@ -37,7 +37,7 @@
 		"extensions": [
 			"./src/index.ts"
 		],
-		"image": "https://raw.githubusercontent.com/openzebra/rlm.pi/master/assets/plugin-cover.png"
+		"image": "https://github.com/openzebra/rlm.pi/blob/master/assets/plugin-cover.png?raw=true"
 	},
 	"publishConfig": {
 		"access": "public"
