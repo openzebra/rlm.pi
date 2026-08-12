@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] — 2026-08-13
+
+### Fixed
+
+- **Plugin cover image on pi.dev.** The `pi.image` URL in `package.json` pointed at the
+  `main` branch, but the repository's default branch is `master` — the raw GitHub URL
+  404'd and pi.dev rendered no image. The URL now resolves against `master`, and the
+  same broken `main` references in the root and plugin READMEs (cover `<img>`, video
+  posters) were corrected. `assets/plugin-cover.png` now shows as the plugin image.
+
 ## [0.3.4] — 2026-08-11
 
 ### Added

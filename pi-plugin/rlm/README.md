@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/openzebra/rlm.pi/main/assets/plugin-cover.png" width="100%" alt="pi-rlm — Recursive Language Model plugin for Pi">
+  <img src="https://raw.githubusercontent.com/openzebra/rlm.pi/master/assets/plugin-cover.png" width="100%" alt="pi-rlm — Recursive Language Model plugin for Pi">
 </p>
 
 <p align="center">
@@ -38,7 +38,7 @@ worker models.
 
 <div align="center">
 
-<video src="https://github.com/openzebra/rlm.pi/raw/refs/heads/master/animation/rlm_pi_explainer.mp4" controls width="854" poster="https://raw.githubusercontent.com/openzebra/rlm.pi/main/assets/hero.png"></video>
+<video src="https://github.com/openzebra/rlm.pi/raw/refs/heads/master/animation/rlm_pi_explainer.mp4" controls width="854" poster="https://raw.githubusercontent.com/openzebra/rlm.pi/master/assets/hero.png"></video>
 
 </div>
 
