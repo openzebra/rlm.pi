@@ -579,9 +579,16 @@ class Worker:
         return self._start_llm_query_chunked(text, prompt)
 
     @_spawnable("rlm_query")
-    def _rlm_query(self, prompt: str, paths=None) -> Task:
-        """Always spawn. Collect with await_task(t)."""
-        return self._start_rlm_query(prompt, paths)
+    def _rlm_query(self, prompt=None, task=None, paths=None) -> Task:
+        """Always spawn. Collect with await_task(t). Accepts `task=` or `prompt=` (same string)."""
+        p = prompt if prompt is not None else task
+        if not isinstance(p, str) or not p.strip():
+            raise TypeError(
+                "rlm_query() needs the study text: rlm_query(task='…', paths=[…]) "
+                "or positionally rlm_query('…', paths=[…])"
+            )
+        return self._start_rlm_query(p, paths)
+
     def _add_context(self, source: str) -> dict[str, Any] | str:
         """Pack an external dir/file/git-URL on the host and append it into `context`.
 
@@ -721,9 +728,17 @@ class Worker:
         return out
 
     @_spawnable("rlm_batch")
-    def _rlm_batch(self, prompts, paths=None) -> Task:
-        """Always spawn. Collect with await_task(t) → ordered list of reports."""
-        return self._start_rlm_batch(prompts, paths)
+    def _rlm_batch(self, prompts=None, tasks=None, paths=None) -> Task:
+        """Always spawn. Collect with await_task(t) → ordered list of reports.
+
+        Accepts `tasks=` or `prompts=` (same list) — the docs say `tasks`, legacy calls say `prompts`.
+        """
+        p = prompts if prompts is not None else tasks
+        if not isinstance(p, (list, tuple)) or len(p) == 0:
+            raise TypeError(
+                "rlm_batch() needs a non-empty list of studies: rlm_batch(tasks=['…','…'], paths=[…])"
+            )
+        return self._start_rlm_batch(list(p), paths)
 
     # ---- context + execution --------------------------------------------------------------
 

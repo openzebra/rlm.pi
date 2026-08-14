@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] — 2026-08-13
+
+### Fixed
+
+- **`rlm_query(task=…)` / `rlm_batch(tasks=[…])` TypeError.** The native-mode prompt
+  docs advertise `task`/`tasks` as the kwarg names for recursive calls, but the Python
+  scaffold (`worker.py`) only accepted `prompt`/`prompts` — every documented call raised
+  `TypeError: unexpected keyword argument 'task'`, and because the exception fired before
+  the assignment, the task variable never landed in the REPL namespace, cascading into
+  `NameError`/`KeyError` ghosts in every later cell. Both spellings are now accepted
+  (`task=`/`tasks=` canonical, `prompt=`/`prompts=` legacy, positional unchanged), and a
+  bad call raises a self-describing `TypeError` whose message shows the correct call shape.
+  `paths=` forwarding to the host handler is unaffected.
+
+### Changed
+
+- **Prompt docs state the dual signature explicitly.** `glossary.ts` and `native.ts` now
+  document `rlm_query(task|prompt, …)` / `rlm_batch(tasks|prompts, …)` and add a REPL
+  contract line: if a spawn call raises, the assignment did not run and the variable is
+  undefined in later cells — re-spawn with the corrected signature from the error message.
+
+### Added
+
+- **`test/phase-scaffold.ts`** — regression suite for the scaffold signatures: all spellings
+  spawn/await/return correctly, `paths` reaches the host handler, TypeErrors self-describe,
+  and a doc-drift guard parses the prompt sources for every advertised `rlm_*` kwarg and
+  fails if the worker scaffold does not accept it.
+
 ## [0.3.6] — 2026-08-13
 
 ### Fixed

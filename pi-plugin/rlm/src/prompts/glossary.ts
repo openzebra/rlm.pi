@@ -264,7 +264,9 @@ export function replGlossary(
   }
   if (recursion) {
     lines.push(
-      "- `rlm_query(task, paths=None) -> Task` / `rlm_batch(tasks, paths=None) -> Task`:",
+      "- `rlm_query(task|prompt, paths=None) -> Task` / `rlm_batch(tasks|prompts, paths=None) -> Task`:",
+      "  always spawn + ↯bg. await_task for the report string(s). Child REPL is private.",
+      "  Both spellings accepted; prefer `task`/`tasks`.",
       "  always spawn + ↯bg. await_task for the report string(s). Child REPL is private.",
       "",
       "  **Routing (api_v5):**",

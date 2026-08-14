@@ -20,3 +20,5 @@ __pycache__/
 
 # npm pack output
 *.tgz
+
+.DS_Store
