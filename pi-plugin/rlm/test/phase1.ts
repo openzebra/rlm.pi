@@ -174,13 +174,13 @@ async function main() {
   {
     const noVars = formatReplOutputs([{
       stdout: "x".repeat(5000), stderr: "", finalAnswer: null, answerContent: "",
-      raised: false, executionTimeMs: 0, varNames: [],
+      raised: false, executionTimeMs: 0, varNames: [], pendingTasks: [],
     }]);
     check("elision note uses slices, not 'assign first'", noVars.includes("inspect slices"), noVars.slice(-80));
     check("elision + empty vars gives fallback hint", noVars.includes("No REPL vars yet"), noVars.slice(-80));
     const skipped = formatReplOutputs([{
       stdout: "boom", stderr: "", finalAnswer: null, answerContent: "",
-      raised: true, executionTimeMs: 0, varNames: [],
+      raised: true, executionTimeMs: 0, varNames: [], pendingTasks: [],
     }], 2);
     check("M2: skipped later block note is included", skipped.includes("2 later") && skipped.includes("skipped"), skipped);
   }

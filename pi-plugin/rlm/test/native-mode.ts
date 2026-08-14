@@ -88,6 +88,29 @@ function testSilentBlockVarsHint() {
 
   const answered = buildReplResultText("", "the answer", [], 0, ["answers"]);
   check("buildReplResultText — answer submission outranks the hint", !answered.text.includes("Do NOT re-run"));
+
+  const raisedEmpty = buildReplResultText(
+    "", undefined, [], 0, ["t", "answers"],
+    "NameError: name 'glob' is not defined\nTraceback (most recent call last):\n  File \"<repl>\"",
+    true,
+  );
+  check("buildReplResultText — raised empty stdout shows [stderr]", raisedEmpty.text.includes("[stderr]"));
+  check("buildReplResultText — raised empty stdout shows NameError", raisedEmpty.text.includes("NameError"));
+  check("buildReplResultText — raised never says ran fine", !raisedEmpty.text.includes("ran fine"));
+
+  const raisedPrinted = buildReplResultText(
+    "before boom\n", undefined, [], 0, ["t"],
+    "KeyError: 'studies_task'",
+    true,
+  );
+  check("buildReplResultText — raised keeps prior stdout", raisedPrinted.text.includes("before boom"));
+  check("buildReplResultText — raised appends stderr after stdout", raisedPrinted.text.includes("KeyError"));
+
+  const pendingNamed = buildReplResultText("out", undefined, [], 1, ["t"], "", false, [
+    { var: "t", kind: "rlm_batch", label: "×4" },
+  ]);
+  check("buildReplResultText — pending line names the Task var", pendingNamed.text.includes("await_task(t)"));
+  check("buildReplResultText — pending line does not say await_task(tasks)", !pendingNamed.text.includes("await_task(tasks)"));
 }
 
 function testCollectReplWarnings() {

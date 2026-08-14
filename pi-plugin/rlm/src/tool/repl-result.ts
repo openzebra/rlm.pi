@@ -5,7 +5,9 @@
  */
 
 import type { RlmSubcall } from "./rlm-details.ts";
+import type { PendingTaskInfo } from "../sandbox/protocol.ts";
 import { capReplResultText, replDelegationNudge } from "../mode/native-guards.ts";
+import { formatReplStderr } from "../text/repl-output.ts";
 
 /** Model-visible text assembled from a repl() result. */
 export interface ReplResultText {
@@ -30,28 +32,70 @@ export function buildReplResultText(
   subcalls: readonly RlmSubcall[],
   backgroundPending = 0,
   varNames: readonly string[] = [],
+  stderr = "",
+  raised = false,
+  pendingTasks: readonly PendingTaskInfo[] = [],
 ): ReplResultText {
   const answerSubmitted = finalAnswer !== undefined;
-  const noOutput = !answerSubmitted && !stdout;
-  const varsHint = noOutput && varNames.length > 0
-    ? ` — the block ran fine and these REPL vars are defined: ${varNames.join(", ")}. `
-      + "Do NOT re-run it; read them in the next block."
-    : "";
-  const rawText = answerSubmitted
-    ? `ANSWER_SUBMITTED (${finalAnswer.length} chars) — delivered to user. Do not restate it.`
-    : stdout || `(no output)${varsHint}`;
+  const stderrBlock = formatReplStderr(stderr);
+  const rawText = assembleReplBody(stdout, finalAnswer, varNames, stderrBlock, raised);
   // Model-visible text is capped; the caller keeps full stdout in `details` for the TUI.
   const cappedText = capReplResultText(rawText) ?? rawText;
   const delegated = subcalls.some((s) => s.kind === "llm" || s.kind === "batch" || s.kind === "rlm");
-  const nudge = answerSubmitted ? undefined : replDelegationNudge(rawText.length, delegated);
+  const nudge = answerSubmitted || raised ? undefined : replDelegationNudge(rawText.length, delegated);
   const failedBg = subcalls.filter((s) => s.id.startsWith("bg") && s.status === "error").length;
   const pendingLine = backgroundPending > 0
-    ? `\n\n[rlm] ${backgroundPending} background task(s) still running — await_task(tasks) to collect.`
+    ? `\n\n[rlm] ${backgroundPending} background task(s) still running — ${pendingCollectHint(pendingTasks)}.`
     : "";
   const failedLine = failedBg > 0
     ? `\n[rlm] ${failedBg} background sub-call(s) FAILED — their await_task value is an "Error: …" string, not data.`
     : "";
   return { text: cappedText + (nudge ?? "") + pendingLine + failedLine };
+}
+
+function assembleReplBody(
+  stdout: string,
+  finalAnswer: string | undefined,
+  varNames: readonly string[],
+  stderrBlock: string,
+  raised: boolean,
+): string {
+  if (finalAnswer !== undefined) {
+    return `ANSWER_SUBMITTED (${finalAnswer.length} chars) — delivered to user. Do not restate it.`;
+  }
+  if (raised) {
+    const body = [stdout.trimEnd(), stderrBlock.trimStart()].filter((s) => s.length > 0).join("\n");
+    return body.length > 0 ? body : "(raised — see [stderr])";
+  }
+  const noOutput = !stdout;
+  const varsHint = noOutput && varNames.length > 0
+    ? ` — the block ran fine and these REPL vars are defined: ${varNames.join(", ")}. `
+      + "Do NOT re-run it; read them in the next block."
+    : "";
+  return stdout || `(no output)${varsHint}`;
+}
+
+/** Name the Python handle when we know it; otherwise point at await_task() / list_tasks(). */
+function pendingCollectHint(pendingTasks: readonly PendingTaskInfo[]): string {
+  if (pendingTasks.length === 0) {
+    return "collect with await_task(<Task var>) or await_task(); answers[] is for results AFTER await_task";
+  }
+  const names = new Array<string>(pendingTasks.length);
+  for (let i = 0; i < pendingTasks.length; i++) {
+    const t = pendingTasks[i];
+    const kind = t?.kind ?? "task";
+    const label = t?.label ?? "";
+    names[i] = t?.var ?? `<${kind}${label.length > 0 ? ` ${label}` : ""}>`;
+  }
+  if (pendingTasks.length === 1) {
+    const only = names[0] ?? "";
+    const first = pendingTasks[0];
+    const detail = first !== undefined && first.label.length > 0 ? ` (${first.kind} ${first.label})` : "";
+    return only.startsWith("<")
+      ? `collect with await_task()${detail}; answers[] is for results AFTER await_task`
+      : `collect with await_task(${only})${detail}; answers[] is for results AFTER await_task`;
+  }
+  return `collect with await_task()  (${names.join(", ")}); answers[] is for results AFTER await_task`;
 }
 
 /** Advisory diagnostics derived from a completed invocation's sub-calls. */

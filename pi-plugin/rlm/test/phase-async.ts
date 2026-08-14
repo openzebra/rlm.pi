@@ -79,6 +79,11 @@ print(await_task("not a task"))
       misuse.stdout.includes("expects a Task"), "");
     check("misuse never raises", !misuse.raised, misuse.stderr.slice(0, 120));
 
+    const emptyAwait = await sb.exec(`print(await_task())`);
+    check("await_task() with nothing live returns an Error string",
+      emptyAwait.stdout.includes("no running Tasks") && !emptyAwait.raised,
+      emptyAwait.stdout.trim().slice(0, 80));
+
     // llm_map_reduce cannot be a single Task (its reduce depends on its own map results) — the
     // error must SAY so, since the glossary lists it right next to the spawnable helpers.
     const mapReduce = await sb.exec(`print(await_task(spawn(llm_map_reduce, ["a"], "map", "reduce")))`);
@@ -132,6 +137,49 @@ async function testCrossTurn(): Promise<void> {
     const awaitTurn = await sb.exec(`print(await_task(t))`);
     check("CROSS-TURN: a reply parked between turns is recovered",
       awaitTurn.stdout.trim() === "late-answer", awaitTurn.stdout.trim());
+  } finally {
+    await sb.dispose();
+  }
+}
+
+async function testAwaitAllAndListTasks(): Promise<void> {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => { release = r; });
+  const sb = await PythonSandbox.spawn({
+    depth: 1,
+    handlers: {
+      rlmBatch: async (tasks) => {
+        await gate;
+        return tasks.map((t) => `child:${t}`);
+      },
+    },
+  });
+  try {
+    const spawned = await sb.exec(`
+t = rlm_batch(["one", "two"])
+glob("*.md")
+`);
+    check("NameError after spawn still leaves the Task bound",
+      spawned.raised && spawned.stderr.includes("NameError") && spawned.varNames.includes("t"),
+      spawned.stderr.slice(0, 120));
+    check("pending_tasks names the bound var after a raised cell",
+      spawned.pendingTasks.length === 1 && spawned.pendingTasks[0]?.var === "t",
+      JSON.stringify(spawned.pendingTasks));
+
+    const listed = await sb.exec(`print(list_tasks())`);
+    check("list_tasks reports the lost-handle Task as var t",
+      listed.stdout.includes("'var': 't'") && listed.stdout.includes("rlm_batch") && !listed.raised,
+      listed.stdout.trim().slice(0, 160));
+
+    const shown = await sb.exec(`print(SHOW_VARS())`);
+    check("SHOW_VARS annotates Task handles with repr",
+      shown.stdout.includes("<Task rlm_batch"), shown.stdout.trim().slice(0, 160));
+
+    release();
+    const collected = await sb.exec(`print(await_task())`);
+    check("await_task() with no args unwraps a single live Task",
+      collected.stdout.trim() === "['child:one', 'child:two']" && !collected.raised,
+      collected.stdout.trim().slice(0, 160));
   } finally {
     await sb.dispose();
   }
@@ -343,6 +391,7 @@ function testPrompts(): void {
 async function main(): Promise<void> {
   await testOverlapAndOrder();
   await testCrossTurn();
+  await testAwaitAllAndListTasks();
   await testChunkedConcurrency();
   await testGates();
   testBackgroundRegistry();

@@ -91,7 +91,7 @@ RESERVED = frozenset(
         # Canonical api_v5
         "llm_query", "llm_batch",
         "rlm_query", "rlm_batch",
-        "await_task", "finish",
+        "await_task", "list_tasks", "finish",
         "spawn",
         # Helpers (not the old *_query_batched API)
         "llm_query_chunked", "map_files", "llm_map_reduce",

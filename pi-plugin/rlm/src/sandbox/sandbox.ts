@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import {
   isInterrupt,
   isWorkerMessage,
+  parsePendingTasks,
   type ParentMessage,
   type ReplResult,
   type WorkerMessage,
@@ -224,6 +225,7 @@ export class PythonSandbox {
       raised: res.raised ?? false,
       executionTimeMs: Math.round((res.execution_time ?? 0) * 1000),
       varNames: res.var_names ?? [],
+      pendingTasks: parsePendingTasks(res.pending_tasks),
     };
   }
 

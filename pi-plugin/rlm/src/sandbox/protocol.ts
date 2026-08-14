@@ -60,6 +60,8 @@ export interface WorkerResponse {
   readonly execution_time?: number;
   // user-created variable names after this exec
   readonly var_names?: readonly string[];
+  /** Unsettled Task handles still in the worker (native pending-line / await-all). */
+  readonly pending_tasks?: readonly PendingTaskInfo[];
   // load_context:
   readonly index?: number;
 }
@@ -158,6 +160,39 @@ export function isWorkerMessage(msg: unknown): msg is WorkerMessage {
   return isWorkerResponse(msg) || isInterrupt(msg);
 }
 
+/** Unsettled Task still in the worker, optionally bound to a REPL variable. */
+export interface PendingTaskInfo {
+  readonly var: string | null;
+  readonly kind: string;
+  readonly label: string;
+}
+
+const EMPTY_PENDING: readonly PendingTaskInfo[] = Object.freeze([]);
+
+function isPendingTaskInfo(value: unknown): value is PendingTaskInfo {
+  if (!isRecord(value)) return false;
+  const bound = value["var"];
+  return (typeof bound === "string" || bound === null)
+    && typeof value["kind"] === "string"
+    && typeof value["label"] === "string";
+}
+
+/** Narrow a worker `pending_tasks` payload; drop malformed entries. */
+export function parsePendingTasks(value: unknown): readonly PendingTaskInfo[] {
+  if (!Array.isArray(value)) return EMPTY_PENDING;
+  const out = new Array<PendingTaskInfo>(value.length);
+  let n = 0;
+  for (let i = 0; i < value.length; i++) {
+    const item: unknown = value[i];
+    if (isPendingTaskInfo(item)) {
+      out[n] = item;
+      n += 1;
+    }
+  }
+  out.length = n;
+  return n === 0 ? EMPTY_PENDING : Object.freeze(out);
+}
+
 /** Result of a single `repl` block execution, surfaced to the engine/tool. */
 export interface ReplResult {
   readonly stdout: string;
@@ -168,4 +203,6 @@ export interface ReplResult {
   readonly executionTimeMs: number;
   /** User-created variable names after this exec (builtins/context filtered out). */
   readonly varNames: readonly string[];
+  /** Unsettled Task handles still in the worker after this exec. */
+  readonly pendingTasks: readonly PendingTaskInfo[];
 }

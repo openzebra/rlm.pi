@@ -1,7 +1,7 @@
 /** Helpers for detecting and formatting the RLM final answer from a turn's REPL results. */
 
 import type { ReplResult } from "../sandbox/protocol.ts";
-import { truncateOutput } from "../text/parsing.ts";
+import { formatReplStderr } from "../text/repl-output.ts";
 
 /** First non-null final answer across a turn's executed blocks, or null. */
 export function finalAnswerOf(results: readonly ReplResult[]): string | null {
@@ -29,7 +29,6 @@ export function turnHadError(results: readonly ReplResult[]): boolean {
 const SMALL_STDOUT_LIMIT = 800;
 const STDOUT_PREVIEW_LIMIT = 200;
 const STDOUT_TAIL_LIMIT = 200;
-const STDERR_LIMIT = 8_000;
 
 /** The REPL output fed back to the model as the next user message. */
 export function formatReplOutputs(results: readonly ReplResult[], skippedBlocks = 0): string {
@@ -44,7 +43,7 @@ export function formatReplOutputs(results: readonly ReplResult[], skippedBlocks 
     const head = multi ? `[block ${i + 1}]\n` : "";
     const { text, elided } = formatStdout(r);
     hadElision ||= elided;
-    parts[i] = `${head}${text}${formatStderr(r)}`;
+    parts[i] = `${head}${text}${formatReplStderr(r.stderr)}`;
   }
   const body = parts.join("\n\n");
   const skipNote = skippedBlocks > 0
@@ -78,7 +77,3 @@ function formatStdout(r: ReplResult): { text: string; elided: boolean } {
   };
 }
 
-function formatStderr(r: ReplResult): string {
-  const err = r.stderr.trim();
-  return err ? `\n[stderr]\n${truncateOutput(err, STDERR_LIMIT)}` : "";
-}

@@ -103,6 +103,9 @@ class Worker:
         # await_task, which is strictly worse than the memory.
         self.inbox: dict[str, dict[str, Any]] = {}
         self._inflight: set[str] = set()
+        # Every Task this worker created. Survives the model deleting the bound name, so
+        # await_task() / list_tasks() can still collect a spawn the model forgot to store.
+        self._handles: list[Task] = []
         # Requests (exec/shutdown) that arrived mid-exec; main() replays them.
         self._deferred: list[Any] = []
         # Kept for spawn() compatibility; sub-LLM kinds always post detached=true so fan-out
@@ -135,12 +138,13 @@ class Worker:
         ns["spawn"] = self._spawn
         # One collect API: await_task(Task) or await_task([Task, ...])
         ns["await_task"] = self._await_task
+        ns["list_tasks"] = self._list_tasks
         ns["map_files"] = self._map_files
         ns["llm_map_reduce"] = self._llm_map_reduce
         ns["search"] = self._search
         ns["grep_context"] = self._grep_context
         ns["outline"] = self._outline
-        # env_tips memo (paper App. C.3): "If a value isn't in `answers`, it doesn't exist."
+        # env_tips memo: collected *results* live in `answers`; Task handles live in REPL vars.
         # Re-created only when deleted — contents must survive every turn.
         if not isinstance(ns.get("answers"), dict):
             ns["answers"] = {}
@@ -180,7 +184,10 @@ class Worker:
         ]
 
     def _show_vars(self) -> str:
-        avail = {k: type(self.ns[k]).__name__ for k in self._user_var_names()}
+        avail: dict[str, str] = {}
+        for k in self._user_var_names():
+            v = self.ns[k]
+            avail[k] = repr(v) if isinstance(v, Task) else type(v).__name__
         return f"Available variables: {avail}" if avail else "No variables created yet."
 
     # ---- sub-LLM bridge over stdio --------------------------------------------------------
@@ -268,22 +275,22 @@ class Worker:
         # A sub-LLM asked nothing answers something: the confabulation then sits in `answers`
         # looking exactly like data. Refuse instead of spending a call on it.
         if not text.strip():
-            return Task.resolved(self, kind, _surfaced_error(
+            return self._resolved(kind, _surfaced_error(
                 f"{kind}() got an empty prompt — a sub-LLM would confabulate an answer to nothing"))
         payload: dict[str, Any] = {"prompt": text}
         clean = _clean_paths(paths)
         if clean is not None:
             payload["paths"] = clean
         rid = self._post(kind, payload)
-        return Task(self, kind, (rid,), _reduce_one, text[:40])
+        return self._task(kind, (rid,), _reduce_one, text[:40])
 
     def _start_prompts(self, kind: str, prompts, paths=None) -> Task:
         prompts = [str(p) for p in prompts]
         if not prompts:
-            return Task.resolved(self, kind, [])
+            return self._resolved(kind, [])
         # Only the all-blank case: one blank prompt among twenty is the caller's business.
         if not any(p.strip() for p in prompts):
-            return Task.resolved(self, kind, [
+            return self._resolved(kind, [
                 _surfaced_error(f"{kind}() got only empty prompts")
             ] * len(prompts))
         payload: dict[str, Any] = {"prompts": prompts}
@@ -293,7 +300,7 @@ class Worker:
         if clean is not None:
             payload["paths"] = clean
         rid = self._post(kind, payload)
-        return Task(self, kind, (rid,), _reduce_batch(len(prompts)), f"×{len(prompts)}")
+        return self._task(kind, (rid,), _reduce_batch(len(prompts)), f"×{len(prompts)}")
 
     def _start_llm_query(self, prompt) -> Task:
         return self._start_prompt("llm_query", prompt)
@@ -321,16 +328,16 @@ class Worker:
         """
         text, prompt = str(text), str(prompt)
         if not text:
-            return Task.resolved(self, "llm_query_chunked", [])
+            return self._resolved("llm_query_chunked", [])
         budget = self.max_prompt_chars - len(prompt) - _CHUNK_HEADER_OVERHEAD
         if budget < 1_000:
-            return Task.resolved(self, "llm_query_chunked", [
+            return self._resolved("llm_query_chunked", [
                 f"Error: prompt leaves under 1,000 chars per chunk (cap {self.max_prompt_chars:,}) — shorten the instruction"
             ])
         chunks = _chunk_text(text, budget)
         total = len(chunks)
         if total > _MAX_CHUNKS:
-            return Task.resolved(self, "llm_query_chunked", [
+            return self._resolved("llm_query_chunked", [
                 f"Error: {total} chunks would be needed — filter/slice the text in Python first"
             ])
         rids: list[str] = []
@@ -342,7 +349,7 @@ class Worker:
             ]
             rids.append(self._post("llm_batch", {"prompts": batch}))
             sizes.append(len(batch))
-        return Task(self, "llm_query_chunked", tuple(rids), _reduce_chunked(sizes), f"{total} chunks")
+        return self._task("llm_query_chunked", tuple(rids), _reduce_chunked(sizes), f"{total} chunks")
     def _builder_for(self, name: str):
         # llm_map_reduce is deliberately absent: its reduce step is a SECOND sub-LLM call that
         # depends on its own map results, so it cannot be one (rids, pure reduce) Task.
@@ -365,7 +372,7 @@ class Worker:
         name = getattr(fn, "_rlm_name", None)
         builder = self._builder_for(name) if isinstance(name, str) else None
         if builder is None:
-            return Task.resolved(self, "spawn", _surfaced_error(
+            return self._resolved("spawn", _surfaced_error(
                 "spawn() takes llm_query, llm_batch, llm_query_chunked, map_files, "
                 "rlm_query or rlm_batch — not llm_map_reduce, whose reduce step depends "
                 "on its own map results and so cannot be a single Task"))
@@ -374,9 +381,40 @@ class Worker:
         try:
             return builder(*args, **kwargs)
         except TypeError as e:
-            return Task.resolved(self, "spawn", _surfaced_error(f"bad spawn arguments — {e}"))
+            return self._resolved("spawn", _surfaced_error(f"bad spawn arguments — {e}"))
         finally:
             self._detached = False
+
+    def _task(self, kind: str, rids, reduce, label: str = "") -> Task:
+        t = Task(self, kind, rids, reduce, label)
+        self._handles.append(t)
+        return t
+
+    def _resolved(self, kind: str, value: Any, label: str = "") -> Task:
+        t = Task.resolved(self, kind, value, label)
+        self._handles.append(t)
+        return t
+
+    def _live_handles(self) -> list[Task]:
+        return [t for t in self._handles if not t._settled]
+
+    def _task_name_map(self) -> dict[int, str]:
+        return {id(v): k for k, v in self.ns.items() if isinstance(v, Task)}
+
+    def _list_tasks(self) -> list[dict[str, Any]]:
+        """[{kind, label, done, var}] for every Task this worker created."""
+        names = self._task_name_map()
+        return [
+            {"kind": t.kind, "label": t.label, "done": t.done, "var": names.get(id(t))}
+            for t in self._handles
+        ]
+
+    def _pending_task_infos(self) -> list[dict[str, Any]]:
+        names = self._task_name_map()
+        return [
+            {"var": names.get(id(t)), "kind": t.kind, "label": t.label}
+            for t in self._live_handles()
+        ]
 
     def _await_one(self, task: Task) -> Any:
         """Block until one Task has its result. Idempotent — the value is memoized."""
@@ -386,11 +424,26 @@ class Worker:
             task._settled = True
         return task._value
 
-    def _await_task(self, task_or_tasks) -> Any:
-        """Collect result(s). Accepts a single Task or a list/tuple of Tasks.
+    def _await_task(self, task_or_tasks=None) -> Any:
+        """Collect result(s). Accepts a Task, a list/tuple of Tasks, or nothing.
 
+        No argument: collect every still-running Task this worker created (the recovery
+        path when the model lost the handle). One live Task unwraps to its result;
+        several return a list.
         Canonical name for the model: await_task(...). (bare `await` is a Python keyword.)
         """
+        if task_or_tasks is None:
+            live = self._live_handles()
+            if not live:
+                return _surfaced_error(
+                    "await_task() found no running Tasks — bind rlm_batch/llm_query to a name "
+                    "and pass it, or call list_tasks()"
+                )
+            # One live Task (the usual lost-handle case) unwraps so
+            # `reports = await_task()` matches `reports = await_task(t)`.
+            if len(live) == 1:
+                return self._await_one(live[0])
+            return self._await_task(live)
         if isinstance(task_or_tasks, Task):
             return self._await_one(task_or_tasks)
         if isinstance(task_or_tasks, (list, tuple)):
@@ -406,15 +459,13 @@ class Worker:
                         union.append(rid)
             if union:
                 self._drain_until(union)
-            out: list[Any] = []
-            for t in tasks:
+            out: list[Any] = [None] * len(tasks)
+            for i, t in enumerate(tasks):
                 if isinstance(t, Task):
-                    out.append(self._await_one(t))
+                    out[i] = self._await_one(t)
                 else:
-                    out.append(
-                        _surfaced_error(
-                            f"await_task expects Task items, got {type(t).__name__}"
-                        )
+                    out[i] = _surfaced_error(
+                        f"await_task expects Task items, got {type(t).__name__}"
                     )
             return out
         return _surfaced_error(
@@ -485,12 +536,12 @@ class Worker:
                 else:
                     by_path.append((item, ""))
         if not by_path:
-            return Task.resolved(self, "map_files", {})
+            return self._resolved("map_files", {})
 
         # Per-file prompt budget; anything larger is chunked and its answers concatenated.
         budget = self.max_prompt_chars - len(prompt) - _CHUNK_HEADER_OVERHEAD - 256
         if budget < 1_000:
-            return Task.resolved(self, "map_files", {
+            return self._resolved("map_files", {
                 p: "Error: prompt too long to leave room for file content" for p, _ in by_path
             })
 
@@ -509,7 +560,7 @@ class Worker:
             batch = requests[i:i + _MAX_CHUNK_BATCH]
             rids.append(self._post("llm_batch", {"prompts": batch}))
             sizes.append(len(batch))
-        return Task(self, "map_files", tuple(rids),
+        return self._task("map_files", tuple(rids),
                     _reduce_map_files(sizes, spans), f"{len(by_path)} files")
 
     @_spawnable("map_files")
@@ -836,6 +887,7 @@ class Worker:
             "raised": raised,
             "execution_time": time.perf_counter() - start,
             "var_names": self._user_var_names(),
+            "pending_tasks": self._pending_task_infos(),
         }
 
 
