@@ -187,6 +187,10 @@ async function engineChildProbe(config: RlmConfig): Promise<{ readonly answer: s
   check("C5: child prompt shows the delegation spawn example (slice, not search)",
     childSys.includes("slice your world") || childSys.includes("slice the world you were handed"), "");
   check("C5: ROOT prompt still teaches the retrieval example", rootSys.includes("search("), "");
+  check("R3: child ENV_TIPS does not instruct locating via search",
+    !childSys.includes("free locate with `search`") && !childSys.includes("locate targets with `search`"));
+  check("R3: root ENV_TIPS still names search",
+    rootSys.includes("free locate with `search`") || rootSys.includes("locate targets with `search`"));
 
   // Legacy rollback: full child surface restored by one config flip.
   const legacy = await engineChildProbe({ ...DEFAULT_CONFIG, maxIterations: 6, childSurface: "legacy" });

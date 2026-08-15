@@ -8,7 +8,7 @@ import type { ContextSizeStats } from "../text/tokens.ts";
 import {
   contextKindOf,
   DEFAULT_PROMPT_CAP,
-  ENV_TIPS,
+  envTips,
   howToRunCode,
   LARGE_FILE_RULE_LINES,
   promptCapTokensK,
@@ -111,7 +111,7 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
   if (opts.orchestrator ?? true) {
     // Two counterweights, both required (paper App. B): the addendum bounds OVER-recursion
     // (batching/cost), ENV_TIPS bounds UNDER-recursion (solving it yourself).
-    parts.push("", orchestratorAddendum(maxPromptChars, opts.delegation ?? false), "", ENV_TIPS);
+    parts.push("", orchestratorAddendum(maxPromptChars, opts.delegation ?? false), "", envTips(opts.delegation ?? false));
   }
   if (kind === "files") {
     parts.push("", LARGE_FILE_RULE_LINES.join("\n"));

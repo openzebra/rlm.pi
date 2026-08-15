@@ -319,12 +319,12 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         }
 
         const start = Date.now();
-        // v5 blackboard (audit C3): the turn's code cell is the ancestor task for echo
-        // detection — a child restating what this cell asks gets a stub, mirroring the
-        // engine's beginRun(input.rootPrompt). Popped in finally: detached work spawned by
-        // this cell already claimed at spawn time, inside this window.
+        // v5 blackboard (audit C3 / R1): ancestors are the rlm_query/rlm_batch task
+        // strings inside this cell, not the Python soup (`print`, `await_task`). A
+        // child restating the user's goal then echoes. Popped in finally: detached
+        // work spawned by this cell already claimed at spawn time, inside this window.
         const ledgerActive = getConfig().enableLedger;
-        if (ledgerActive) sessionLedger.beginRun(params.code);
+        const ancestorN = ledgerActive ? sessionLedger.beginNativeCell(params.code) : 0;
         let result: ReplResult;
         try {
           result = await sandboxManager.execWithSetup(params.code, () => {
@@ -334,7 +334,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
             bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
           }, execSignal);
         } finally {
-          if (ledgerActive) sessionLedger.endRun();
+          if (ledgerActive) sessionLedger.endNativeCell(ancestorN);
         }
         const elapsed = Date.now() - start;
         capturedStdout = result.stdout;

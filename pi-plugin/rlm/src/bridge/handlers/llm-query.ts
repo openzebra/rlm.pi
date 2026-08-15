@@ -68,7 +68,7 @@ export async function runClaimedLeaf(
   }
 }
 
-function leafClaimKey(deps: SubcallHandlerDeps, prompt: string): string | undefined {
+export function leafClaimKey(deps: SubcallHandlerDeps, prompt: string): string | undefined {
   const ledger = activeLedger(deps);
   if (ledger === undefined) return undefined;
   return taskKey("llm", prompt, [], displayModel(deps) ?? "", "");

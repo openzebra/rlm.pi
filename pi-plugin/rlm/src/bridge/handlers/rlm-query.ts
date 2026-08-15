@@ -17,6 +17,7 @@ import { SPAWN_HINT, spawnAndRun, type SpawnDeps } from "./task-registry.ts";
 import { complete1, type Complete1Deps } from "./completion.ts";
 import { emitting } from "./emitting.ts";
 import { isErrorText } from "../../util/errors.ts";
+import { leafClaimKey, runClaimedLeaf } from "./llm-query.ts";
 
 const UNWIRED = formatError("RLM bridge not wired for this invocation");
 const NO_UNMATCHED: readonly string[] = Object.freeze([]);
@@ -251,18 +252,25 @@ export function createRlmQueryHandler(deps: SubcallHandlerDeps, sd: SpawnDeps) {
         "llm",
         1,
         () =>
-          emitting(
-            inv,
-            {
-              kind: "llm",
-              label: "rlm_query→llm (demoted)",
-              args: previewText(task),
-            },
-            (track) => complete1(inv, task, track, completeDeps(deps)),
-            (out) => ({
-              preview: previewText(out),
-              error: isErrorText(out) ? out : undefined,
-            }),
+          runClaimedLeaf(
+            ledger,
+            leafClaimKey(deps, task),
+            task,
+            inv.depth,
+            () =>
+              emitting(
+                inv,
+                {
+                  kind: "llm",
+                  label: "rlm_query→llm (demoted)",
+                  args: previewText(task),
+                },
+                (track) => complete1(inv, task, track, completeDeps(deps)),
+                (out) => ({
+                  preview: previewText(out),
+                  error: isErrorText(out) ? out : undefined,
+                }),
+              ),
           ),
         deps.trackDetached,
         opts.detached,

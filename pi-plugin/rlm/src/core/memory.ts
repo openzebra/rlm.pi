@@ -362,7 +362,10 @@ export class MemoryStore {
   private async doConsolidate(): Promise<number> {
     if (!this.enabled || this.dir === undefined) return 0;
     this.load();
-    const pendingEps = this.pending
+    // Snapshot the batch we are about to distill. Mid-flight recordEpisode
+    // keys must survive — wiping `this.pending = []` at the end dropped them (audit R5).
+    const batch = this.pending;
+    const pendingEps = batch
       .map((k) => this.episodes.get(k))
       .filter((e): e is Episode => e !== undefined);
     if (pendingEps.length === 0) return 0;
@@ -418,7 +421,7 @@ export class MemoryStore {
         made++;
       }
     }
-    this.pending = [];
+    this.pending = this.pending.filter((k) => !batch.includes(k));
     return made;
   }
 

@@ -186,40 +186,52 @@ export const LARGE_FILE_RULE_NATIVE =
  * The paper is explicit (App. B) that one prompt does not port across models and that both
  * guardrails are needed; keep them both.
  */
-export const ENV_TIPS = [
-  "## Decomposition doctrine",
-  "",
-  "**Orchestrate; don't solve.** A single chain of thought over a large repository drifts —",
-  "you lose partials and compound mistakes. Sub-workers are competent: trust them; don't read for them.",
-  "",
-  "Your job: (1) free locate with `search` / `grep_context` / `outline`,",
-  "(2) fan out: **multi-step areas → `rlm_batch` / `rlm_query`**; one-shot extracts →",
-  "  `map_files` / `llm_batch` (all return Task — `await_task` for content),",
-  "(3) memoize into `answers`, (4) sanity-check before dependents, (5) assemble from `answers`.",
-  "Your own compute is: pointers, dict lookups, string formatting, and decisions.",
-  "",
-  "### The only state that matters",
-  "`answers` and `plan` are dicts that persist across every turn.",
-  "**If a result isn't in `answers`, you have not memoized it.** Task handles are REPL vars —",
-  "`list_tasks()` / `SHOW_VARS()` find them. Do not trust truncated stdout. Memoize after await_task.",
-  "",
-  "### Shape of a run",
-  "1. Probe: `print(len(context))`; locate targets with `search` when your surface has it, else",
-  "   Python slicing / string matching. Do not print file bodies.",
-  "2. Plan: sub-questions into `plan` (each from a named slice / module).",
-  "3. Fan out **in parallel**: one `rlm_batch` for independent multi-step studies, or",
-  "   `map_files` / `llm_batch` for one-shot reads — not one serial call per file.",
-  "4. Assemble from `answers`.",
-  "",
-  "### Red flags — you are off track",
-  "- Printing file bodies / native bulk read → stop; use map_files or rlm_*.",
-  "- `llm_query(\"Read src/foo.ts…\")` with only a path — sub-LLM has **no disk**; use map_files/rlm_*.",
-  "- Multi-module task with zero `rlm_batch`/`rlm_query`/`map_files` → under-delegating.",
-  "- Await after every independent spawn → serializes wall time; fire-all-then-await.",
-  "- Treating Task as the answer without `await_task`.",
-  "- Regex used to *infer meaning* → sub-LLM job. Regex is for exact needles only.",
-  "- Two turns with zero sub-LLM calls on analysis → solving it yourself.",
-].join("\n");
+/** Decomposition doctrine. `delegation` drops retrieval names (audit R3) — children
+ *  have no `search` and must not be told to locate with it. */
+export function envTips(delegation = false): string {
+  const locate = delegation
+    ? "Your job: (1) slice `context` with Python (indexing, string matching, comprehensions),"
+    : "Your job: (1) free locate with `search` / `grep_context` / `outline`,";
+  const probe = delegation
+    ? "1. Probe: `print(len(context))`; locate targets with Python slicing / string matching. Do not print file bodies."
+    : "1. Probe: `print(len(context))`; locate targets with `search` when your surface has it, else\n   Python slicing / string matching. Do not print file bodies.";
+  return [
+    "## Decomposition doctrine",
+    "",
+    "**Orchestrate; don't solve.** A single chain of thought over a large repository drifts —",
+    "you lose partials and compound mistakes. Sub-workers are competent: trust them; don't read for them.",
+    "",
+    locate,
+    "(2) fan out: **multi-step areas → `rlm_batch` / `rlm_query`**; one-shot extracts →",
+    "  `map_files` / `llm_batch` (all return Task — `await_task` for content),",
+    "(3) memoize into `answers`, (4) sanity-check before dependents, (5) assemble from `answers`.",
+    "Your own compute is: pointers, dict lookups, string formatting, and decisions.",
+    "",
+    "### The only state that matters",
+    "`answers` and `plan` are dicts that persist across every turn.",
+    "**If a result isn't in `answers`, you have not memoized it.** Task handles are REPL vars —",
+    "`list_tasks()` / `SHOW_VARS()` find them. Do not trust truncated stdout. Memoize after await_task.",
+    "",
+    "### Shape of a run",
+    probe,
+    "2. Plan: sub-questions into `plan` (each from a named slice / module).",
+    "3. Fan out **in parallel**: one `rlm_batch` for independent multi-step studies, or",
+    "   `map_files` / `llm_batch` for one-shot reads — not one serial call per file.",
+    "4. Assemble from `answers`.",
+    "",
+    "### Red flags — you are off track",
+    "- Printing file bodies / native bulk read → stop; use map_files or rlm_*.",
+    "- `llm_query(\"Read src/foo.ts…\")` with only a path — sub-LLM has **no disk**; use map_files/rlm_*.",
+    "- Multi-module task with zero `rlm_batch`/`rlm_query`/`map_files` → under-delegating.",
+    "- Await after every independent spawn → serializes wall time; fire-all-then-await.",
+    "- Treating Task as the answer without `await_task`.",
+    "- Regex used to *infer meaning* → sub-LLM job. Regex is for exact needles only.",
+    "- Two turns with zero sub-LLM calls on analysis → solving it yourself.",
+  ].join("\n");
+}
+
+/** Root-surface doctrine (back-compat alias of `envTips(false)`). */
+export const ENV_TIPS = envTips(false);
 
 /** Native-mode variant of the doctrine — same rules, sized for the native prompt budget. */
 export const ENV_TIPS_CONDENSED = [

@@ -150,14 +150,17 @@ export function createEngine(deps: EngineDeps): RunRlm {
         };
       }
     }
-    const persistRoot = (answer: string): void => {
+    const persistRoot = (
+      answer: string,
+      spend?: { readonly inputTokens: number; readonly outputTokens: number },
+    ): void => {
       if (rootMemory === undefined || input.depth !== 0) return;
       // H2 (audit): only clean root runs persist — a continuation leaf carries the ORIGINAL
       // run's key (it persists the chain itself), and stopped/aborted partials must never
       // replay as if they were real answers.
       if (input.budget !== undefined) return;
       if (answer === "" || answer === "(aborted)" || answer.startsWith("(stopped")) return;
-      const u = limits.usage();
+      const u = spend ?? limits.usage();
       rootMemory.recordEpisode({
         key: rootKey,
         kind: "root",
@@ -422,7 +425,10 @@ export function createEngine(deps: EngineDeps): RunRlm {
               };
               // H2: the ORIGINAL run persists the chain's answer under the ORIGINAL key —
               // the next identical prompt must replay the full result, not miss.
-              persistRoot(chained.answer);
+              // R2: lastAnswer must be set before return — `finally` emitAnswer reads it,
+              // and persist must store the CHAIN totals, not just the parent window.
+              lastAnswer = chained.answer;
+              persistRoot(chained.answer, chained);
               return chained;
             }
             // Chain cap reached — finalize with the best partial (a budget never throws).

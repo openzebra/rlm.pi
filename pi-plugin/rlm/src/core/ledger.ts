@@ -143,6 +143,108 @@ export const ECHO_STUB: string = Object.freeze(
     "Do not spawn a duplicate; answer from what you already know or await the existing task.",
 );
 
+const RLM_CALL_OPEN = /\brlm_(?:query|batch)\s*\(/g;
+
+/**
+ * Native `repl()` cells are Python, not a task (audit R1). Pull quoted
+ * `rlm_query` / `rlm_batch` arguments so `beginRun` has a task-shaped ancestor
+ * instead of `print` / `await_task` tokens. Falls back to the raw cell when no
+ * such call is present. `paths=` keyword args are not tasks.
+ */
+export function nativeRunAncestors(code: string): readonly string[] {
+  const found = extractRlmTaskPrompts(code);
+  return Object.freeze(found.length > 0 ? found : [code]);
+}
+
+function extractRlmTaskPrompts(code: string): readonly string[] {
+  const out: string[] = [];
+  RLM_CALL_OPEN.lastIndex = 0;
+  for (const m of code.matchAll(RLM_CALL_OPEN)) {
+    const start = (m.index ?? 0) + m[0].length;
+    const body = sliceCallBody(code, start);
+    const pathSplit = body.split(/\bpaths\s*=/);
+    const taskPart = pathSplit[0] ?? body;
+    const strings = quotedStrings(taskPart);
+    for (let i = 0; i < strings.length; i++) {
+      const s = strings[i];
+      if (s !== undefined && s.trim() !== "") out.push(s);
+    }
+  }
+  return out;
+}
+
+function sliceCallBody(src: string, start: number): string {
+  let depth = 1;
+  let i = start;
+  while (i < src.length && depth > 0) {
+    const c = src[i];
+    if (c === "'" || c === '"') {
+      i = skipPyString(src, i);
+      continue;
+    }
+    if (c === "#") {
+      const nl = src.indexOf("\n", i);
+      i = nl === -1 ? src.length : nl + 1;
+      continue;
+    }
+    if (c === "(") depth++;
+    else if (c === ")") depth--;
+    i++;
+  }
+  return src.slice(start, depth === 0 ? i - 1 : i);
+}
+
+function quotedStrings(src: string): readonly string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "'" || c === '"') {
+      const parsed = readPyString(src, i);
+      if (parsed.keep) out.push(parsed.value);
+      i = parsed.end;
+      continue;
+    }
+    i++;
+  }
+  return out;
+}
+
+function skipPyString(src: string, quoteAt: number): number {
+  return readPyString(src, quoteAt).end;
+}
+
+function readPyString(
+  src: string,
+  quoteAt: number,
+): { readonly value: string; readonly end: number; readonly keep: boolean } {
+  const quote = src[quoteAt] ?? '"';
+  const prefix = quoteAt > 0 ? src[quoteAt - 1] : "";
+  const keep = prefix !== "f" && prefix !== "F";
+  const triple = src.startsWith(quote + quote + quote, quoteAt);
+  const delimLen = triple ? 3 : 1;
+  const from = quoteAt + delimLen;
+  if (triple) {
+    const close = src.indexOf(quote + quote + quote, from);
+    if (close === -1) return { value: src.slice(from), end: src.length, keep };
+    return { value: src.slice(from, close), end: close + 3, keep };
+  }
+  const parts: string[] = [];
+  let j = from;
+  while (j < src.length) {
+    const ch = src[j];
+    if (ch === "\\") {
+      parts.push(src[j + 1] ?? "");
+      j += 2;
+      continue;
+    }
+    if (ch === quote) return { value: parts.join(""), end: j + 1, keep };
+    parts.push(ch ?? "");
+    j++;
+  }
+  return { value: parts.join(""), end: src.length, keep };
+}
+
 export class TaskLedger {
   private readonly claims = new Map<string, Claim>();
   private readonly waiters = new Map<string, Waiter[]>();
@@ -157,6 +259,20 @@ export class TaskLedger {
 
   endRun(): void {
     this.stack.pop();
+  }
+
+  /** Native `repl()` path (audit R1): push task-shaped ancestors extracted from the cell. */
+  beginNativeCell(code: string): number {
+    const ancestors = nativeRunAncestors(code);
+    for (let i = 0; i < ancestors.length; i++) {
+      const a = ancestors[i];
+      if (a !== undefined) this.beginRun(a);
+    }
+    return ancestors.length;
+  }
+
+  endNativeCell(n: number): void {
+    for (let i = 0; i < n; i++) this.endRun();
   }
 
   /** A child prompt echoing any ancestor (exact or ≥ 0.8 Jaccard) is rejected as a stub. */

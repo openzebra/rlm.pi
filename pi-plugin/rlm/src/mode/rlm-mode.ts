@@ -9,7 +9,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { modelRef, resolveModelId, saveSettings } from "../config/settings.ts";
-import { createEngine } from "../core/engine.ts";
+import { createEngine, type EngineDeps } from "../core/engine.ts";
 import { limitsFromConfig } from "../core/limits.ts";
 import type { RlmConfig, RlmResult } from "../core/types.ts";
 import { resolveSource } from "../context/resolve.ts";
@@ -97,6 +97,11 @@ export class RlmController {
     return { model, llm };
   }
 
+  /** Test seam (audit R7): intercept the exact object `createEngine` receives. */
+  protected spawnEngine(deps: EngineDeps): RunRlm {
+    return createEngine(deps);
+  }
+
   /** The ONE engine construction path for this controller (DRY #6 — a second path that
    *  forgets to grow is exactly how issue #4 and audit C1 happened). Protected so tests can
    *  subclass and assert the wiring without touching the network. */
@@ -106,7 +111,7 @@ export class RlmController {
     readonly signal: AbortSignal;
     readonly emitter: RlmEmitter;
   }): RunRlm {
-    return createEngine({
+    return this.spawnEngine({
       model: args.models.model,
       llmModel: args.models.llm,
       registry: args.ctx.modelRegistry,

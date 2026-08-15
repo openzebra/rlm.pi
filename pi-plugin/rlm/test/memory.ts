@@ -229,6 +229,33 @@ try {
     check("M2: both callers get the same count", both[0] === both[1], JSON.stringify(both));
   }
 
+  // ── audit R5: mid-flight recordEpisode stays pending (not wiped) ──────────────
+  {
+    const mid = new MemoryStore(dir, {
+      dir: join(dir, "r5"),
+      evolveEvery: 100, // manual triggering only
+      llm: async (prompt) => {
+        if (prompt.includes("mid-flight-unique-xyz")) {
+          return '[{"content":"note-from-mid-flight-xyz","tags":["mid"],"paths":[]}]';
+        }
+        mid.recordEpisode({
+          key: "mid-flight", kind: "rlm", model: "m",
+          prompt: "mid-flight-unique-xyz", paths: [], result: "mid-result",
+        });
+        return '[{"content":"first-batch-note","tags":["x"],"paths":[]}]';
+      },
+    });
+    mid.recordEpisode({ key: "e-first", kind: "rlm", model: "m", prompt: "p1", paths: [], result: "a1" });
+    const firstMade = await mid.consolidate();
+    check("R5: first consolidate distilled the snapshotted batch", firstMade >= 1, String(firstMade));
+    check("R5: first-batch note exists", mid.query("first-batch-note").length >= 1);
+    const secondMade = await mid.consolidate();
+    check("R5: mid-flight episode was NOT wiped — second consolidate sees it",
+      secondMade >= 1, `secondMade=${secondMade}`);
+    check("R5: mid-flight episode became a note",
+      mid.query("note-from-mid-flight-xyz").length >= 1);
+  }
+
   // ── audit H7: path jail — traversal gets no digest ─────────────────────────────
   {
     writeFileSync(join(dir, "outside-secret.txt"), "outside content");

@@ -19,6 +19,7 @@ import {
 import { elideOldToolPayloads } from "../src/core/compaction.ts";
 import { formatReplOutputs } from "../src/core/answer.ts";
 import { MemoryStore } from "../src/core/memory.ts";
+import { contextSig, taskKey } from "../src/core/ledger.ts";
 import { createEngine } from "../src/core/engine.ts";
 import type { RlmConfig } from "../src/core/types.ts";
 import { ModelContextRegistry, modelsCachePath, UNKNOWN_CONTEXT } from "../src/core/model-registry.ts";
@@ -268,7 +269,8 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
     let calls = 0;
     const script: (msgs: readonly ChatMsg[]) => Promise<CompleteResult> = (msgs) => {
       calls++;
-      const prompt = msgs.filter((m) => m.role === "user").map((m) => m.content).join("\n");
+      // [continuation N] lives on the system <task> line (rootPrompt), not a user turn.
+      const prompt = msgs.map((m) => m.content).join("\n");
       if (prompt.includes("FINAL") || calls >= 8) {
         return { text: "plain final text", usage: usage(200) };
       }
@@ -277,15 +279,25 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
       }
       return { text: "```repl\nprint('working')\n```", usage: usage(300) };
     };
-    const mk = () =>
+    const emitter = new RlmEmitter();
+    let emittedAnswer = "";
+    emitter.onAnswer((e) => { emittedAnswer = e.text; });
+    const mk = (em = new RlmEmitter()) =>
       createEngine({
         model: MOCK_MODEL, llmModel: MOCK_MODEL, registry: MOCK_REGISTRY, config,
-        emitter: new RlmEmitter(), memory: store,
+        emitter: em, memory: store,
         complete: script as unknown as import("../src/core/iteration.ts").CompleteFn,
       });
-    const first = await mk()({ rootPrompt: "h2 chain test", context: "ctx-body", depth: 0 });
+    const first = await mk(emitter)({ rootPrompt: "h2 chain test", context: "ctx-body", depth: 0 });
     check("H2: continuation chain produced an answer", first.answer.length > 0, first.answer.slice(0, 40));
     check("H2: chain persisted an episode under the original key", store.stats().episodes >= 1, JSON.stringify(store.stats()));
+    check("R2: continuation emitAnswer carries the chain answer",
+      emittedAnswer.length > 0 && first.answer.includes("chain-answer") && emittedAnswer.includes("chain-answer"),
+      `emitted=${emittedAnswer.slice(0, 60)} answer=${first.answer.slice(0, 40)}`);
+    const persisted = store.replay(taskKey("root", "h2 chain test", [], "test/mock", contextSig("ctx-body")));
+    check("R2: persist tokens are the CHAIN total (parent + leaf)",
+      persisted !== undefined && persisted.tokensIn === first.inputTokens && first.inputTokens > 0,
+      `ep=${persisted?.tokensIn} chained=${first.inputTokens}`);
     const callsBefore = calls;
     const second = await mk()({ rootPrompt: "h2 chain test", context: "ctx-body", depth: 0 });
     check("H2: identical re-run replays the chain answer (0 completions)",

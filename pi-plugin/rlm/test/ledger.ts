@@ -11,6 +11,7 @@ import {
   contextSig,
   ECHO_STUB,
   jaccard,
+  nativeRunAncestors,
   normalizePrompt,
   pathSig,
   TaskLedger,
@@ -195,6 +196,56 @@ function finish(): void {
   ledger.endRun();
 }
 
+// ── audit R4: demoted rlm_query→llm routes through the ledger ───────────────────
+
+{
+  const ledger = new TaskLedger();
+  // Consume the rlm budget so every subsequent rlm_query demotes to the leaf path.
+  ledger.tryClaim({ kind: "rlm", prompt: "budget filler", paths: [], depth: 1 }, "fill-key");
+  // Count complete1 via the leaf gate — getLlmModel is also used to build the claim key.
+  const gates = createSubcallGates(4, 2);
+  let leafExecs = 0;
+  const origLeafRun = gates.leaf.run.bind(gates.leaf);
+  gates.leaf.run = <T>(fn: () => Promise<T>): Promise<T> => {
+    leafExecs++;
+    return origLeafRun(fn);
+  };
+  const inv: Invocation = {
+    emitter: new RlmEmitter(),
+    parentId: undefined,
+    depth: 0,
+    limits: { remainingTimeoutMs: () => undefined, addUsage: () => {}, addRaw: () => {} },
+  };
+  const deps: SubcallHandlerDeps = {
+    resolve: () => inv,
+    gates,
+    registry: MOCK_REGISTRY,
+    getLlmModel: () => {
+      throw new Error("R4 test: no leaf model");
+    },
+    getConfig: () => ({ maxPromptChars: 100_000, maxDepth: 4, enableLedger: true, rlmBudget: 1 }),
+    getModel: () => MOCK_MODEL,
+    runChild: async (): Promise<RlmResult> => {
+      throw new Error("R4: demoted rlm_query must not spawn a child engine");
+    },
+    ledger,
+  };
+  const handlers = createSubcallHandlers(deps);
+  const same = "identical demoted study of the widget factory";
+  const s1 = await handlers.rlmQuery(same, 0, { detached: false });
+  const s2 = await handlers.rlmQuery(same, 0, { detached: false });
+  check("R4: both demoted spawns are llm", s1.kind === "llm" && s2.kind === "llm", `${s1.kind}/${s2.kind}`);
+  const [a1, a2] = await Promise.all([
+    handlers.awaitTask(s1.task_id ?? "", undefined, undefined, 0, { detached: false })
+      .then((r) => String((r as { result?: string }).result ?? "")),
+    handlers.awaitTask(s2.task_id ?? "", undefined, undefined, 0, { detached: false })
+      .then((r) => String((r as { result?: string }).result ?? "")),
+  ]);
+  check("R4: identical demoted prompts call complete1 once", leafExecs === 1, `leafExecs=${leafExecs}`);
+  check("R4: second demoted spawn coalesced on the ledger", ledger.hits().exact >= 1, JSON.stringify(ledger.hits()));
+  check("R4: both demoted callers share the result", a1 === a2 && a1.length > 0, `${a1.slice(0, 40)} | ${a2.slice(0, 40)}`);
+}
+
 // ── engine level: [ledger] injection + list_claims() over a real sandbox ────────
 
 {
@@ -338,16 +389,57 @@ function finish(): void {
   check("H3: a THIRD caller after done replays the stored claim", c === "LEAF-RESULT" && execs === 1);
 }
 
-// ── audit C3 (native shape): a child restating the turn CELL is stubbed ─────────
+// ── audit C3 / R1: native ancestor is the extracted TASK, not the Python cell ──
 
 {
+  const task = "study the payment flow end to end";
+  const cell = `t = rlm_query("${task}")\nprint(await_task(t))`;
+
+  // Proof the raw cell is the wrong ancestor: Jaccard against the user task is < 0.8.
+  const raw = new TaskLedger();
+  raw.beginRun(cell);
+  const rawClaim = raw.tryClaim(
+    { kind: "rlm", prompt: task, paths: [], depth: 1 },
+    taskKey("rlm", task, [], "m", ""),
+  );
+  check("R1: raw Python cell as ancestor MISSES the user task (jaccard < 0.8)",
+    rawClaim.type === "run", JSON.stringify(rawClaim));
+  raw.endRun();
+
+  const extracted = nativeRunAncestors(cell);
+  check("R1: extractor pulls the rlm_query task, not the cell",
+    extracted.length === 1 && extracted[0] === task, JSON.stringify(extracted));
+  check("R1: rlm_batch extracts every positional task string",
+    nativeRunAncestors('rlm_batch(["study auth", "study billing"], paths=["src/"])').join("|")
+      === "study auth|study billing");
+  check("R1: a cell with no rlm_* call falls back to itself",
+    nativeRunAncestors("print(context[:80])")[0] === "print(context[:80])");
+
   const led = new TaskLedger();
-  const cell = 't = rlm_query("study the flaky retry integration end to end")';
-  led.beginRun(cell); // what repl-tool.execute now does around each native turn
-  const child = { kind: "rlm" as const, prompt: cell, paths: [] as readonly string[], depth: 1 };
-  const d = led.tryClaim(child, taskKey("rlm", cell, [], "m", ""));
-  check("C3: child restating the native cell verbatim is rejected", d.type === "echo", JSON.stringify(d));
-  led.endRun();
+  const n = led.beginNativeCell(cell);
+  const d = led.tryClaim(
+    { kind: "rlm", prompt: task, paths: [], depth: 1 },
+    taskKey("rlm", task, [], "m", ""),
+  );
+  check("R1: native cell t = rlm_query(\"study the payment flow end to end\") echoes",
+    d.type === "echo", JSON.stringify(d));
+  const disjoint = led.tryClaim(
+    { kind: "rlm", prompt: "benchmark the retry backoff loop", paths: [], depth: 1 },
+    taskKey("rlm", "benchmark the retry backoff loop", [], "m", ""),
+  );
+  check("R1: disjoint child of a native cell still runs", disjoint.type === "run");
+  led.endNativeCell(n);
+
+  // C3 still holds for a child that restates the extracted task (the feature's purpose).
+  const c3 = new TaskLedger();
+  const c3cell = 't = rlm_query("study the flaky retry integration end to end")';
+  const c3n = c3.beginNativeCell(c3cell);
+  const c3d = c3.tryClaim(
+    { kind: "rlm", prompt: "study the flaky retry integration end to end", paths: [], depth: 1 },
+    taskKey("rlm", "study the flaky retry integration end to end", [], "m", ""),
+  );
+  check("C3: child restating the native-extracted task is rejected", c3d.type === "echo", JSON.stringify(c3d));
+  c3.endNativeCell(c3n);
 }
 
 finish();

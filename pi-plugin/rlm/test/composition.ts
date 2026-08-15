@@ -9,13 +9,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import { RlmController } from "../src/mode/rlm-mode.ts";
-import type { MemoryStore } from "../src/core/memory.ts";
 import { MemoryStore as MemoryStoreImpl } from "../src/core/memory.ts";
-import { buildSessionGates, type SubcallGates } from "../src/util/concurrency.ts";
+import { buildSessionGates, createSubcallGates } from "../src/util/concurrency.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
-import { createSubcallGates } from "../src/util/concurrency.ts";
+import type { EngineDeps } from "../src/core/engine.ts";
+import type { RunRlm } from "../src/core/types.ts";
 import { MOCK_MODEL, MOCK_REGISTRY, check, failureCount } from "./helpers.ts";
 
 function finish(): void {
@@ -23,25 +22,12 @@ function finish(): void {
   process.exit(failureCount() === 0 ? 0 : 1);
 }
 
-interface CapturedEngineDeps {
-  readonly memory: MemoryStore | undefined;
-  readonly gates: SubcallGates | undefined;
-  readonly config: unknown;
-}
-
 class ProbeController extends RlmController {
-  captured: CapturedEngineDeps | undefined;
+  captured: EngineDeps | undefined;
 
-  protected buildEngine(args: {
-    readonly ctx: ExtensionContext;
-    readonly models: { readonly model: Model<Api>; readonly llm: Model<Api> };
-    readonly signal: AbortSignal;
-    readonly emitter: import("../src/tool/rlm-events.ts").RlmEmitter;
-  }): import("../src/core/types.ts").RunRlm {
-    // Capture the wiring without touching the network: resolve() mirrors what createEngine
-    // would receive (the audit's exact complaint was fields MISSING here).
-    const gates = this["sessionGates" as const]?.();
-    this.captured = { memory: this.memory, gates, config: this.config };
+  /** R7: intercept the exact object `createEngine` would receive — not controller fields. */
+  protected spawnEngine(deps: EngineDeps): RunRlm {
+    this.captured = deps;
     return async () => ({
       answer: "stub-answer", iterations: 1, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 1,
     });
