@@ -31,4 +31,21 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   rootSampling: Object.freeze({ maxTokens: 16_384 }),
   subSystemPrompt: DEFAULT_SUB_SYSTEM_PROMPT,
   subSampling: Object.freeze({ maxTokens: 8192 }),
+  // v5 token budget cascade — the primary run-length control (wall-clock stays a hang backstop).
+  enableTokenBudget: true,
+  budgetShare: 0.25,
+  budgetSoftFrac: 0.8,
+  budgetTaskCap: 400_000,
+  budgetMaxContinuations: 2,
+  budgetHandoffChars: 4_000,
+  // v5 TaskLedger blackboard
+  enableLedger: true,
+  rlmBudget: 8,
+  // v5 durable memory
+  enableMemory: true,
+  injectNoteTokens: 2_000,
+  evolveEvery: 8,
+  memoryDir: null,
+  // v5 role separation: children delegate (llm + memory/ledger); "legacy" = full child surface.
+  childSurface: "delegation",
 });

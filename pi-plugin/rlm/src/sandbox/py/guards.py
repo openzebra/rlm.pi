@@ -96,7 +96,7 @@ RESERVED = frozenset(
         # Helpers (not the old *_query_batched API)
         "llm_query_chunked", "map_files", "llm_map_reduce",
         "search", "grep_context", "outline",
-        "add_context",
+        "add_context", "list_claims", "memory",
         "SHOW_VARS", "answer", "context",
     }
 )

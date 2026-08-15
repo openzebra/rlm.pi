@@ -66,7 +66,7 @@ export interface WorkerResponse {
   readonly index?: number;
 }
 
-/** Canonical interrupt kinds (api_v5). */
+/** Canonical interrupt kinds (api_v5 + v5 ledger + memory). */
 export type InterruptKind =
   | "llm_query"
   | "rlm_query"
@@ -74,7 +74,9 @@ export type InterruptKind =
   | "rlm_batch"
   | "await"
   | "finish"
-  | "add_context";
+  | "add_context"
+  | "ledger_claims"
+  | "memory";
 
 interface InterruptBase {
   readonly rid: string;
@@ -116,13 +118,31 @@ export interface AddContextInterrupt extends InterruptBase {
   readonly source?: string;
 }
 
+/** v5: sandbox asks the host for the TaskLedger claims table (`list_claims()`). */
+export interface LedgerClaimsInterrupt extends InterruptBase {
+  readonly type: "ledger_claims";
+}
+
+/** v5: sandbox reaches the durable MemoryStore (`memory.query/add/stats`). */
+export interface MemoryInterrupt extends InterruptBase {
+  readonly type: "memory";
+  readonly op: "query" | "add" | "stats";
+  readonly query?: string;
+  readonly k?: number;
+  readonly content?: string;
+  readonly paths?: readonly string[];
+  readonly tags?: readonly string[];
+}
+
 /** A mid-exec sub-LLM/tool request from the worker. */
 export type WorkerInterrupt =
   | PromptInterrupt
   | BatchInterrupt
   | AwaitInterrupt
   | FinishInterrupt
-  | AddContextInterrupt;
+  | AddContextInterrupt
+  | LedgerClaimsInterrupt
+  | MemoryInterrupt;
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
 
@@ -135,6 +155,8 @@ export const INTERRUPT_KINDS = Object.freeze(
     "await",
     "finish",
     "add_context",
+    "ledger_claims",
+    "memory",
   ]),
 );
 

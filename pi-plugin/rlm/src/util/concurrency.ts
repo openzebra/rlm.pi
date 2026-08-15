@@ -91,3 +91,50 @@ export interface SubcallGates {
 export function createSubcallGates(leafLimit: number, childLimit: number = leafLimit): SubcallGates {
   return Object.freeze({ leaf: new Semaphore(leafLimit), rlm: new DepthGates(childLimit) });
 }
+
+/** Provider-capped config slice (RlmConfig satisfies this structurally). */
+export interface ProviderCapConfig {
+  readonly maxConcurrentSubcalls: number;
+  readonly maxConcurrentChildren: number;
+  /** v5: per-provider concurrent-request caps, e.g. { zai: 4 }. Caps only ever LOWER a limit. */
+  readonly providerMaxConcurrent?: Readonly<Record<string, number>>;
+}
+
+/** min(maxConcurrentSubcalls, every involved provider's cap) — unknown providers are ignored. */
+export function effectiveSubcallLimit(
+  config: ProviderCapConfig,
+  providersInUse: readonly string[],
+): number {
+  let limit = config.maxConcurrentSubcalls;
+  for (const p of providersInUse) {
+    const cap = config.providerMaxConcurrent?.[p];
+    if (cap !== undefined && cap > 0) limit = Math.min(limit, cap);
+  }
+  return limit;
+}
+
+/** Child engines are the heavy unit — cap them against their own model's provider. */
+export function effectiveChildLimit(
+  config: ProviderCapConfig,
+  childModelProvider: string,
+): number {
+  const cap = config.providerMaxConcurrent?.[childModelProvider];
+  return cap !== undefined && cap > 0
+    ? Math.min(config.maxConcurrentChildren, cap)
+    : config.maxConcurrentChildren;
+}
+
+/** v5 session gates, capping the RIGHT model per gate (audit C6): leaf completions run on the
+ *  WORKER model, recursive child engines run on the SMART model — a shared-pool fold of both
+ *  providers would clamp the wrong side (zai smart + openai worker must cap children, not leaves).
+ *  Pure + testable; the composition roots memoize it keyed on (config, providers). */
+export function buildSessionGates(
+  config: ProviderCapConfig,
+  smartProvider: string,
+  workerProvider: string,
+): SubcallGates {
+  return createSubcallGates(
+    effectiveSubcallLimit(config, [workerProvider]),
+    effectiveChildLimit(config, smartProvider),
+  );
+}

@@ -12,6 +12,8 @@ import type { RlmInput, RlmResult, Sampling } from "../../core/types.ts";
 import type { SubcallGates } from "../../util/concurrency.ts";
 import type { SubcallOpts } from "../../sandbox/interrupts.ts";
 import type { RlmEmitter } from "../../tool/rlm-events.ts";
+import type { TaskLedger } from "../../core/ledger.ts";
+import type { MemoryStore } from "../../core/memory.ts";
 
 // ---------------------------------------------------------------------------
 // Spawn / Await / Finish — the three shapes the model sees
@@ -85,6 +87,12 @@ export interface SubcallConfig {
   readonly maxDepth: number;
   readonly subSampling?: Sampling;
   readonly subSystemPrompt?: string;
+  /** v5 TaskLedger: claim/coalesce/echo gates (optional — unwired callers keep ledger off). */
+  readonly enableLedger?: boolean;
+  /** v5: real rlm spawns before demotion to llm (0 = never demote). */
+  readonly rlmBudget?: number;
+  /** v5 durable memory gates (optional; omitted → memory off). */
+  readonly enableMemory?: boolean;
 }
 
 export interface SubcallHandlerDeps {
@@ -104,6 +112,10 @@ export interface SubcallHandlerDeps {
   readonly degrade?: (prompt: string, depth: number) => Promise<string>;
   readonly onChildUsage?: (costUsd: number, inputTokens: number, outputTokens: number) => void;
   readonly trackDetached?: <T>(run: () => Promise<T>) => Promise<T>;
+  /** v5 TaskLedger blackboard shared across the whole run tree (claim/coalesce/echo/demote). */
+  readonly ledger?: TaskLedger;
+  /** v5 durable memory (session-wide store) for child replay + episode persistence. */
+  readonly memory?: MemoryStore;
 }
 
 // ---------------------------------------------------------------------------

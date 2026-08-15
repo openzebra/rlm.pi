@@ -34,6 +34,52 @@ export function shouldCompact(history: ChatMsg[], deps: CompactionDeps): boolean
 }
 
 /**
+ * v5 G1: elide old tool/repl payload bodies, keep the head (system) and the working-set tail
+ * intact. Runs BEFORE `shouldCompact` — v3 measured −97% tokens on coding tasks with this
+ * alone, often avoiding the summarizer entirely. Head-ONLY elision was a measured v3 bug
+ * (turns grew 3→8): the tail carries the current working set, so the last `keepTurns` turns
+ * are never touched.
+ */
+export function elideOldToolPayloads(
+  history: ChatMsg[],
+  keepTurns = 2,
+  toolChars = 1_500,
+): ChatMsg[] {
+  if (history.length === 0) return history;
+  // Find the assistant message that starts the keepTurns-th-from-last turn; everything from
+  // there on is the protected tail.
+  let tailStart = 0;
+  let seen = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === "assistant") {
+      seen++;
+      if (seen >= keepTurns) {
+        tailStart = i;
+        break;
+      }
+    }
+  }
+  if (tailStart === 0) return history; // fewer turns than keepTurns — nothing to elide
+  let changed = false;
+  const marker = "\n…[elided v5-G1]…";
+  const out: ChatMsg[] = new Array<ChatMsg>(history.length); // pre-allocated
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i];
+    if (
+      i < tailStart &&
+      m.role === "user" &&
+      m.content.length > toolChars
+    ) {
+      out[i] = { role: "user", content: m.content.slice(0, toolChars) + marker };
+      changed = true;
+    } else {
+      out[i] = m;
+    }
+  }
+  return changed ? out : history;
+}
+
+/**
  * Summarize the trajectory and return a compacted history: [system, summary(assistant),
  * continue(user)]. The caller continues appending turns from there.
  */

@@ -122,10 +122,13 @@ print("B2", await_task(tb2))
   process.exit(failures === 0 ? 0 : 1);
 }
 
-/** Advertised rlm_* kwargs in the prompt docs must exist in worker.py's signatures. */
+/** Advertised rlm_* kwargs in the prompt docs must exist in the worker scaffold's signatures. */
 function testDocDrift(): void {
   const srcDir = join(TEST_DIR, "..", "src");
-  const worker = readFileSync(join(srcDir, "sandbox", "py", "worker.py"), "utf8");
+  // Phase 0 (v5 port): the REPL surface moved off worker.py onto the WorkerScaffold mixin in scaffold.py.
+  const worker =
+    readFileSync(join(srcDir, "sandbox", "py", "worker.py"), "utf8") +
+    readFileSync(join(srcDir, "sandbox", "py", "scaffold.py"), "utf8");
   const docs =
     readFileSync(join(srcDir, "prompts", "native.ts"), "utf8") +
     readFileSync(join(srcDir, "prompts", "glossary.ts"), "utf8") +

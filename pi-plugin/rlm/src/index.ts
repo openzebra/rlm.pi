@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
 import { registerRlmCommand } from "./commands/rlm.ts";
 import { registerRlmConfigCommand } from "./commands/rlm-config.ts";
+import type { RlmConfig } from "./core/types.ts";
 import { createRlmTool } from "./tool/rlm-tool.ts";
 import { createReplTool } from "./tool/repl-tool.ts";
 import { loadSettings, mergeConfig, resolveModelId } from "./config/settings.ts";
@@ -13,8 +14,10 @@ import { postRlmGuide } from "./ui/intro.ts";
 import { setRlmModeStatus } from "./ui/status.ts";
 import { markdownTheme } from "./ui/theme-adapter.ts";
 import { SandboxManager } from "./sandbox/sandbox-manager.ts";
-import { createSubcallGates } from "./util/concurrency.ts";
+import { buildSessionGates, type SubcallGates } from "./util/concurrency.ts";
 import { BackgroundTasks } from "./tool/background-tasks.ts";
+import { MemoryStore } from "./core/memory.ts";
+import { modelComplete } from "./bridge/model.ts";
 import { resolve } from "node:path";
 import { resolveSource } from "./context/resolve.ts";
 import { formatContextListing } from "./context/listing.ts";
@@ -62,7 +65,21 @@ export default function rlmExtension(pi: ExtensionAPI): void {
 
   // Init synchronously with defaults — ensures commands/tools/handlers register before session_start
   const config = mergeConfig({});
-  const controller = new RlmController(config);
+  // v5 durable memory: one store per session under <cwd>/.rlm/memory (L1 replay + L2 notes).
+  // NOTE (audit M4): this store IS shared by both composition roots, but the TaskLedger is
+  // NOT — the native repl() session and each headless rlm run each keep their own blackboard
+  // (v5 parity: per-run ledger). Claims/coalescing reset at that boundary, by design.
+  // The consolidation LLM + real workspace root are attached in session_start (setLlm/setRoot).
+  const memory = new MemoryStore(
+    process.cwd(),
+    {
+      dir: config.memoryDir ?? undefined,
+      injectNoteTokens: config.injectNoteTokens,
+      evolveEvery: config.evolveEvery,
+    },
+    config.enableMemory,
+  );
+  const controller = new RlmController(config, memory);
   let onSandboxDiscardExtra: (() => void) | undefined;
   const sandboxManager = new SandboxManager({
     execTimeoutS: config.execTimeoutS,
@@ -75,9 +92,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     awaitTimeoutS: Math.round(config.requestTimeoutMs / 1000),
     onSandboxDiscarded: () => { onSandboxDiscardExtra?.(); },
   });
-  // One admission gate for the whole session: spawn() lets the sandbox put many requests on
-  // the wire at once, so nothing smaller than session scope actually bounds fan-out.
-  const gates = createSubcallGates(config.maxConcurrentSubcalls, config.maxConcurrentChildren);
+  // v5: sub-call admission is built per session (see session_start) so provider concurrency
+  // caps resolve against the models actually in use.
   const background = new BackgroundTasks({
     maxTimeoutMs: config.maxTimeoutMs,
     maxTokens: config.maxTokens,
@@ -198,6 +214,40 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const llmModel = controller.llmModel ?? cheapestModel(ctx.modelRegistry) ?? ctx.model;
     const model = ctx.model;
     if (llmModel && model) {
+      // Consolidation runs on the cheap worker model through the single completion entry point;
+      // the workspace root is only known once the session starts.
+      const consolidateModel = llmModel;
+      memory.setLlm((prompt) =>
+        modelComplete([{ role: "user", content: prompt }], { model: consolidateModel, registry: ctx.modelRegistry })
+          .then((r) => r.text));
+      memory.setRoot(ctx.cwd ?? process.cwd());
+      // v5 provider caps (audit C1/C6): ONE resolver shared by both composition roots — the
+      // repl() tool and RlmController.start admit through the same pool, each gate capped
+      // against the model that actually runs on it (leaves = worker, children = smart).
+      // Memoized on (config, providers) so /rlm-config changes apply without a restart.
+      let gatesMemo:
+        | { readonly config: RlmConfig; readonly smart: string; readonly worker: string; readonly gates: SubcallGates }
+        | undefined;
+      const resolveSessionGates = (): SubcallGates => {
+        const smart = model;
+        const worker = controller.llmModel ?? cheapestModel(ctx.modelRegistry) ?? model;
+        const workerProvider = worker.provider;
+        if (
+          gatesMemo === undefined ||
+          gatesMemo.config !== controller.config ||
+          gatesMemo.smart !== smart.provider ||
+          gatesMemo.worker !== workerProvider
+        ) {
+          gatesMemo = {
+            config: controller.config,
+            smart: smart.provider,
+            worker: workerProvider,
+            gates: buildSessionGates(controller.config, smart.provider, workerProvider),
+          };
+        }
+        return gatesMemo.gates;
+      };
+      controller.setSessionGates(resolveSessionGates);
       try {
         pi.registerTool(createReplTool({
           sandboxManager,
@@ -207,8 +257,10 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           getLlmModel: () => controller.resolveModels(ctx)?.llm,
           registry: ctx.modelRegistry,
           getConfig: () => controller.config,
-          gates,
+          gates: resolveSessionGates(),
+          resolveGates: resolveSessionGates,
           background,
+          memory,
           registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
           registerContextBundle: (bundle) => {
             contextBundleRef = bundle;

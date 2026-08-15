@@ -161,7 +161,8 @@ async function main() {
     // Small stdout flows through verbatim — no var list appended (nothing was lost).
     rr = await vb.exec("print(len(acc))");
     const small = formatReplOutputs([rr]);
-    check("small stdout kept verbatim", small.trim() === "3", small.slice(0, 60));
+    // v5 (audit C4): outputs carry the `REPL stdout:` needle distillTrajectory harvests.
+    check("small stdout kept verbatim", small.trim() === "REPL stdout:\n3", small.slice(0, 60));
     // Large stdout collapses to a head preview + elision note (not the full dump).
     rr = await vb.exec("big = 'a' * 5000; print(big)");
     const big = formatReplOutputs([rr]);

@@ -19,7 +19,10 @@ export function buildTurnPrompt(
   return `${prefix}${body}`;
 }
 
-/** Asked once when the engine runs out of turns without a submitted answer. */
+/** Asked once when the engine runs out of turns without a submitted answer. Same finalize
+ *  dialect as the budget wrap-up note (audit M6): answer-ready first, plain text only as an
+ *  explicit fallback the engine still accepts. */
 export const FINALIZE_PROMPT =
-  "You are out of turns. Provide your best final answer now based on everything you have gathered, " +
-  'by setting `answer["content"]` and `answer["ready"] = True` (fenced ```repl```), or as plain text.';
+  "You are out of turns. Finalize NOW: set `answer[\"content\"]` and `answer[\"ready\"] = True` " +
+    "(fenced ```repl```) with your best final answer from everything you have gathered. " +
+    "Only if the REPL is unavailable, answer as plain text.";

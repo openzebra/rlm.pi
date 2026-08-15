@@ -30,6 +30,9 @@ export type { AddContextResult, SubcallOpts, SubLlmHandlers } from "./interrupts
 export interface SandboxOptions {
   /** Sandbox recursion depth label (passed to the worker, used in interrupt routing). */
   readonly depth?: number;
+  /** v5 role separation: "child" sandboxes install the delegation-only scaffold (no
+   *  search/grep_context/outline/add_context — retrieval belongs to the root). */
+  readonly surface?: "root" | "child";
   /** Per-`repl`-block wall-clock timeout inside the worker (seconds). */
   readonly execTimeoutS?: number;
   /** Parent-side watchdog per request (ms); on breach the worker is SIGKILLed. */
@@ -119,6 +122,7 @@ export class PythonSandbox {
       "-X", "utf8=1",
       "-u", WORKER_PATH,
       "--depth", String(opts.depth ?? 1),
+      "--surface", opts.surface === "child" ? "child" : "root",
       "--timeout", String(opts.execTimeoutS ?? 600),
     ];
     if (opts.maxPromptChars !== undefined) {

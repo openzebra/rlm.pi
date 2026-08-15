@@ -16,6 +16,8 @@ import {
   createTaskRegistry,
   type Invocation,
 } from "../bridge/handlers/index.ts";
+import { TaskLedger, contextSig, taskKey } from "./ledger.ts";
+import { type MemoryStore, rootContextPaths } from "./memory.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
@@ -25,10 +27,12 @@ import { pinContext, type PinnedContext } from "../sandbox/context-file.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
-import { compactHistory, shouldCompact } from "./compaction.ts";
+import { compactHistory, elideOldToolPayloads, shouldCompact } from "./compaction.ts";
 import { appendUserMessage } from "./history.ts";
 import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
+import { continuationPrompt, distillTrajectory, resolveBudget, WRAP_UP_BUDGET } from "./budget.ts";
+import { ModelContextRegistry, modelsCachePath } from "./model-registry.ts";
 import type { RlmConfig, RlmInput, RlmResult, RunRlm, Sampling } from "./types.ts";
 import { createSubcallGates, type SubcallGates } from "../util/concurrency.ts";
 
@@ -38,6 +42,9 @@ import { createSubcallGates, type SubcallGates } from "../util/concurrency.ts";
  * hold a finished run open on work whose result nobody can receive.
  */
 const DETACHED_SETTLE_MS = 5_000;
+/** H6 (audit): root episodes snapshot at most this many real files — replay invalidation for
+ *  the disk-backed slice of the context without hashing an unbounded repository. */
+const ROOT_HASH_MAX = 64;
 
 
 export interface EngineDeps {
@@ -55,6 +62,8 @@ export interface EngineDeps {
   readonly onUsage?: (usage: Usage, role: "root" | "sub") => void;
   /** Test-only: override model completion (scripted multi-turn responses). */
   readonly complete?: import("./iteration.ts").CompleteFn;
+  /** v5: session-wide durable memory store (`.rlm/`); omitted → memory off for this engine. */
+  readonly memory?: MemoryStore;
 }
 
 /** Build a `runRlm` bound to the given deps. The returned function is reused for recursion. */
@@ -81,6 +90,17 @@ export function createEngine(deps: EngineDeps): RunRlm {
       maxTokens: deps.limits?.maxTokens,
     });
 
+    // v5 token budget: the primary run-length control. A continuation run carries its own
+    // budget in `input.budget`; a fresh run resolves one from the model's context window.
+    // ONE registry per run (audit M1): shared by budget resolution, and observed when the
+    // model metadata already knows the window so the disk cache populates for other callers.
+    const modelCtxRegistry = new ModelContextRegistry(modelsCachePath(runCwd));
+    const budget =
+      input.budget ??
+      (deps.config.enableTokenBudget
+        ? resolveBudget(contextWindowOrFallback(model, modelCtxRegistry), deps.config)
+        : undefined);
+
     // One Invocation for the whole run: this engine owns exactly one sandbox at one depth,
     // and its emitter and LimitGuard outlive every sub-call it services — including
     // detached ones, which is why the headless path needs no session registry.
@@ -105,6 +125,51 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let detachedIdle: (() => void) | undefined;
     // One registry per run — unawaited task reminders share the same map as await handlers.
     const taskRegistry = createTaskRegistry();
+    // v5 TaskLedger: one blackboard per root run; children inherit the same instance via
+    // childRun (RlmInput.ledger — the one construction seam, DRY #6).
+    const runLedger = input.ledger ?? new TaskLedger();
+    if (deps.config.enableLedger) runLedger.beginRun(input.rootPrompt);
+
+    // v5 durable memory: read-only root replay — an identical prompt over an identical
+    // context answers for zero API calls (measured 10,051 → 0 tok in rlm_test).
+    const rootMemory =
+      deps.memory !== undefined && deps.config.enableMemory ? deps.memory : undefined;
+    const modelRefStr = `${model.provider}/${model.id}`;
+    const rootKey = taskKey("root", input.rootPrompt, [], modelRefStr, contextSig(input.context));
+    if (rootMemory !== undefined && input.depth === 0 && input.budget === undefined) {
+      const hit = rootMemory.replay(rootKey);
+      if (hit !== undefined) {
+        emitter.emitStatus("done");
+        return {
+          answer: hit.result,
+          iterations: 0,
+          costUsd: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          durationMs: 0,
+        };
+      }
+    }
+    const persistRoot = (answer: string): void => {
+      if (rootMemory === undefined || input.depth !== 0) return;
+      // H2 (audit): only clean root runs persist — a continuation leaf carries the ORIGINAL
+      // run's key (it persists the chain itself), and stopped/aborted partials must never
+      // replay as if they were real answers.
+      if (input.budget !== undefined) return;
+      if (answer === "" || answer === "(aborted)" || answer.startsWith("(stopped")) return;
+      const u = limits.usage();
+      rootMemory.recordEpisode({
+        key: rootKey,
+        kind: "root",
+        model: modelRefStr,
+        prompt: input.rootPrompt,
+        paths: rootContextPaths(input.context, ROOT_HASH_MAX),
+        result: answer,
+        tokensIn: u.inputTokens,
+        tokensOut: u.outputTokens,
+      });
+    };
+
     const subcalls = createSubcallHandlers({
       resolve: () => invocation,
       gates: deps.gates
@@ -119,6 +184,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
       // despite being wired before liveContext is assigned — children can only spawn from an
       // interrupt during runTurn, which is strictly after loadContext below.
       getChildContext: () => liveContext,
+      ledger: runLedger,
+      memory: rootMemory,
       trackDetached: async (task) => {
         detachedInFlight += 1;
         try {
@@ -163,6 +230,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let compactions = 0;
     let completedTurns = 0;
     let nodeStatus: "done" | "error" = "done";
+    // v5 budget cascade state: the wrap-up note fires for exactly ONE turn after crossing soft.
+    let softFired = false;
+    let softNoteTurn = -1;
 
     try {
       const meta = {
@@ -177,10 +247,13 @@ export function createEngine(deps: EngineDeps): RunRlm {
         maxPromptChars: deps.config.maxPromptChars,
         contextLoader: deps.config.contextLoader,
         child: input.depth > 0,
+        delegation: input.depth > 0 && deps.config.childSurface === "delegation",
         depth: input.depth,
       });
 
-      const contextHandlers = deps.config.contextLoader
+      // v5 (audit M5): a delegation child does not grow the world — add_context stays root-only.
+      const contextHandlers =
+        deps.config.contextLoader && (input.depth === 0 || deps.config.childSurface !== "delegation")
         ? buildAddContextHandler({
             cwd: runCwd,
             emitter,
@@ -198,6 +271,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
 
       sandbox = await PythonSandbox.spawn({
         depth: input.depth,
+        surface: input.depth > 0 && deps.config.childSurface === "delegation" ? "child" : "root",
         execTimeoutS: deps.config.execTimeoutS,
         requestTimeoutMs: deps.config.requestTimeoutMs,
         python: deps.config.python,
@@ -205,7 +279,12 @@ export function createEngine(deps: EngineDeps): RunRlm {
         initTimeoutMs: deps.config.sandboxInitTimeoutMs,
         maxPromptChars: deps.config.maxPromptChars,
         awaitTimeoutS: Math.round(deps.config.requestTimeoutMs / 1000),
-        handlers: { ...subcalls, ...contextHandlers },
+        handlers: {
+          ...subcalls,
+          ...contextHandlers,
+          ledgerClaims: () => Promise.resolve(runLedger.listClaims()),
+          memoryOp: (op, args) => Promise.resolve(rootMemory?.serviceOp(op, args) ?? "memory off"),
+        },
       });
 
       let history: ChatMsg[] = [{ role: "system", content: system }];
@@ -221,6 +300,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
         else emitter.emitTurn(i + 1, deps.config.maxIterations);
 
         if (deps.config.compaction) {
+          // v5 G1 first: elide old tool payloads head+tail — often avoids the summary entirely.
+          history = elideOldToolPayloads(history);
           const compactionDeps = {
             // Summarisation is done by the cheap worker model; the threshold stays on the
             // root model's context window (that is the window the history fills each turn).
@@ -249,7 +330,18 @@ export function createEngine(deps: EngineDeps): RunRlm {
           );
         }
 
-        appendUserMessage(history, buildTurnPrompt(i, deps.config.maxIterations));
+        // v5 [ledger] blackboard + [memory] notes — each silent ("") when it has nothing to say.
+        const ledgerBlock = deps.config.enableLedger ? runLedger.injectBlock() : "";
+        const memoryBlock = rootMemory !== undefined ? rootMemory.injectBlock(input.rootPrompt) : "";
+        const notes =
+          [
+            i === softNoteTurn ? WRAP_UP_BUDGET : undefined,
+            ledgerBlock === "" ? undefined : ledgerBlock,
+            memoryBlock === "" ? undefined : memoryBlock,
+          ]
+            .filter((s): s is string => s !== undefined)
+            .join("\n\n") || undefined;
+        appendUserMessage(history, buildTurnPrompt(i, deps.config.maxIterations, notes));
 
         // rootSampling fields win; smartReasoning is the default reasoning when not overridden.
         const rootSampling: Sampling = {
@@ -280,6 +372,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         const final = finalAnswerOf(turn.results);
         if (final != null) {
           const done = result(final, i + 1, limits);
+          persistRoot(done.answer);
           lastAnswer = done.answer;
           return done;
         }
@@ -287,9 +380,59 @@ export function createEngine(deps: EngineDeps): RunRlm {
         limits.observe(turnHadError(turn.results));
         history.push({ role: "assistant", content: turn.response });
         pendingReplOutputs = formatReplOutputs(turn.results, turn.skippedBlocks);
+
+        // ── v5 budget cascade ─────────────────────────────────────────────────────
+        // Content control lives here; wall-clock timeouts stay hang backstops. Whole-tree
+        // tokens (root + sub-LLM) reach `limits` through the invocation's addUsage/addRaw seams.
+        if (budget !== undefined) {
+          const u = limits.usage();
+          budget.observeTotal(u.inputTokens, u.outputTokens);
+          const bstate = budget.state();
+          if (bstate === "soft" && !softFired) {
+            softFired = true;
+            softNoteTurn = i + 1;
+            if (selfReportId) {
+              emitter.emitSubcallUpdated({ id: selfReportId, detail: `budget soft @ ${u.inputTokens + u.outputTokens}/${budget.soft} tok` });
+            }
+          }
+          if (bstate === "hard") {
+            if (budget.canContinue()) {
+              // Distill the trajectory and chain a fresh run with a fresh spend window —
+              // the v4 "finalize NOW" flaw fix: never abort mid-task, restructure-and-resume.
+              const handoff = distillTrajectory(history, input.rootPrompt, deps.config.budgetHandoffChars);
+              const cont = budget.nextContinuation();
+              if (selfReportId) {
+                emitter.emitSubcallUpdated({ id: selfReportId, detail: `budget hard → continuation ${cont.continuations}` });
+              }
+              const inner = await run({
+                ...input,
+                rootPrompt: continuationPrompt(cont.continuations, handoff),
+                context: liveContext, // H9: sources added mid-run reach the leaf
+                budget: cont,
+                remainingTimeoutMs: limits.remainingTimeoutMs(),
+              });
+              // H9: report the CHAIN's spend, not just the leaf's fresh guard.
+              const u = limits.usage();
+              const chained: RlmResult = {
+                ...inner,
+                iterations: inner.iterations + completedTurns,
+                inputTokens: inner.inputTokens + u.inputTokens,
+                outputTokens: inner.outputTokens + u.outputTokens,
+                costUsd: inner.costUsd + u.costUsd,
+              };
+              // H2: the ORIGINAL run persists the chain's answer under the ORIGINAL key —
+              // the next identical prompt must replay the full result, not miss.
+              persistRoot(chained.answer);
+              return chained;
+            }
+            // Chain cap reached — finalize with the best partial (a budget never throws).
+            break;
+          }
+        }
       }
       if (pendingReplOutputs) appendUserMessage(history, pendingReplOutputs);
       const finalized = result(await finalize(history, model, deps, limits), deps.config.maxIterations, limits);
+      persistRoot(finalized.answer);
       lastAnswer = finalized.answer;
       return finalized;
     } catch (err) {
@@ -308,6 +451,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
       nodeStatus = "error";
       throw err;
     } finally {
+      if (deps.config.enableLedger) runLedger.endRun();
       if (selfReportId) {
         emitter.emitSubcallUpdated({
           id: selfReportId,
@@ -331,6 +475,17 @@ export function createEngine(deps: EngineDeps): RunRlm {
 function result(answer: string, iterations: number, limits: LimitGuard): RlmResult {
   const u = limits.usage();
   return { answer, iterations, costUsd: u.costUsd, inputTokens: u.inputTokens, outputTokens: u.outputTokens, durationMs: u.durationMs };
+}
+
+/** Model metadata window, else the offline registry fallback (disk cache → table → 32k). */
+/** Model metadata window, else the offline registry fallback (disk cache → table → 32k).
+ *  When metadata provides the window it is observed into the cache (fail-soft, audit M1). */
+function contextWindowOrFallback(model: Model<Api>, registry: ModelContextRegistry): number {
+  if (model.contextWindow !== undefined && model.contextWindow > 0) {
+    registry.observe(`${model.provider}/${model.id}`, model.contextWindow);
+    return model.contextWindow;
+  }
+  return registry.limitFor(`${model.provider}/${model.id}`);
 }
 
 /** Out of turns: ask the model for its best final answer (plain text). */

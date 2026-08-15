@@ -234,7 +234,9 @@ async function testChildEngineSeesInheritedContext(): Promise<boolean> {
     model: MOCK_MODEL,
     llmModel: MOCK_MODEL,
     registry: MOCK_REGISTRY,
-    config: { ...DEFAULT_CONFIG, maxIterations: 4, compaction: false },
+    // childSurface "legacy": this suite verifies context INHERITANCE (issue #4) — probing the
+    // inherited pack with search() is the test's point, not the v5 delegation doctrine.
+    config: { ...DEFAULT_CONFIG, maxIterations: 4, compaction: false, childSurface: "legacy" },
     complete,
   })({ rootPrompt: "what is alpha?", context: files, depth: 1, parentNodeId: "n1" });
 
@@ -411,7 +413,9 @@ async function main() {
     model: smart,
     llmModel: worker,
     registry,
-    config: { ...DEFAULT_CONFIG, maxIterations: 8, maxDepth: 2, execTimeoutS: 30 },
+    // childSurface "legacy": this suite verifies context INHERITANCE (issue #4) — the child
+    // probing its narrowed pack with search() is the point, not the v5 delegation doctrine.
+    config: { ...DEFAULT_CONFIG, maxIterations: 8, maxDepth: 2, execTimeoutS: 30, childSurface: "legacy" },
     limits: { maxTimeoutMs: 180_000 },
     onUsage: (u, role) => {
       if (role === "root") rootUsd += u.cost.total;
