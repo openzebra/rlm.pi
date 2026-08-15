@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.8] — 2026-08-16
 
-Port of the rlm_test v5 engine (0.2.0 → 0.5.0 findings) plus the post-port audit fixes
-(plan: `RLM_V5_UPGRADE_PLAN.md`, audit: `RLM_V5_AUDIT.md` at the repo root). Five new subsystems,
-all on by default, each with a one-flip rollback in `rlm.json`. 26/26 smoke suites green.
+Port of the rlm_test v5 engine (0.2.0 → 0.5.0 findings) plus the post-port audit fixes.
+Five new subsystems, all on by default, each with a one-flip rollback in `rlm.json`.
+26/26 smoke suites green.
 
 ### Added
 
@@ -61,7 +61,7 @@ all on by default, each with a one-flip rollback in `rlm.json`. 26/26 smoke suit
 - **New suites** — `test/budget.ts`, `test/ledger.ts`, `test/memory.ts`, `test/composition.ts`
   (the second-construction-path guard), `test/concurrency-provider.ts`, `test/child-surface.ts`.
 
-### Fixed (post-port audit — `RLM_V5_AUDIT.md`)
+### Fixed (post-port audit)
 
 - **Both composition roots wired.** `RlmController.start()` (the `rlm` tool / native-mode
   path) now receives the session `MemoryStore` and the provider-capped session gates through
