@@ -370,13 +370,104 @@ async function testWatchdogHeartbeat(): Promise<void> {
   }
 }
 
+// ── 14. Soft stall + heartbeat ────────────────────────────────────────────────────────────
+
+async function testSoftStallAndCollect(): Promise<void> {
+  // SIGALRM (the stall) does not exist on Windows — Layer B is Unix-only, same as before.
+  if (process.platform === "win32") return;
+
+  let resolveDone: (() => void) | undefined;
+  const done = new Promise<void>((resolve) => { resolveDone = resolve; });
+  const sb = await PythonSandbox.spawn({
+    depth: 1,
+    awaitTimeoutS: 0.8,
+    execTimeoutS: 30,
+    requestTimeoutMs: 30_000,
+    handlers: {
+      llmQuery: async () => {
+        await sleep(2_000);
+        resolveDone?.();
+        return "late";
+      },
+    },
+  });
+  try {
+    const stalled = await sb.exec(`print(await_task(llm_query("x")))`);
+    check("soft stall — cell is not raised", !stalled.raised, stalled.stderr.slice(0, 200));
+    check("soft stall — Error: still running",
+      stalled.stdout.includes("Error:") && stalled.stdout.includes("still running"),
+      stalled.stdout.slice(0, 240));
+    check("soft stall — Task stays pending",
+      stalled.pendingTasks.length === 1, `${stalled.pendingTasks.length}`);
+
+    await done;
+    await sleep(80);
+    const collected = await sb.exec(`print(await_task())`);
+    check("collect after stall — result", collected.stdout.trim() === "late", collected.stdout.trim());
+    check("collect after stall — not raised", !collected.raised, collected.stderr.slice(0, 120));
+    check("collect after stall — no pending",
+      collected.pendingTasks.length === 0, `${collected.pendingTasks.length}`);
+  } finally {
+    await sb.dispose();
+  }
+}
+
+async function testHeartbeatKeepsAwaitAlive(): Promise<void> {
+  const sb = await PythonSandbox.spawn({
+    depth: 1,
+    awaitTimeoutS: 0.8,
+    execTimeoutS: 30,
+    requestTimeoutMs: 30_000,
+    handlers: { llmQuery: async () => { await sleep(2_000); return "kept"; } },
+  });
+  const beat = setInterval(() => sb.refreshWatchdog(), 200);
+  try {
+    const res = await sb.exec(`print(await_task(llm_query("x")))`);
+    check("heartbeat keeps await past awaitTimeoutS",
+      !res.raised && res.stdout.trim() === "kept",
+      res.raised ? res.stderr.slice(0, 160) : res.stdout.trim());
+  } finally {
+    clearInterval(beat);
+    await sb.dispose();
+  }
+}
+
+async function testIdleHeartbeatHarmless(): Promise<void> {
+  const sb = await PythonSandbox.spawn({
+    depth: 1,
+    execTimeoutS: 30,
+    requestTimeoutMs: 30_000,
+    handlers: {},
+  });
+  try {
+    const first = sb.exec(`import time; time.sleep(0.4); print("a")`);
+    await sleep(80);
+    // Pending exec → heartbeat is actually written. After the cell returns, main()
+    // must swallow it rather than reply `unknown type: heartbeat`.
+    sb.refreshWatchdog();
+    const a = await first;
+    const b = await sb.exec(`print("b")`);
+    check("heartbeat mid-exec does not raise", !a.raised && a.stdout.trim() === "a",
+      a.raised ? a.stderr.slice(0, 120) : a.stdout.trim());
+    check("idle heartbeat swallow does not break the next exec",
+      !b.raised && b.stdout.trim() === "b",
+      b.raised ? b.stderr.slice(0, 120) : b.stdout.trim());
+  } finally {
+    await sb.dispose();
+  }
+}
+
 // ── Prompts ──────────────────────────────────────────────────────────────────────────────
 
 function testPrompts(): void {
   const headless = buildRlmSystemPrompt({ contextType: "list", contextChars: 100 }, { recursion: true });
   check("headless prompt documents spawn", headless.includes("spawn(fn, *args)"), "");
   check("headless prompt documents await_task", headless.includes("await_task"), "");
+  check("headless prompt documents stall recovery",
+    headless.includes("Error: sub-call still running"), "");
   check("native prompt documents spawn", NATIVE_PROMPT_STATIC.includes("spawn(fn, *args)"), "");
+  check("native prompt documents stall recovery",
+    NATIVE_PROMPT_STATIC.includes("Error: sub-call still running"), "");
   check("native prompt stays within its budget",
     NATIVE_PROMPT_STATIC.length < NATIVE_PROMPT_BUDGET,
     `${NATIVE_PROMPT_STATIC.length.toLocaleString()} / ${NATIVE_PROMPT_BUDGET.toLocaleString()} chars`);
@@ -398,6 +489,9 @@ async function main(): Promise<void> {
   await testUnawaitedCostReported();
   await testSandboxDeathWithDetached();
   await testWatchdogHeartbeat();
+  await testSoftStallAndCollect();
+  await testHeartbeatKeepsAwaitAlive();
+  await testIdleHeartbeatHarmless();
   testPrompts();
 
   const failures = failureCount();

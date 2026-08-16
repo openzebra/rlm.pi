@@ -10,6 +10,9 @@ dist/
 .rlm/
 .pi-glla/
 
+# Local planning / audit scratch — do not commit
+RLM_V5_*.md
+
 # E2E harness artifacts + local OpenRouter key (never commit)
 .rlm-e2e/
 pi-plugin/rlm/test/.env.e2e

@@ -5,7 +5,98 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.7] — 2026-08-13
+## [Unreleased]
+
+### Fixed
+
+- **False `_StallTimeout` on a healthy long sub-call.** `refreshWatchdog()` now writes a
+  `{type:"heartbeat"}` frame so the worker's stall alarm rearms while the host is still
+  working. `await_task` returns `Error: sub-call still running` instead of aborting the
+  cell with a traceback; the Task stays unsettled and a later `await_task` collects it.
+  Headless `runRlm` now ticks the same watchdog interval as native repl (it previously
+  had none, so a long child could SIGKILL the parent worker at `requestTimeoutMs`).
+
+## [0.3.8] — 2026-08-16
+
+Port of the rlm_test v5 engine (0.2.0 → 0.5.0 findings) plus the post-port audit fixes.
+Five new subsystems, all on by default, each with a one-flip rollback in `rlm.json`.
+26/26 smoke suites green.
+
+### Added
+
+- **Token budget cascade** (`core/budget.ts`) — the primary run-length control, replacing
+  timeouts-as-content-limits. Cap = `budgetShare` (0.25) × the model's context window, clamped
+  by `budgetTaskCap` (400k). At 80% of the cap the model gets exactly ONE wrap-up turn; at the
+  cap the trajectory is distilled (`distillTrajectory` — goal, confirmed findings, REPL state,
+  next step) and handed to a fresh continuation run, chain-capped at `budgetMaxContinuations`
+  (2). A budget never throws: the v4 "finalize NOW" wrong-answer flaw is fixed by
+  restructure-and-resume. Chain results report the whole chain's spend and persist under the
+  ORIGINAL root key, so the next identical prompt replays. Wall-clock timeouts stay as hang
+  backstops only (`maxTokens` documented as the separate hard-abort tree cap).
+- **G1 head+tail elision** (`core/compaction.ts`) — old tool payloads elided with the working
+  set tail kept, before the summarizer; often avoids summarization entirely (v3 measured
+  −97% tokens on coding).
+- **TaskLedger blackboard** (`core/ledger.ts`) — session-global claim state every agent sees
+  (`[ledger]` block in prompts, silent when empty; `list_claims()` REPL call). Stops duplicate
+  work three ways: exact-hash coalesce (one runner, many waiters), ancestor-echo reject (a child
+  restating an ancestor task gets a stub), and near-dup coalesce (Jaccard ≥ 0.8, or ≥ 0.7 with
+  the same paths). `rlmBudget` (8) demotes extra `rlm_query` spawns to `llm_query`. Every leaf
+  (including each `llm_batch` item) and every child routes through it; `waitFor` is bounded so
+  a dead runner parks nobody forever. Claims are immutable frozen records with the full
+  pending → running → done/error lifecycle.
+- **Durable memory** (`core/memory.ts`) under `<root>/.rlm/` — L1 episodes (JSONL, append-only,
+  trim at 4k) with sha256 file-hash invalidation replay an identical read-only run for ZERO
+  API calls (v5 measured 10,051 → 0 tok); L2 notes (single JSON) with BM25 retrieval,
+  link-on-write, and batched A-MEM-lite consolidation (single-flight, verbatim fallback).
+  Root episodes snapshot the real-file slice of the context for replay invalidation; hashing
+  is chunked (64KiB `readSync`) and jailed to the workspace root (`../` gets no digest).
+  The sandbox reaches it via `memory.query(q)` / `memory.add(text, paths=…, tags=…)` /
+  `memory.stats()` — one implementation (`serviceOp`) shared by both composition roots.
+  Writes are fail-soft; notes carry a never-store-secrets warning in both prompt surfaces.
+- **Provider concurrency caps** — `providerMaxConcurrent` (e.g. `{ "zai": 4 }`) clamps the
+  session gates against the RIGHT model per gate: leaf completions against the worker
+  provider, recursive child engines against the smart provider (providers that break > 4
+  concurrent agents are protected). Gates are built by one memoized resolver shared by BOTH
+  composition roots and rebuild when `/rlm-config` changes providers. Status line shows active
+  caps (`· caps zai=4`).
+- **Delegation child surface** (`childSurface: "delegation"`) — v5 role separation: child
+  engines get the closed delegation API (llm calls, spawn/await, map_files, memory/ledger)
+  with NO `search`/`grep_context`/`outline`/`add_context`; their world arrives as text via
+  the inherited context. The system prompt, worked examples, ENV tips, and orchestrator
+  addendum all carry delegation variants so the prompt and the runtime sandbox agree.
+  `"legacy"` restores today's full child surface.
+- **Offline model context registry** (`core/model-registry.ts`) — metadata →
+  `.rlm/models_cache.json` (24h TTL, fail-soft) → conservative table → 32k fallback.
+- **Sandbox scaffold split** — `worker.py` (949 lines) split into protocol machinery +
+  `scaffold.py` (the model-facing REPL API mixin); pure move, both well under the 1k rule.
+- **New suites** — `test/budget.ts`, `test/ledger.ts`, `test/memory.ts`, `test/composition.ts`
+  (the second-construction-path guard), `test/concurrency-provider.ts`, `test/child-surface.ts`.
+
+### Fixed (post-port audit)
+
+- **Both composition roots wired.** `RlmController.start()` (the `rlm` tool / native-mode
+  path) now receives the session `MemoryStore` and the provider-capped session gates through
+  one `buildEngine` seam — the same class of drift that caused issue #4 is now guarded by
+  `test/composition.ts`.
+- **One subcall node per `rlm_query`** (no ghost sibling left `running` forever); native
+  `repl()` turns call `beginRun`/`endRun` on the session ledger, so ancestor-echo detects a
+  child restating the user's cell.
+- **Continuations carry the REPL working set** — `formatReplOutputs` emits the `REPL stdout:`
+  needle `distillTrajectory` harvests (tested through the real formatter); findings join
+  chronologically with the next-step hint still newest-first.
+- **Root replay hygiene** — continuation chains persist under the original key; aborted and
+  `LimitError` partials are never recorded.
+
+### Changed
+
+- `RlmConfig` +30 fields (all validated in `settings.ts`, frozen in `defaults.ts`):
+  `enableTokenBudget`/`budgetShare`/`budgetSoftFrac`/`budgetTaskCap`/`budgetMaxContinuations`/
+  `budgetHandoffChars`, `enableLedger`/`rlmBudget`, `enableMemory`/`injectNoteTokens`/
+  `evolveEvery`/`memoryDir`, `providerMaxConcurrent`, `childSurface`. `memoryDir` relocates
+  the store only; `enableMemory` is the on/off switch.
+- `llm_query` leaves keep their `emitting()` node with the ledger routing wrapped around it.
+- `FINALIZE_PROMPT` unified with the budget wrap-up dialect (answer-ready first).
+- Native-mode prompt documents `memory.*`, `list_claims()`, and the secrets warning.
 
 ### Fixed
 

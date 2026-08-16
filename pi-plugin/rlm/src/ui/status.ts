@@ -17,7 +17,10 @@ export function formatRlmStateLine(controller: RlmController, contextUsage?: Con
   // `percent` is null right after a compaction, before the next assistant response reports usage.
   const percent = contextUsage?.percent;
   const ctxSuffix = percent === null || percent === undefined ? "" : ` · ctx ${Math.round(percent)}%`;
-  return `● RLM ON · llm=${llm}${llmSuffix}${ctxSuffix}`;
+  // v5 provider caps (set via rlm.json): keep the effective admission visible.
+  const caps = controller.config.providerMaxConcurrent;
+  const capsSuffix = caps === undefined ? "" : ` · caps ${Object.entries(caps).map(([p, n]) => `${p}=${n}`).join(",")}`;
+  return `● RLM ON · llm=${llm}${llmSuffix}${ctxSuffix}${capsSuffix}`;
 }
 
 export function setRlmModeStatus(ui: ExtensionUIContext, controller: RlmController, contextUsage?: ContextUsage): void {

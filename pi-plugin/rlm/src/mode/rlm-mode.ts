@@ -9,13 +9,16 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { modelRef, resolveModelId, saveSettings } from "../config/settings.ts";
-import { createEngine } from "../core/engine.ts";
+import { createEngine, type EngineDeps } from "../core/engine.ts";
 import { limitsFromConfig } from "../core/limits.ts";
 import type { RlmConfig, RlmResult } from "../core/types.ts";
 import { resolveSource } from "../context/resolve.ts";
 import { RlmEmitter } from "../tool/rlm-events.ts";
 import { formatError } from "../util/errors.ts";
 import { cheapestModel } from "./llm-model.ts";
+import type { MemoryStore } from "../core/memory.ts";
+import type { RunRlm } from "../core/types.ts";
+import type { SubcallGates } from "../util/concurrency.ts";
 
 export interface RunHandle {
   readonly abort: () => void;
@@ -33,8 +36,19 @@ export class RlmController {
   /** Set by applyLlmSelection when the user explicitly picks "cheapest (auto)". */
   explicitClearPin = false;
   private active: AbortController | null = null;
+  /** v5: session admission gates (provider-capped), shared with the repl() tool — set at
+   *  session_start so BOTH composition roots admit through one pool (audit C1). */
+  private sessionGates: (() => SubcallGates) | undefined;
 
-  constructor(public config: RlmConfig) {}
+  constructor(
+    public config: RlmConfig,
+    /** v5 durable memory — shared with the repl tool so child runs replay/persist too. */
+    public readonly memory?: MemoryStore,
+  ) {}
+
+  setSessionGates(getGates: () => SubcallGates): void {
+    this.sessionGates = getGates;
+  }
 
   get enabled(): boolean {
     return this.config.enabled;
@@ -83,6 +97,33 @@ export class RlmController {
     return { model, llm };
   }
 
+  /** Test seam (audit R7): intercept the exact object `createEngine` receives. */
+  protected spawnEngine(deps: EngineDeps): RunRlm {
+    return createEngine(deps);
+  }
+
+  /** The ONE engine construction path for this controller (DRY #6 — a second path that
+   *  forgets to grow is exactly how issue #4 and audit C1 happened). Protected so tests can
+   *  subclass and assert the wiring without touching the network. */
+  protected buildEngine(args: {
+    readonly ctx: ExtensionContext;
+    readonly models: { readonly model: Model<Api>; readonly llm: Model<Api> };
+    readonly signal: AbortSignal;
+    readonly emitter: RlmEmitter;
+  }): RunRlm {
+    return this.spawnEngine({
+      model: args.models.model,
+      llmModel: args.models.llm,
+      registry: args.ctx.modelRegistry,
+      config: this.config,
+      signal: args.signal,
+      emitter: args.emitter,
+      limits: limitsFromConfig(this.config),
+      memory: this.memory,
+      gates: this.sessionGates?.(),
+    });
+  }
+
   start(ctx: ExtensionContext, input: StartInput, emitter?: RlmEmitter): RunHandle {
     const models = this.resolveModels(ctx);
     if (!models) throw new Error("no model with configured auth is available");
@@ -102,14 +143,11 @@ export class RlmController {
           ? result.value.payload
           : formatError(`failed to pack repository — ${result.error}`);
       }
-      const engine = createEngine({
-        model: models.model,
-        llmModel: models.llm,
-        registry: ctx.modelRegistry,
-        config: this.config,
+      const engine = this.buildEngine({
+        ctx,
+        models,
         signal: abortController.signal,
         emitter: emitter ?? new RlmEmitter(),
-        limits: limitsFromConfig(this.config),
       });
       return await engine({ rootPrompt: input.rootPrompt, context: contextValue, depth: 0 });
     })().finally(() => {

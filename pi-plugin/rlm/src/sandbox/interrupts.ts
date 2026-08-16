@@ -51,6 +51,14 @@ export interface SubLlmHandlers {
   ): Promise<unknown>;
   finishTask(summary: string, depth: number, opts: SubcallOpts): Promise<unknown>;
   addContext(source: string, depth: number): Promise<AddContextResult>;
+  /** v5: the `[ledger]` claims table for the sandbox's `list_claims()` REPL call. */
+  ledgerClaims(): Promise<string>;
+  /** v5: durable memory surface for the sandbox's `memory.query/add/stats` object. */
+  memoryOp(
+    op: "query" | "add" | "stats",
+    args: { readonly query?: string; readonly k?: number; readonly content?: string; readonly paths?: readonly string[]; readonly tags?: readonly string[] },
+    depth: number,
+  ): Promise<string>;
 }
 
 function toStringArray(value: unknown): readonly string[] | undefined {
@@ -80,6 +88,8 @@ export const REJECT: SubLlmHandlers = Object.freeze({
   addContext: async () => {
     throw new Error("add_context not configured");
   },
+  ledgerClaims: async () => UNCONFIGURED,
+  memoryOp: async () => UNCONFIGURED,
 });
 
 export interface ReplyBody {
@@ -335,6 +345,20 @@ export async function serviceInterrupt(
           converted: lib.converted ?? 0,
           skipped: lib.skipped,
         });
+        return;
+      }
+      case "ledger_claims": {
+        const table = await h.ledgerClaims();
+        reply(msg.rid, { response: table });
+        return;
+      }
+      case "memory": {
+        const out = await h.memoryOp(
+          msg.op,
+          { query: msg.query, k: msg.k, content: msg.content, paths: msg.paths, tags: msg.tags },
+          d,
+        );
+        reply(msg.rid, { response: out });
         return;
       }
       default: {

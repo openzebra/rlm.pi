@@ -30,7 +30,9 @@ const SMALL_STDOUT_LIMIT = 800;
 const STDOUT_PREVIEW_LIMIT = 200;
 const STDOUT_TAIL_LIMIT = 200;
 
-/** The REPL output fed back to the model as the next user message. */
+/** The REPL output fed back to the model as the next user message. Prefixed `REPL stdout:`
+ *  (v5 parity, audit C4): `distillTrajectory` keys on this needle to harvest the working
+ *  set for a budget-capped continuation — without it a hard-cap chain starts blind. */
 export function formatReplOutputs(results: readonly ReplResult[], skippedBlocks = 0): string {
   if (results.length === 0) {
     return "No ```repl``` block found in your response. Write one to interact with the REPL.";
@@ -50,14 +52,14 @@ export function formatReplOutputs(results: readonly ReplResult[], skippedBlocks 
     ? `\n\n[${skippedBlocks} later \`\`\`repl\`\`\` block(s) skipped because an earlier block raised — fix and re-run them]`
     : "";
   // Orientation hint only when the model lost output to elision — otherwise it sees everything.
-  if (!hadElision) return `${body}${skipNote}`;
+  if (!hadElision) return `REPL stdout:\n${body}${skipNote}`;
   // The REPL namespace is persistent across blocks in a turn, so the last block's varNames reflect
   // every variable created in any earlier block too.
   const varNames = results.at(-1)?.varNames ?? [];
   const hint = varNames.length > 0
     ? `REPL vars: ${varNames.join(", ")}`
     : `No REPL vars yet — assign results to variables before printing large outputs.`;
-  return `${body}${skipNote}\n\n${hint}`;
+  return `REPL stdout:\n${body}${skipNote}\n\n${hint}`;
 }
 
 /** Stdout ≤ SMALL_STDOUT_LIMIT flows through verbatim; larger output keeps a short head + a note

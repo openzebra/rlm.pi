@@ -28,6 +28,8 @@ import type { RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
 import { SandboxManager } from "../sandbox/sandbox-manager.ts";
 import type { SubcallOpts } from "../sandbox/sandbox.ts";
 import { createSubcallHandlers, type Invocation } from "../bridge/handlers/index.ts";
+import { TaskLedger } from "../core/ledger.ts";
+import type { MemoryStore } from "../core/memory.ts";
 import { BackgroundTasks } from "./background-tasks.ts";
 import type { ReplResult } from "../sandbox/protocol.ts";
 import { RlmEmitter } from "./rlm-events.ts";
@@ -110,8 +112,13 @@ export interface ReplToolDeps {
   readonly getConfig: () => RlmConfig;
   /** Session-wide sub-call admission, shared with every child engine this tool spawns. */
   readonly gates: SubcallGates;
+  /** v5: live re-resolution of the session gates (provider caps change via /rlm-config without
+   *  a restart). Falls back to `gates` when omitted. Read lazily per sub-call. */
+  readonly resolveGates?: () => SubcallGates;
   /** Session-scoped home for detached spawn() work. */
   readonly background: BackgroundTasks;
+  /** v5 durable memory (session-wide `.rlm` store); omitted → memory off for this tool. */
+  readonly memory?: MemoryStore;
   readonly signal?: AbortSignal;
   readonly onUsage?: (usage: Usage, role: "sub") => void;
   readonly ensureContext?: () => Promise<void>;
@@ -127,12 +134,17 @@ export interface ReplToolDeps {
 export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplToolParams, ReplDetails> {
   const { sandboxManager, llmModel, registry, getConfig, signal, onUsage, background } = deps;
   const bridgeState = new NativeBridgeState(background);
+  // v5: one session-wide blackboard for the native repl() path — the same claim/coalesce/
+  // demote logic the engine gets per run, shared by every turn and every child it spawns.
+  const sessionLedger = new TaskLedger();
 
   // Late-bound cwd — getOrCreate installs handlers only at spawn; never rebuild the closure.
   let sessionCwd = process.cwd();
 
   const getLlmModel = (): Model<Api> => deps.getLlmModel?.() ?? llmModel;
   const getModel = (): Model<Api> => deps.getModel?.() ?? deps.model;
+  // v5 (audit C6): resolve lazily per call so provider-cap edits via /rlm-config apply live.
+  const currentGates = (): SubcallGates => deps.resolveGates?.() ?? deps.gates;
 
   // Each rlm_query spawns a child RLM with its own sandbox and turn loop, not a flat
   // one-shot llm_query. The engine is created per call so the child's subcalls, turn
@@ -143,7 +155,8 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     registry,
     config: getConfig(),
     signal,
-    gates: deps.gates,
+    memory: deps.memory,
+    gates: currentGates(),
     // Same emitter the parent subcall node lives on — see SubcallHandlerDeps.runChild.
     emitter: inv.emitter,
     // Everything a child engine spends is sub-work from this tool's perspective, including
@@ -156,7 +169,10 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
   // per-invocation is reached through bridgeState.resolve, not captured here.
   const subcallHandlers = createSubcallHandlers({
     resolve: (opts) => bridgeState.resolve(opts),
-    gates: deps.gates,
+    // Getter, not a captured value: sub-call deps read gates lazily per call.
+    get gates(): SubcallGates {
+      return currentGates();
+    },
     registry,
     getLlmModel,
     getModel,
@@ -168,6 +184,8 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     // earlier repl() reaches a child spawned in a later one. Populated before any interrupt can
     // fire: execute() awaits ensureContext() before getOrCreate().
     getChildContext: () => sandboxManager.contextPayload ?? undefined,
+    ledger: sessionLedger,
+    memory: deps.memory,
     trackDetached: (task) => background.track(task),
   });
 
@@ -283,6 +301,8 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         await sandboxManager.getOrCreate({
           ...subcallHandlers,
           ...(contextBundle?.handlers ?? {}),
+          ledgerClaims: () => Promise.resolve(sessionLedger.listClaims()),
+          memoryOp: (op, args) => Promise.resolve(deps.memory?.serviceOp(op, args) ?? "memory off"),
         });
 
         // Detect queue contention AFTER sandbox init (initPromise settled, isExecuting now accurate)
@@ -299,12 +319,23 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         }
 
         const start = Date.now();
-        const result: ReplResult = await sandboxManager.execWithSetup(params.code, () => {
-          // Wire per-invocation mutable state only after the serialized exec slot
-          // is active. Swapping earlier would let queued repl() calls overwrite
-          // emitter/limits for the currently running REPL execution.
-          bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
-        }, execSignal);
+        // v5 blackboard (audit C3 / R1): ancestors are the rlm_query/rlm_batch task
+        // strings inside this cell, not the Python soup (`print`, `await_task`). A
+        // child restating the user's goal then echoes. Popped in finally: detached
+        // work spawned by this cell already claimed at spawn time, inside this window.
+        const ledgerActive = getConfig().enableLedger;
+        const ancestorN = ledgerActive ? sessionLedger.beginNativeCell(params.code) : 0;
+        let result: ReplResult;
+        try {
+          result = await sandboxManager.execWithSetup(params.code, () => {
+            // Wire per-invocation mutable state only after the serialized exec slot
+            // is active. Swapping earlier would let queued repl() calls overwrite
+            // emitter/limits for the currently running REPL execution.
+            bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
+          }, execSignal);
+        } finally {
+          if (ledgerActive) sessionLedger.endNativeCell(ancestorN);
+        }
         const elapsed = Date.now() - start;
         capturedStdout = result.stdout;
         capturedStderr = result.stderr;

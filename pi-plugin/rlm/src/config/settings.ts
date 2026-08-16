@@ -45,7 +45,9 @@ function validateThinkingLevel(v: unknown): ThinkingLevel | undefined {
   return typeof v === "string" && Object.hasOwn(THINKING_LEVELS, v) ? (v as ThinkingLevel) : undefined;
 }
 
-function validateConfig(raw: unknown): Partial<RlmConfig> {
+/** Validate an unknown (e.g. hand-edited rlm.json) config blob into a partial — the single
+ *  validation seam; exported for tests. */
+export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (typeof raw !== "object" || raw === null) return {};
   const r = raw as Record<string, unknown>;
   const out: MutablePartialRlmConfig = {};
@@ -90,6 +92,47 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (contextLoader !== undefined) out.contextLoader = contextLoader;
   const autoSeedCwd = validateBoolean(r.autoSeedCwd);
   if (autoSeedCwd !== undefined) out.autoSeedCwd = autoSeedCwd;
+  // v5 token budget cascade
+  const enableTokenBudget = validateBoolean(r.enableTokenBudget);
+  if (enableTokenBudget !== undefined) out.enableTokenBudget = enableTokenBudget;
+  const budgetShare = validateNumber(r.budgetShare, 0.01);
+  if (budgetShare !== undefined && budgetShare <= 1) out.budgetShare = budgetShare;
+  const budgetSoftFrac = validateNumber(r.budgetSoftFrac, 0.5);
+  if (budgetSoftFrac !== undefined && budgetSoftFrac < 1) out.budgetSoftFrac = budgetSoftFrac;
+  const budgetTaskCap = validateNumber(r.budgetTaskCap, 0);
+  if (budgetTaskCap !== undefined) out.budgetTaskCap = budgetTaskCap;
+  const budgetMaxContinuations = validateNumber(r.budgetMaxContinuations, 0);
+  if (budgetMaxContinuations !== undefined) out.budgetMaxContinuations = budgetMaxContinuations;
+  const budgetHandoffChars = validateNumber(r.budgetHandoffChars, 500);
+  if (budgetHandoffChars !== undefined) out.budgetHandoffChars = budgetHandoffChars;
+  // v5 TaskLedger blackboard
+  const enableLedger = validateBoolean(r.enableLedger);
+  if (enableLedger !== undefined) out.enableLedger = enableLedger;
+  const rlmBudget = validateNumber(r.rlmBudget, 0);
+  if (rlmBudget !== undefined) out.rlmBudget = rlmBudget;
+  // v5 durable memory
+  const enableMemory = validateBoolean(r.enableMemory);
+  if (enableMemory !== undefined) out.enableMemory = enableMemory;
+  const injectNoteTokens = validateNumber(r.injectNoteTokens, 100);
+  if (injectNoteTokens !== undefined) out.injectNoteTokens = injectNoteTokens;
+  const evolveEvery = validateNumber(r.evolveEvery, 0);
+  if (evolveEvery !== undefined) out.evolveEvery = evolveEvery;
+  if (r.memoryDir === null) out.memoryDir = null;
+  else {
+    const memoryDir = validateString(r.memoryDir);
+    if (memoryDir !== undefined) out.memoryDir = memoryDir;
+  }
+  // v5 provider concurrency caps: { provider: minConcurrent }
+  if (typeof r.providerMaxConcurrent === "object" && r.providerMaxConcurrent !== null) {
+    const caps: Record<string, number> = {};
+    for (const [provider, cap] of Object.entries(r.providerMaxConcurrent as Record<string, unknown>)) {
+      const n = validateNumber(cap, 1);
+      if (n !== undefined) caps[provider] = n;
+    }
+    if (Object.keys(caps).length > 0) out.providerMaxConcurrent = Object.freeze(caps);
+  }
+  // v5 child surface doctrine
+  if (r.childSurface === "delegation" || r.childSurface === "legacy") out.childSurface = r.childSurface;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
     const ss = r.subSampling as Record<string, unknown>;
     const sampling: { maxTokens?: number; temperature?: number; reasoning?: ThinkingLevel } = {};
@@ -99,7 +142,7 @@ function validateConfig(raw: unknown): Partial<RlmConfig> {
     if (temperature !== undefined) sampling.temperature = temperature;
     const ssReasoning = validateThinkingLevel(ss.reasoning);
     if (ssReasoning !== undefined) sampling.reasoning = ssReasoning;
-    out.subSampling = sampling;
+    out.subSampling = Object.freeze(sampling);
   }
   if (typeof r.rootSampling === "object" && r.rootSampling !== null) {
     const rs = r.rootSampling as Record<string, unknown>;

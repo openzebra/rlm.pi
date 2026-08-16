@@ -8,7 +8,7 @@ import type { ContextSizeStats } from "../text/tokens.ts";
 import {
   contextKindOf,
   DEFAULT_PROMPT_CAP,
-  ENV_TIPS,
+  envTips,
   howToRunCode,
   LARGE_FILE_RULE_LINES,
   promptCapTokensK,
@@ -33,23 +33,29 @@ export interface SystemPromptOptions {
   readonly child?: boolean;
   /** The recursion depth of this run (0 = root, 1 = first child, etc.). */
   readonly depth?: number;
+  /** v5 doctrine: the child sandbox has the delegation-only surface (no retrieval tools). */
+  readonly delegation?: boolean;
 }
 
-function orchestratorAddendum(maxPromptChars: number): string {
+function orchestratorAddendum(maxPromptChars: number, delegation: boolean): string {
   return [
     "As an RLM you are an **orchestrator, not a solver**. Probe `context`, plan decomposition, then",
     "fan out — do not solve multi-step module work yourself in a long chain of thought.",
     "",
     "<contract> llm_query / llm_batch / map_files / rlm_query / rlm_batch return Task (not the answer).",
-    "Only await_task returns content. Fire independent Tasks first, free search, then await_task.",
+    delegation
+      ? "Only await_task returns content. Fire independent Tasks first, slice your `context` meanwhile, then await_task."
+      : "Only await_task returns content. Fire independent Tasks first, free search, then await_task.",
     "Do not await after every independent spawn.</contract>",
     "",
     "<routing> one-shot facts → llm_query/llm_batch/map_files; one multi-step study → rlm_query;",
     "≥2 independent multi-step areas → rlm_batch (prefer over serial rlm_query). NEVER print file",
     "bodies into your own stream when a Task tool can read them.</routing>",
     "",
-    "Your own context window is small. Push long-context work into sub-calls. If free search/grep",
-    "already pins a tiny fact, use that. Aggregate small results in Python / `answers`.",
+    "Your own context window is small. Push long-context work into sub-calls.",
+    delegation
+      ? "If a slice of your `context` already pins a tiny fact, quote it — do not re-ask."
+      : "If free search/grep already pins a tiny fact, use that. Aggregate small results in Python / `answers`.",
     "",
     `Sub-call budget: (1) per-prompt < ${maxPromptChars.toLocaleString()} chars (≈${promptCapTokensK(maxPromptChars)}K tok);`,
     "(2) ~20 prompts per llm_batch. Fat prompts in small batches beat thousands of tiny prompts.",
@@ -78,13 +84,22 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
       `**Recursion depth: ${opts.depth}.** You are a sub-RLM — focus narrowly on your assigned`,
       "task. Delegate (rlm_query/rlm_batch) only if the task itself must decompose further.",
     );
+    if (opts.delegation ?? false) {
+      parts.push(
+        "",
+        "**REPL API (ONLY these):** llm_query / llm_batch / llm_query_chunked / map_files /",
+        "llm_map_reduce / rlm_query / rlm_batch / spawn / await_task / list_tasks / memory.* /",
+        "list_claims. There is no search/grep_context/outline here — your task arrived WITH its",
+        "world in `context`; slice it into llm prompts. rlm_query only for a disjoint path set.",
+      );
+    }
   }
   parts.push(
     "",
     howToRunCode(),
     "",
     replGlossary(
-      kind, recursion, opts.contextLoader ?? false, opts.child ?? false,
+      kind, recursion, opts.contextLoader ?? false, opts.child ?? false, opts.delegation ?? false,
     ),
     "",
     "REPL stdout over ~800 characters is truncated to a short excerpt — large results stay in your",
@@ -96,7 +111,7 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
   if (opts.orchestrator ?? true) {
     // Two counterweights, both required (paper App. B): the addendum bounds OVER-recursion
     // (batching/cost), ENV_TIPS bounds UNDER-recursion (solving it yourself).
-    parts.push("", orchestratorAddendum(maxPromptChars), "", ENV_TIPS);
+    parts.push("", orchestratorAddendum(maxPromptChars, opts.delegation ?? false), "", envTips(opts.delegation ?? false));
   }
   if (kind === "files") {
     parts.push("", LARGE_FILE_RULE_LINES.join("\n"));
