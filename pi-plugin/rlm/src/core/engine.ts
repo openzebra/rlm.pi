@@ -22,7 +22,7 @@ import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
-import { PythonSandbox } from "../sandbox/sandbox.ts";
+import { PythonSandbox, SANDBOX_WATCHDOG_HEARTBEAT_MS } from "../sandbox/sandbox.ts";
 import { pinContext, type PinnedContext } from "../sandbox/context-file.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
@@ -209,6 +209,10 @@ export function createEngine(deps: EngineDeps): RunRlm {
       detachedIdle = undefined;
     };
     let sandbox: PythonSandbox | undefined;
+    const watchdogHeartbeat = setInterval(() => {
+      if (detachedInFlight > 0) sandbox?.refreshWatchdog();
+    }, SANDBOX_WATCHDOG_HEARTBEAT_MS);
+    watchdogHeartbeat.unref?.();
     /**
      * This run's live context: whatever was seeded plus every source added so far. Children
      * inherit it, so it must grow when add_context appends (see the handler's onLoaded below).
@@ -469,6 +473,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         if (nodeStatus !== "error" && lastAnswer) emitter.emitAnswer(previewText(lastAnswer));
         emitter.emitStatus(nodeStatus === "error" ? "error" : "done");
       }
+      clearInterval(watchdogHeartbeat);
       // Settle detached work FIRST: a child still running may be about to pin this same payload.
       await settleDetached();
       await contextPin?.release();

@@ -56,6 +56,8 @@ export interface SandboxOptions {
 
 const WORKER_PATH = join(dirname(fileURLToPath(import.meta.url)), "py", "worker.py");
 const STDERR_TAIL_CHARS = 8_192;
+/** How often to refresh the parent request watchdog (and ping the worker) during silent host work. */
+export const SANDBOX_WATCHDOG_HEARTBEAT_MS = 30_000;
 /** How long dispose() waits for a clean worker exit before escalating to SIGKILL. */
 const SHUTDOWN_GRACE_MS = 50;
 
@@ -318,12 +320,22 @@ export class PythonSandbox {
   }
 
   /**
-   * Refresh the parent-side request watchdog for every pending request.
-   * Used during long mid-exec work that does not
-   * produce additional worker interrupts on this sandbox.
+   * Refresh the parent-side request watchdog and ping the worker.
+   * Used during long mid-exec work that does not produce additional worker
+   * interrupts on this sandbox. The heartbeat rearms the worker's stall alarm
+   * so a healthy long sub-call is not reported as `_StallTimeout`.
    */
   refreshWatchdog(): void {
     this.touchPending();
+    if (this.hasPendingRequest()) this.send({ type: "heartbeat" });
+  }
+
+  /** True when an exec/load_context/shutdown (not the init handshake) is in flight. */
+  private hasPendingRequest(): boolean {
+    for (const id of this.pending.keys()) {
+      if (id !== "_init") return true;
+    }
+    return false;
   }
 
   private send(msg: ParentMessage): void {

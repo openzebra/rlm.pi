@@ -39,6 +39,8 @@ from guards import (
     _CONTEXT_NAME,
     _send,
     _stall_alarm,
+    _stall_message,
+    _StallTimeout,
     RESERVED,
     REAL_STDERR as _REAL_STDERR,
     REAL_STDIN as _REAL_STDIN,
@@ -232,23 +234,29 @@ class Worker(WorkerScaffold):
             return True
         if self.park_reply(msg):
             return True
+        if isinstance(msg, dict) and msg.get("type") == "heartbeat":
+            return True
         # A request (exec/shutdown) arriving mid-exec: main() replays it.
         self._deferred.append(msg)
         return True
 
-    def _drain_until(self, rids) -> None:
+    def _drain_until(self, rids) -> bool:
         """Block until every rid in `rids` has its reply parked in the inbox.
 
-        Bounded: a host that goes silent raises inside the ```repl``` block instead of hanging
-        the session forever.
+        Returns False if the host stayed silent for `await_timeout_s` — the Task is
+        not settled; a later await_task can collect it. A closed pipe still raises.
         """
         if all(r in self.inbox for r in rids):
-            return
-        with _stall_alarm(self.exec_timeout_s, self.await_timeout_s) as rearm:
-            while not all(r in self.inbox for r in rids):
-                if not self._pump():
-                    raise RuntimeError("parent closed the pipe during a sub-LLM request")
-                rearm()
+            return True
+        try:
+            with _stall_alarm(self.exec_timeout_s, self.await_timeout_s) as rearm:
+                while not all(r in self.inbox for r in rids):
+                    if not self._pump():
+                        raise RuntimeError("parent closed the pipe during a sub-LLM request")
+                    rearm()
+        except _StallTimeout:
+            return False
+        return True
 
     def _take(self, rids) -> list[dict[str, Any]]:
         return [self.inbox.pop(r) for r in rids]
@@ -256,7 +264,8 @@ class Worker(WorkerScaffold):
     def _rpc(self, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Post one request and block for its reply — the synchronous single-shot path."""
         rid = self._post(kind, payload)
-        self._drain_until((rid,))
+        if not self._drain_until((rid,)):
+            return {"error": _stall_message(self.await_timeout_s)}
         return self._take((rid,))[0]
 
     def load_context(self, path: str, index: int | None = None, is_json: bool = False) -> int:
@@ -394,6 +403,8 @@ def main() -> None:
         # a later await_task; without this it would fall through to "unknown type" and the
         # result would be lost.
         if worker.park_reply(req):
+            continue
+        if isinstance(req, dict) and req.get("type") == "heartbeat":
             continue
         if not isinstance(req, dict):
             _send({"id": "?", "ok": False, "error": f"expected an object, got {type(req).__name__}"})

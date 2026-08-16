@@ -114,6 +114,14 @@ class _StallTimeout(Exception):
     """No frame from the host while a sub-call was pending."""
 
 
+def _stall_message(stall_timeout_s: float) -> str:
+    """Contract text for a stall — raised internally, returned as Error: … to the model."""
+    return (
+        f"sub-call still running — no reply from the host for {stall_timeout_s:g}s; "
+        "await_task it again in a later block"
+    )
+
+
 @contextmanager
 def _stall_alarm(exec_timeout_s: float, stall_timeout_s: float):
     """Swap the per-cell alarm for a stall alarm while blocked on the parent.
@@ -127,10 +135,7 @@ def _stall_alarm(exec_timeout_s: float, stall_timeout_s: float):
     remaining = signal.getitimer(signal.ITIMER_REAL)[0] if (use and exec_timeout_s > 0) else 0.0
 
     def _fire(signum, frame):  # noqa: ARG001
-        raise _StallTimeout(
-            f"sub-call stalled — no reply from the host for {stall_timeout_s:g}s "
-            "(the task may still be running; await_task it again in a later block)"
-        )
+        raise _StallTimeout(_stall_message(stall_timeout_s))
 
     old = signal.signal(signal.SIGALRM, _fire) if use else None
 

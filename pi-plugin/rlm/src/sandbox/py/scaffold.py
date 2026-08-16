@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from guards import _surfaced_error
+from guards import _stall_message, _surfaced_error
 from hostio import read_host_payload
 from retrieval import (
     _Bm25Index,
@@ -212,12 +212,20 @@ class WorkerScaffold:
             for t in self._live_handles()
         ]
 
-    def _await_one(self, task: Task) -> Any:
-        """Block until one Task has its result. Idempotent — the value is memoized."""
-        if not task._settled:
-            self._drain_until(task._rids)
-            task._value = task._reduce(self._take(task._rids))
-            task._settled = True
+    def _await_one(self, task: Task, *, block: bool = True) -> Any:
+        """Collect one Task. Idempotent — the value is memoized.
+
+        A stall does not settle the Task; the same handle can be awaited again.
+        `block=False` settles only if the reply is already parked (batch union drain).
+        """
+        if task._settled:
+            return task._value
+        ready = all(r in self.inbox for r in task._rids)
+        if not ready:
+            if not block or not self._drain_until(task._rids):
+                return _surfaced_error(_stall_message(self.await_timeout_s))
+        task._value = task._reduce(self._take(task._rids))
+        task._settled = True
         return task._value
 
     def _await_task(self, task_or_tasks=None) -> Any:
@@ -258,7 +266,8 @@ class WorkerScaffold:
             out: list[Any] = [None] * len(tasks)
             for i, t in enumerate(tasks):
                 if isinstance(t, Task):
-                    out[i] = self._await_one(t)
+                    # Union already waited once — do not stall again per item.
+                    out[i] = self._await_one(t, block=False)
                 else:
                     out[i] = _surfaced_error(
                         f"await_task expects Task items, got {type(t).__name__}"

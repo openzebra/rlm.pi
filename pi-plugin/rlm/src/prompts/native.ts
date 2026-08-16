@@ -92,6 +92,7 @@ export function buildNativeSystemPrompt(): string {
     "Inside `repl({code})`, EVERY heavy call returns a Task immediately (not the answer):",
     "  llm_query | llm_batch | map_files | llm_query_chunked | rlm_query | rlm_batch  →  Task",
     "ONLY `await_task(t)` / `await_task([…])` / `await_task()` returns content. Fan-out runs detached (↯bg) and outlives the cell.",
+    "If `await_task` returns `Error: sub-call still running`, call it again — do not respawn.",
     "If you printed a Task and did not await_task, you do **not** know the answer yet. A Task handle is a REPL variable, not an `answers[]` key.",
     "Fire independent Tasks first → free `search`/`grep_context`/`outline` → then await_task.",
     "Do NOT await after every independent spawn (that serializes wall time).",

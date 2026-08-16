@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **False `_StallTimeout` on a healthy long sub-call.** `refreshWatchdog()` now writes a
+  `{type:"heartbeat"}` frame so the worker's stall alarm rearms while the host is still
+  working. `await_task` returns `Error: sub-call still running` instead of aborting the
+  cell with a traceback; the Task stays unsettled and a later `await_task` collects it.
+  Headless `runRlm` now ticks the same watchdog interval as native repl (it previously
+  had none, so a long child could SIGKILL the parent worker at `requestTimeoutMs`).
+
 ## [0.3.8] — 2026-08-16
 
 Port of the rlm_test v5 engine (0.2.0 → 0.5.0 findings) plus the post-port audit fixes.

@@ -2,7 +2,7 @@
  * Wire protocol for the RLM Python sandbox.
  *
  * Newline-delimited JSON over the worker's stdin/stdout — no sockets, no HTTP.
- * Parent -> worker: requests (exec/load_context/shutdown) and llm replies.
+ * Parent -> worker: requests (exec/load_context/shutdown), llm replies, and heartbeats.
  * Worker -> parent: request responses and mid-exec sub-LLM interrupts.
  *
  * Canonical api_v5 kinds only — no legacy `*_query_batched` wire names.
@@ -44,7 +44,12 @@ export interface LlmReply {
   readonly error?: string;
 }
 
-export type ParentMessage = WorkerRequest | LlmReply;
+/** Keep-alive while the host is working and has nothing else to write. */
+export interface Heartbeat {
+  readonly type: "heartbeat";
+}
+
+export type ParentMessage = WorkerRequest | LlmReply | Heartbeat;
 
 /** A normal response to a request (keyed by the request `id`). */
 export interface WorkerResponse {

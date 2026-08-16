@@ -70,6 +70,7 @@ export const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "- **ALWAYS SPAWN (Task + ↗bg):** `llm_query` / `llm_batch` / `rlm_query` / `rlm_batch` /",
   "  `map_files` / `llm_query_chunked`. Never treat the return as the answer.",
   "  Collect with `await_task(t)`, `await_task([t1,t2,…])`, or `await_task()` (every still-running Task).",
+  "  If `await_task` returns `Error: sub-call still running`, call it again — do not respawn.",
   "  `list_tasks()` → [{kind, label, done, var}]. Fire independent Tasks first, free work, then await.",
   "  Do NOT await after every independent spawn (serializes wall time). `task.done` when settled.",
   "- `[ledger]` global state: the blackboard in your prompt lists inflight/done agent claims.",

@@ -13,6 +13,7 @@ import { cheapestModel } from "./mode/llm-model.ts";
 import { postRlmGuide } from "./ui/intro.ts";
 import { setRlmModeStatus } from "./ui/status.ts";
 import { markdownTheme } from "./ui/theme-adapter.ts";
+import { SANDBOX_WATCHDOG_HEARTBEAT_MS } from "./sandbox/sandbox.ts";
 import { SandboxManager } from "./sandbox/sandbox-manager.ts";
 import { buildSessionGates, type SubcallGates } from "./util/concurrency.ts";
 import { BackgroundTasks } from "./tool/background-tasks.ts";
@@ -41,8 +42,6 @@ export {
   processRlmDepth,
 } from "./mode/subagent.ts";
 
-/** How often to keep the parent sandbox's request watchdog alive during detached work. */
-const WATCHDOG_HEARTBEAT_MS = 30_000;
 /** Soft token guard — cap bulk tool stdout; do NOT hard-block read/grep/bash readers. */
 const CAPPED_RESULT_TOOLS = Object.freeze(new Set(["bash", "find", "ls", "read", "grep"]));
 
@@ -104,7 +103,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // with it. Keep it alive while detached work is genuinely in flight.
   const watchdogHeartbeat = setInterval(() => {
     if (background.pending > 0) sandboxManager.refreshWatchdog();
-  }, WATCHDOG_HEARTBEAT_MS);
+  }, SANDBOX_WATCHDOG_HEARTBEAT_MS);
   watchdogHeartbeat.unref();
 
   /** Memoised cwd seed — one resolveSource(pathPrefix:"") per session. */
