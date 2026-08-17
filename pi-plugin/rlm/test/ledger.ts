@@ -11,7 +11,6 @@ import {
   contextSig,
   ECHO_STUB,
   jaccard,
-  nativeRunAncestors,
   normalizePrompt,
   pathSig,
   TaskLedger,
@@ -389,57 +388,57 @@ function finish(): void {
   check("H3: a THIRD caller after done replays the stored claim", c === "LEAF-RESULT" && execs === 1);
 }
 
-// ── audit C3 / R1: native ancestor is the extracted TASK, not the Python cell ──
+// ── audit C3 / BUG-1 (post-fix): native cells never push ancestors ───────────
 
 {
   const task = "study the payment flow end to end";
-  const cell = `t = rlm_query("${task}")\nprint(await_task(t))`;
 
-  // Proof the raw cell is the wrong ancestor: Jaccard against the user task is < 0.8.
-  const raw = new TaskLedger();
-  raw.beginRun(cell);
-  const rawClaim = raw.tryClaim(
-    { kind: "rlm", prompt: task, paths: [], depth: 1 },
-    taskKey("rlm", task, [], "m", ""),
-  );
-  check("R1: raw Python cell as ancestor MISSES the user task (jaccard < 0.8)",
-    rawClaim.type === "run", JSON.stringify(rawClaim));
-  raw.endRun();
-
-  const extracted = nativeRunAncestors(cell);
-  check("R1: extractor pulls the rlm_query task, not the cell",
-    extracted.length === 1 && extracted[0] === task, JSON.stringify(extracted));
-  check("R1: rlm_batch extracts every positional task string",
-    nativeRunAncestors('rlm_batch(["study auth", "study billing"], paths=["src/"])').join("|")
-      === "study auth|study billing");
-  check("R1: a cell with no rlm_* call falls back to itself",
-    nativeRunAncestors("print(context[:80])")[0] === "print(context[:80])");
-
+  // Before the fix, repl-tool pushed the cell's own rlm_* prompt strings onto the
+  // ancestor stack BEFORE exec — every literal spawn echoed itself and returned the
+  // stub (100% of direct rlm_query/rlm_batch suppressed, silently, done:true).
+  // v5 semantics restored: ancestors are RUNNING engines only, so an originator
+  // claims against an empty stack and RUNS.
   const led = new TaskLedger();
-  const n = led.beginNativeCell(cell);
   const d = led.tryClaim(
     { kind: "rlm", prompt: task, paths: [], depth: 1 },
     taskKey("rlm", task, [], "m", ""),
   );
-  check("R1: native cell t = rlm_query(\"study the payment flow end to end\") echoes",
-    d.type === "echo", JSON.stringify(d));
-  const disjoint = led.tryClaim(
-    { kind: "rlm", prompt: "benchmark the retry backoff loop", paths: [], depth: 1 },
-    taskKey("rlm", "benchmark the retry backoff loop", [], "m", ""),
-  );
-  check("R1: disjoint child of a native cell still runs", disjoint.type === "run");
-  led.endNativeCell(n);
+  check("BUG-1: literal rlm_query(\"study the payment flow end to end\") from a native cell RUNS",
+    d.type === "run", JSON.stringify(d));
+  if (d.type === "run") {
+    led.markRunning(d.key);
+    led.finish(d.key, "payment flows: 3 found");
+  }
 
-  // C3 still holds for a child that restates the extracted task (the feature's purpose).
+  // Exact re-spawn after the runner finished → coalesce onto the stored answer (v5:
+  // an existing non-error claim wins), never an echo and never a second runner.
+  const d2 = led.tryClaim(
+    { kind: "rlm", prompt: task, paths: [], depth: 1 },
+    taskKey("rlm", task, [], "m", ""),
+  );
+  check("BUG-1: exact re-spawn of a finished claim COALESCES (done twin)",
+    d2.type === "coalesce" && d2.done === true, JSON.stringify(d2));
+
+  // C3 still holds where v5 says it does: a child restating a RUNNING engine's root.
   const c3 = new TaskLedger();
-  const c3cell = 't = rlm_query("study the flaky retry integration end to end")';
-  const c3n = c3.beginNativeCell(c3cell);
+  c3.beginRun("study the flaky retry integration end to end");
   const c3d = c3.tryClaim(
     { kind: "rlm", prompt: "study the flaky retry integration end to end", paths: [], depth: 1 },
     taskKey("rlm", "study the flaky retry integration end to end", [], "m", ""),
   );
-  check("C3: child restating the native-extracted task is rejected", c3d.type === "echo", JSON.stringify(c3d));
-  c3.endNativeCell(c3n);
+  check("C3: child restating a RUNNING ancestor is still rejected", c3d.type === "echo", JSON.stringify(c3d));
+  c3.endRun();
+  // Once the ancestor is no longer running, the same prompt may claim again.
+  const c3b = c3.tryClaim(
+    { kind: "rlm", prompt: "study the flaky retry integration end to end", paths: [], depth: 1 },
+    taskKey("rlm", "study the flaky retry integration end to end", [], "m", ""),
+  );
+  check("C3: after endRun the prompt is claimable again", c3b.type === "run", JSON.stringify(c3b));
+
+  // Echo observability (BUG-1): suppressed spawns are countable and visible.
+  check("BUG-1: echo hits are visible via hits()", c3.hits().echo >= 1, JSON.stringify(c3.hits()));
+  check("BUG-1: list_claims surfaces echo_rejected", c3.listClaims().includes("echo_rejected="),
+    c3.listClaims().slice(0, 60));
 }
 
 finish();

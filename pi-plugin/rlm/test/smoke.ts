@@ -23,6 +23,7 @@ const SUITES: readonly string[] = Object.freeze([
   "phase-scaffold.ts",
   "budget.ts",
   "ledger.ts",
+  "phase-native-ledger.ts",
   "memory.ts",
   "composition.ts",
   "concurrency-provider.ts",

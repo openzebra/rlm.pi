@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Native cells silently echoed every `rlm_query`/`rlm_batch` spawn.** `beginNativeCell`
+  pushed the cell's own task strings onto the ledger's ancestor stack *before* exec, so each
+  literal spawn matched itself and returned the echo stub (`done:true`, cost 0, claim never
+  created) — delegation was 100% dead in native mode (a live session's six-task fan-out came
+  back as six identical stubs). Restored v5 semantics: ancestors are RUNNING engines only
+  (`beginRun`/`endRun` in the engine), the Python-string ancestor extractor is gone, the echo
+  message is v5's actionable text, and suppressed spawns are observable (`echo_rejected=` in
+  `list_claims()` / `[ledger]`). New `phase-native-ledger.ts` runs the real sandbox + handler
+  chain and proves literal spawns run, duplicates coalesce, and C3 echo against a running
+  ancestor survives. 28/28 smoke suites.
+
 - **False `_StallTimeout` on a healthy long sub-call.** `refreshWatchdog()` now writes a
   `{type:"heartbeat"}` frame so the worker's stall alarm rearms while the host is still
   working. `await_task` returns `Error: sub-call still running` instead of aborting the

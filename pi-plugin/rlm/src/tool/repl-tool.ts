@@ -330,23 +330,17 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         }
 
         const start = Date.now();
-        // v5 blackboard (audit C3 / R1): ancestors are the rlm_query/rlm_batch task
-        // strings inside this cell, not the Python soup (`print`, `await_task`). A
-        // child restating the user's goal then echoes. Popped in finally: detached
-        // work spawned by this cell already claimed at spawn time, inside this window.
-        const ledgerActive = getConfig().enableLedger;
-        const ancestorN = ledgerActive ? sessionLedger.beginNativeCell(params.code) : 0;
-        let result: ReplResult;
-        try {
-          result = await sandboxManager.execWithSetup(params.code, () => {
-            // Wire per-invocation mutable state only after the serialized exec slot
-            // is active. Swapping earlier would let queued repl() calls overwrite
-            // emitter/limits for the currently running REPL execution.
-            bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
-          }, execSignal);
-        } finally {
-          if (ledgerActive) sessionLedger.endNativeCell(ancestorN);
-        }
+        // v5 blackboard (audit C3 / BUG-1): ancestors are RUNNING engines only — engine.ts
+        // brackets each child run with beginRun/endRun. A native cell pushes NOTHING: its
+        // spawns claim against an empty stack, so an originator can never echo against
+        // itself. Duplicates are caught by the ledger's claim store (exact/near
+        // coalescing + rlmBudget demotion), never by silent suppression.
+        const result: ReplResult = await sandboxManager.execWithSetup(params.code, () => {
+          // Wire per-invocation mutable state only after the serialized exec slot
+          // is active. Swapping earlier would let queued repl() calls overwrite
+          // emitter/limits for the currently running REPL execution.
+          bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
+        }, execSignal);
         const elapsed = Date.now() - start;
         capturedStdout = result.stdout;
         capturedStderr = result.stderr;
