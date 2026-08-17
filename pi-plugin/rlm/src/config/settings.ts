@@ -12,6 +12,9 @@ export interface PersistedSettings {
   /** "provider/id" of the pinned sub-LLM, or undefined for "cheapest (auto)".
    *  `null` = explicit "cheapest" clear (omit key on disk). */
   readonly llm?: string | null;
+  /** "provider/id" of the pinned rlm root/worker model, or undefined for "follow session".
+   *  `null` = explicit "follow session model" clear (omit key on disk). */
+  readonly rlm?: string | null;
 }
 
 type MutablePartialRlmConfig = { -readonly [K in keyof RlmConfig]?: RlmConfig[K] };
@@ -167,6 +170,7 @@ export async function loadSettings(): Promise<PersistedSettings> {
       config: validateConfig(r.config),
       // `worker` is the pre-rename key — still read so an existing pin survives the upgrade.
       llm: validateString(r.llm) ?? validateString(r.worker),
+      rlm: validateString(r.rlm),
     };
   } catch {
     return { config: {} };
@@ -178,13 +182,19 @@ export async function saveSettings(s: PersistedSettings): Promise<boolean> {
     const p = settingsPath();
     await mkdir(dirname(p), { recursive: true });
     const body: Record<string, unknown> = { config: s.config };
+    const mergeDisk = s.llm === undefined || s.rlm === undefined;
+    const existing = mergeDisk ? await loadSettings() : undefined;
     if (s.llm !== undefined) {
       // Explicit: string → write pin, null → omit key (cheapest).
       if (s.llm !== null) body.llm = s.llm;
-    } else {
+    } else if (existing?.llm) {
       // Merge: preserve existing disk pin so config-only saves never strip it.
-      const existing = await loadSettings();
-      if (existing.llm) body.llm = existing.llm;
+      body.llm = existing.llm;
+    }
+    if (s.rlm !== undefined) {
+      if (s.rlm !== null) body.rlm = s.rlm;
+    } else if (existing?.rlm) {
+      body.rlm = existing.rlm;
     }
     await writeFile(p, `${JSON.stringify(body, null, 2)}\n`);
     return true;

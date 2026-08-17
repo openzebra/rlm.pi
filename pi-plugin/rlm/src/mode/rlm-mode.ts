@@ -35,6 +35,11 @@ export class RlmController {
   savedLlmRef: string | undefined;
   /** Set by applyLlmSelection when the user explicitly picks "cheapest (auto)". */
   explicitClearPin = false;
+  /** Pinned rlm root/worker model — when unset, child engines follow pi's session model. */
+  rlmModel: Model<Api> | undefined;
+  savedRlmRef: string | undefined;
+  /** Set by applyRlmSelection when the user explicitly picks "(follow session model)". */
+  explicitClearRlmPin = false;
   private active: AbortController | null = null;
   /** v5: session admission gates (provider-capped), shared with the repl() tool — set at
    *  session_start so BOTH composition roots admit through one pool (audit C1). */
@@ -78,6 +83,9 @@ export class RlmController {
       llm: this.explicitClearPin
         ? null
         : (modelRef(this.llmModel) ?? this.savedLlmRef),
+      rlm: this.explicitClearRlmPin
+        ? null
+        : (modelRef(this.rlmModel) ?? this.savedRlmRef),
     });
   }
 
@@ -91,7 +99,9 @@ export class RlmController {
 
   resolveModels(ctx: ExtensionContext): { model: Model<Api>; llm: Model<Api> } | undefined {
     if (!this.llmModel && this.savedLlmRef) this.llmModel = resolveModelId(ctx.modelRegistry, this.savedLlmRef);
-    const model = ctx.model ?? cheapestModel(ctx.modelRegistry);
+    if (!this.rlmModel && this.savedRlmRef) this.rlmModel = resolveModelId(ctx.modelRegistry, this.savedRlmRef);
+    // The rlm pin wins over the session model; unset → follow pi's active model.
+    const model = this.rlmModel ?? ctx.model ?? cheapestModel(ctx.modelRegistry);
     if (!model) return undefined;
     const llm = this.llmModel ?? cheapestModel(ctx.modelRegistry) ?? model;
     return { model, llm };

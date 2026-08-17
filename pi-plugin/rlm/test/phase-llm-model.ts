@@ -7,7 +7,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { check, failureCount } from "./helpers.ts";
-import { applyLlmSelection } from "../src/commands/rlm-config.ts";
+import { applyLlmSelection } from "../src/commands/pins.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { RlmController } from "../src/mode/rlm-mode.ts";
 import { cheapestModel, compareLlm, isFreeModel } from "../src/mode/llm-model.ts";

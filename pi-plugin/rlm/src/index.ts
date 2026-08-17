@@ -4,6 +4,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
 import { registerRlmCommand } from "./commands/rlm.ts";
 import { registerRlmConfigCommand } from "./commands/rlm-config.ts";
+import { registerRlmLlmCommand } from "./commands/rlm-llm.ts";
+import { registerRlmRlmCommand } from "./commands/rlm-rlm.ts";
 import type { RlmConfig } from "./core/types.ts";
 import { createRlmTool } from "./tool/rlm-tool.ts";
 import { createReplTool } from "./tool/repl-tool.ts";
@@ -176,6 +178,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // ── Commands ──
   registerRlmCommand(pi, controller);
   registerRlmConfigCommand(pi, controller);
+  registerRlmLlmCommand(pi, controller);
+  registerRlmRlmCommand(pi, controller);
 
   // ── Tool registration ──
   pi.registerTool(createRlmTool(controller, runRegistry));
@@ -187,6 +191,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const persisted = await loadSettings();
     controller.config = mergeConfig(persisted.config);
     controller.savedLlmRef = persisted.llm ?? undefined;
+    controller.savedRlmRef = persisted.rlm ?? undefined;
 
     // An explicit --rlm flag wins over the persisted setting for this session.
     const flag = pi.getFlag("rlm");
@@ -201,6 +206,25 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       await ctx.modelRegistry.refresh();
     } catch (err) {
       console.warn(`[rlm] model registry refresh failed: ${errorMessage(err)}`);
+    }
+
+    if (controller.savedRlmRef) {
+      const resolvedRlm = resolveModelId(ctx.modelRegistry, controller.savedRlmRef);
+      if (resolvedRlm) {
+        controller.rlmModel = resolvedRlm;
+      } else {
+        console.warn(
+          `[rlm] pinned rlm model ${controller.savedRlmRef} not in registry; following session model until it reappears`,
+        );
+        try {
+          ctx.ui.notify(
+            `RLM: pinned rlm=${controller.savedRlmRef} unavailable — following session model until it is`,
+            "warning",
+          );
+        } catch {
+          // Some hosts have no UI at session_start.
+        }
+      }
     }
 
     if (controller.savedLlmRef) {
@@ -298,7 +322,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       }
     }
 
-    setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
+    setRlmModeStatus(ctx, controller, ctx.getContextUsage());
     if (!treePanelInstalled) {
       treePanelInstalled = true;
       installTreePanel(ctx, runRegistry);
@@ -311,7 +335,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
 
   // ── Keep the footer's context reading live (RLM exists to shrink this number) ──
   pi.on("turn_end", async (_event, ctx) => {
-    setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
+    setRlmModeStatus(ctx, controller, ctx.getContextUsage());
   });
 
   /** True when the native-mode trade holds: enabled AND repl is in the active tool set. */

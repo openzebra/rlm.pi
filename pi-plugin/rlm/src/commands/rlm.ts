@@ -9,7 +9,7 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
     description: "Toggle persistent RLM mode (route plain prompts through the RLM engine).",
     handler: async (_args, ctx) => {
       const enabled = controller.toggle();
-      setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
+      setRlmModeStatus(ctx, controller, ctx.getContextUsage());
       ctx.ui.notify(`RLM mode ${enabled ? "ON" : "OFF"}`, "info");
     },
   });
@@ -30,7 +30,7 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
     description: "Toggle RLM mode (off also stops a running query)",
     handler: async (ctx) => {
       const enabled = controller.toggle();
-      setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
+      setRlmModeStatus(ctx, controller, ctx.getContextUsage());
       ctx.ui.notify(`RLM mode ${enabled ? "ON" : "OFF"}`, "info");
     },
   });
