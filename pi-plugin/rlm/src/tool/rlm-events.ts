@@ -11,7 +11,7 @@
  */
 
 import { EventEmitter } from "node:events";
-import type { SubcallKind, SubcallStatus, RlmRunStatus } from "./rlm-details.ts";
+import type { SubcallKind, SubcallStatus, RlmRunStatus, SubcallPhase } from "./rlm-details.ts";
 
 // ── Event payloads ──
 
@@ -32,6 +32,8 @@ export interface SubcallCreatedEvent {
 export interface SubcallUpdatedEvent {
   readonly id: string;
   readonly status?: SubcallStatus;
+  /** Live activity while running (thinking/repl/waiting…). */
+  readonly phase?: SubcallPhase;
   readonly detail?: string;
   readonly args?: string;
   readonly resultPreview?: string;
@@ -65,6 +67,10 @@ export interface StatusEvent {
 
 export interface RootPromptEvent {
   readonly text: string;
+}
+
+export interface RootPhaseEvent {
+  readonly phase: SubcallPhase;
 }
 
 // ── RlmEmitter ──
@@ -127,6 +133,11 @@ export class RlmEmitter {
     this.ee.emit("root-prompt", { text } satisfies RootPromptEvent);
   }
 
+  /** Set the root node's live activity phase (root-only; children use subcall updates). */
+  emitRootPhase(phase: SubcallPhase): void {
+    this.ee.emit("root-phase", { phase } satisfies RootPhaseEvent);
+  }
+
   // ── Subscribe (returns unsubscribe function) ──
 
   onSubcallCreated(handler: (event: SubcallCreatedEvent) => void): () => void {
@@ -147,6 +158,11 @@ export class RlmEmitter {
   onRootUsage(handler: (event: RootUsageEvent) => void): () => void {
     this.ee.on("root-usage", handler);
     return () => { this.ee.off("root-usage", handler); };
+  }
+
+  onRootPhase(handler: (event: RootPhaseEvent) => void): () => void {
+    this.ee.on("root-phase", handler);
+    return () => { this.ee.off("root-phase", handler); };
   }
 
   onAnswer(handler: (event: AnswerEvent) => void): () => void {

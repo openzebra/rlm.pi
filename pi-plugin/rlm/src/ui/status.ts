@@ -3,6 +3,7 @@
 import type { ContextUsage, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { RlmController } from "../mode/rlm-mode.ts";
+import { formatTokens } from "./theme.ts";
 
 const KEY = "rlm";
 
@@ -14,13 +15,13 @@ export function formatRlmStateLine(controller: RlmController, contextUsage?: Con
   if (!controller.enabled) return "○ RLM OFF";
   const llm = modelLabel(controller.llmModel, controller.savedLlmRef ?? "cheapest");
   const llmSuffix = controller.config.subSampling.reasoning ? `:${controller.config.subSampling.reasoning}` : "";
-  // `percent` is null right after a compaction, before the next assistant response reports usage.
-  const percent = contextUsage?.percent;
-  const ctxSuffix = percent === null || percent === undefined ? "" : ` · ctx ${Math.round(percent)}%`;
+  // `tokens` is null right after a compaction, before the next assistant response reports usage.
+  const tokens = contextUsage?.tokens;
+  const tokSuffix = tokens === null || tokens === undefined ? "" : ` · ${formatTokens(tokens)} tok`;
   // v5 provider caps (set via rlm.json): keep the effective admission visible.
   const caps = controller.config.providerMaxConcurrent;
   const capsSuffix = caps === undefined ? "" : ` · caps ${Object.entries(caps).map(([p, n]) => `${p}=${n}`).join(",")}`;
-  return `● RLM ON · llm=${llm}${llmSuffix}${ctxSuffix}${capsSuffix}`;
+  return `● RLM ON · llm=${llm}${llmSuffix}${tokSuffix}${capsSuffix}`;
 }
 
 export function setRlmModeStatus(ui: ExtensionUIContext, controller: RlmController, contextUsage?: ContextUsage): void {

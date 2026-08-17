@@ -42,6 +42,8 @@ export async function emitting<T>(
     args: opts.args,
     depth: inv.depth,
   });
+  // Leaf nodes spend their whole lifetime waiting on the model — say so from birth.
+  inv.emitter.emitSubcallUpdated({ id, phase: "waiting" });
 
   let costUsd = 0;
   let tokens = 0;

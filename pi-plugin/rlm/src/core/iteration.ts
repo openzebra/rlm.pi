@@ -10,6 +10,7 @@ import { type ChatMsg, type CompleteOptions, type CompleteResult, modelComplete 
 import type { ReplResult } from "../sandbox/protocol.ts";
 import type { PythonSandbox } from "../sandbox/sandbox.ts";
 import { findReplBlocks } from "../text/parsing.ts";
+import type { SubcallPhase } from "../tool/rlm-details.ts";
 import type { Sampling } from "./types.ts";
 
 export interface Turn {
@@ -30,10 +31,13 @@ export interface TurnDeps {
   readonly signal?: AbortSignal;
   /** Test-only override for model completion (scripted responses). */
   readonly complete?: CompleteFn;
+  /** Live activity reporting for the tree UI (thinking → repl/texting per turn). */
+  readonly onPhase?: (phase: SubcallPhase) => void;
 }
 
 export async function runTurn(history: readonly ChatMsg[], sandbox: PythonSandbox, deps: TurnDeps): Promise<Turn> {
   const complete = deps.complete ?? modelComplete;
+  deps.onPhase?.("thinking");
   const { text, usage } = await complete(history, {
     model: deps.model,
     registry: deps.registry,
@@ -44,6 +48,7 @@ export async function runTurn(history: readonly ChatMsg[], sandbox: PythonSandbo
   });
 
   const blocks = findReplBlocks(text);
+  deps.onPhase?.(blocks.length > 0 ? "repl" : "texting");
   const results = new Array<ReplResult>(blocks.length);
   let executed = 0;
   for (let i = 0; i < blocks.length; i++) {

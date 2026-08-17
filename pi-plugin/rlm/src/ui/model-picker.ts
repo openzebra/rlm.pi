@@ -4,7 +4,6 @@ import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import { Container, type Component, type SelectItem, SelectList, Text, truncateToWidth } from "@earendil-works/pi-tui";
-import { formatCost } from "./theme.ts";
 import { compareLlm } from "../mode/llm-model.ts";
 
 export interface ModelSelection {
@@ -40,11 +39,10 @@ export function pickableModels(
 
 function items(models: readonly Model<Api>[], includeCheapest: boolean): SelectItem[] {
   const modelItems = models.map((m) => {
-    const price = `in ${formatCost(m.cost.input)}/Mtok · out ${formatCost(m.cost.output)}/Mtok`;
     return {
       value: `${m.provider}/${m.id}`,
       label: `${m.provider}/${m.id}`,
-      description: `${price}${m.reasoning ? " · reasoning" : ""}`,
+      description: m.reasoning ? "reasoning" : "",
     };
   });
   if (!includeCheapest) return modelItems;

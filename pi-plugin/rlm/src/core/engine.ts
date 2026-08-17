@@ -22,6 +22,7 @@ import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
+import type { SubcallPhase } from "../tool/rlm-details.ts";
 import { PythonSandbox, SANDBOX_WATCHDOG_HEARTBEAT_MS } from "../sandbox/sandbox.ts";
 import { pinContext, type PinnedContext } from "../sandbox/context-file.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
@@ -118,6 +119,12 @@ export function createEngine(deps: EngineDeps): RunRlm {
           limits.addRaw(costUsd, inputTokens, outputTokens);
         },
       },
+    };
+    // Live activity phase for the tree UI: child engines report on their own subcall
+    // node; the root engine has no node, so it reports via the root-phase channel.
+    const reportPhase = (phase: SubcallPhase): void => {
+      if (selfReportId !== undefined) emitter.emitSubcallUpdated({ id: selfReportId, phase });
+      else emitter.emitRootPhase(phase);
     };
     // Detached work must not outlive the sandbox we dispose in `finally`: track it so the
     // run can settle or abort it first (a child engine left running would keep spending).
@@ -361,6 +368,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           sampling: rootSampling,
           signal: deps.signal,
           complete: deps.complete,
+          onPhase: reportPhase,
         });
         const allBlocks = turn.blocks.length > 0
           ? turn.blocks.map((b) => previewText(b, 400)).join("\n")

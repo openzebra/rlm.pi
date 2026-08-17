@@ -1,29 +1,18 @@
 /**
- * Shared sub-call tree rendering for RLM tools (rlm + repl).
+ * Card scaffolding for RLM tool results (rlm + repl).
  *
- * Both tools accumulate RlmSubcall[] arrays with parentId links. This module
- * provides the collapsed ASCII tree and expanded Container-based tree rendering
- * used by their renderResult() implementations.
+ * The chat transcript renders ONE line per call — status glyph, title, stats —
+ * plus the expand hint. Agent trees are NOT rendered here: the live tree
+ * widget and agent modal (ui/tree/, ui/modal/) own all agent visualization.
  */
 
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { keyText } from "@earendil-works/pi-coding-agent";
-import type { RlmSubcall, SubcallStatus } from "./rlm-details.ts";
-import { formatCost, formatDuration, formatTokens, spinnerFrame } from "../ui/theme.ts";
-import { previewText } from "../text/preview.ts";
+import type { SubcallStatus } from "./rlm-details.ts";
+import { formatTokens, spinnerFrame } from "../ui/theme.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
-/** Preview budgets for the expanded tree (args are terse, results get more room). */
-const ARGS_PREVIEW_CHARS = 80;
-const RESULT_PREVIEW_CHARS = 120;
-
 // ── Glyphs ──
-
-export function subcallStatusGlyph(sc: Pick<RlmSubcall, "status">, theme: Theme): string {
-  if (sc.status === "running") return theme.fg("warning", "⏳");
-  if (sc.status === "error") return theme.fg("error", "✗");
-  return theme.fg("success", "✓");
-}
 
 export function headlineStatusGlyph(status: SubcallStatus | "aborted" | "done", theme: Theme): string {
   switch (status) {
@@ -36,40 +25,24 @@ export function headlineStatusGlyph(status: SubcallStatus | "aborted" | "done", 
 
 // ── Stats formatting ──
 
-export function subcallStatsLine(sc: Pick<RlmSubcall, "costUsd" | "tokens" | "endedAt" | "startedAt">): string {
-  const parts: string[] = [];
-  if (sc.costUsd > 0) parts.push(formatCost(sc.costUsd));
-  if (sc.tokens > 0) parts.push(`${formatTokens(sc.tokens)} tok`);
-  // Explicit undefined checks: a 0 timestamp is falsy but legitimate (fixtures, epoch clocks).
-  if (sc.endedAt !== undefined && sc.startedAt !== undefined) parts.push(formatDuration(sc.endedAt - sc.startedAt));
-  return parts.join(" · ");
-}
-
-// ── Shared card scaffolding (rlm + repl render the same shape) ──
-
-/** The `$0.0123 · 4.2k tok · 812ms` run of a card header. Omits any zero component. */
+/** The `4.2k tok · 812ms` run of a card header. Omits any zero component. */
 export function cardStatsLine(
-  totals: { readonly costUsd: number; readonly tokens: number },
+  totals: { readonly tokens: number },
   theme: Theme,
   extra?: string,
   backgroundPending?: number,
 ): string {
-  const parts: string[] = [formatCost(totals.costUsd)];
+  const parts: string[] = [];
   if (totals.tokens > 0) parts.push(`${formatTokens(totals.tokens)} tok`);
   if (extra) parts.push(extra);
   const line = theme.fg("dim", parts.join(" · "));
-  // The one thing no tree can show: spawned work that may outlive this block.
+  // The one thing no single line can show: spawned work that may outlive this block.
   return backgroundPending !== undefined && backgroundPending > 0
     ? `${line} ${theme.fg("warning", `↯${backgroundPending} bg`)}`
     : line;
 }
 
-/** Detached nodes carry BackgroundTasks' "bg" id prefix (RlmEmitter("bg")). */
-function backgroundTag(sc: RlmSubcall, theme: Theme): string {
-  return sc.id.startsWith("bg") ? ` ${theme.fg("warning", "↯bg")}` : "";
-}
-
-/** `<glyph> <TITLE> <stats>` — the first line of both tools' collapsed and expanded views. */
+/** `<glyph> <TITLE> <stats>` — the card's single header line. */
 export function cardHeader(
   title: string,
   status: SubcallStatus | "aborted" | "done",
@@ -93,101 +66,13 @@ function expandHint(theme: Theme): string {
   return theme.fg("muted", key ? `${key} to expand` : "to expand");
 }
 
-/** The collapsed card: header, the sub-call tree, and the expand hint. */
+/** The collapsed card: header line, then the expand hint once settled. */
 export function renderCollapsedCard(
   title: string,
   status: SubcallStatus | "aborted" | "done",
   stats: string,
-  subcalls: readonly RlmSubcall[],
   theme: Theme,
 ): Text {
-  const body = subcalls.length > 0 ? `\n${renderCollapsedSubcallTree(subcalls, theme)}` : "";
   const hint = status === "running" ? "" : `\n${expandHint(theme)}`;
-  return new Text(`${cardHeader(title, status, stats, theme)}${body}${hint}`, 0, 0);
-}
-
-// ── Tree building ──
-
-function buildParentMap(subcalls: readonly RlmSubcall[]): Map<string | undefined, RlmSubcall[]> {
-  const map = new Map<string | undefined, RlmSubcall[]>();
-  for (const sc of subcalls) {
-    const list = map.get(sc.parentId) ?? [];
-    list.push(sc);
-    map.set(sc.parentId, list);
-  }
-  return map;
-}
-
-// ── Collapsed tree (ASCII) ──
-
-export function renderCollapsedSubcallTree(
-  subcalls: readonly RlmSubcall[],
-  theme: Theme,
-): string {
-  if (subcalls.length === 0) return "";
-
-  const byParent = buildParentMap(subcalls);
-
-  function walk(parentId: string | undefined, prefix: string): string[] {
-    const lines: string[] = [];
-    const direct = byParent.get(parentId) ?? [];
-    for (let i = 0; i < direct.length; i++) {
-      const sc = direct[i];
-      if (!sc) continue;
-      const isLast = i === direct.length - 1;
-      const branch = isLast ? "└─" : "├─";
-      const gGlyph = subcallStatusGlyph(sc, theme);
-      const gStats = subcallStatsLine(sc);
-      const gBg = backgroundTag(sc, theme);
-      lines.push(`${prefix}${branch} ${sc.label}  ${gGlyph}  ${gStats}${gBg}`);
-      const childPrefix = prefix + (isLast ? "   " : "│  ");
-      lines.push(...walk(sc.id, childPrefix));
-    }
-    return lines;
-  }
-
-  return walk(undefined, "  ").join("\n");
-}
-
-// ── Expanded tree (Container) ──
-
-export function renderExpandedSubcallTree(
-  subcalls: readonly RlmSubcall[],
-  theme: Theme,
-): Component {
-  const container = new Container();
-  if (subcalls.length === 0) return container;
-
-  const byParent = buildParentMap(subcalls);
-
-  function renderNode(sc: RlmSubcall, indent: number): void {
-    const pad = "  ".repeat(indent);
-    const sGlyph = subcallStatusGlyph(sc, theme);
-    const sKind = theme.fg("muted", sc.label);
-    const sModel = sc.model ? theme.fg("dim", ` ${sc.model}`) : "";
-    const sStats = sc.endedAt ? `  ${theme.fg("dim", subcallStatsLine(sc))}` : "";
-    const sBg = backgroundTag(sc, theme);
-    let line = `${pad}${sGlyph} ${sKind}${sModel}${sStats}${sBg}`;
-
-    if (sc.args) {
-      line += `\n${pad}  ${theme.fg("dim", previewText(sc.args, ARGS_PREVIEW_CHARS))}`;
-    }
-    if (sc.status === "error" && sc.detail) {
-      line += `\n${pad}  ${theme.fg("error", `✗ ${sc.detail}`)}`;
-    } else if (sc.resultPreview) {
-      line += `\n${pad}  ${theme.fg("toolOutput", previewText(sc.resultPreview, RESULT_PREVIEW_CHARS))}`;
-    }
-
-    container.addChild(new Text(line, 0, 0));
-
-    for (const child of (byParent.get(sc.id) ?? [])) {
-      renderNode(child, indent + 1);
-    }
-  }
-
-  for (const sc of (byParent.get(undefined) ?? [])) {
-    renderNode(sc, 1);
-  }
-
-  return container;
+  return new Text(`${cardHeader(title, status, stats, theme)}${hint}`, 0, 0);
 }

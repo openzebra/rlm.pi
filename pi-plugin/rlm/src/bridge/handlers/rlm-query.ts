@@ -159,6 +159,7 @@ async function childRun(
     detail: prompt.slice(0, 60),
     depth: childDepth,
   });
+  inv.emitter.emitSubcallUpdated({ id: subId, phase: "spawning" });
 
   if (decision?.type === "echo") {
     inv.emitter.emitSubcallUpdated({ id: subId, status: "done", resultPreview: ECHO_STUB.slice(0, 80) });

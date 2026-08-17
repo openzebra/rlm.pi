@@ -8,6 +8,9 @@
 
 export type SubcallKind = "root" | "rlm" | "llm" | "batch" | "tool";
 export type SubcallStatus = "running" | "done" | "error";
+
+/** Live activity of a node while status is "running" — powers the tree/modal UI. */
+export type SubcallPhase = "thinking" | "texting" | "repl" | "waiting" | "spawning";
 export type RlmRunStatus = "running" | "done" | "error" | "aborted";
 
 export interface RlmSubcall {
@@ -20,6 +23,8 @@ export interface RlmSubcall {
   readonly label: string;
   readonly model?: string;
   readonly status: SubcallStatus;
+  /** Current activity while running (undefined = not reported). */
+  readonly phase?: SubcallPhase;
   readonly detail?: string;
   readonly args?: string;
   readonly resultPreview?: string;
@@ -35,6 +40,8 @@ export interface RlmSubcall {
 
 export interface RlmDetails {
   readonly status: RlmRunStatus;
+  /** Root node's live activity phase (root has no subcall entry). */
+  readonly rootPhase?: SubcallPhase;
   readonly rootPrompt: string;
   readonly turns: { readonly current: number; readonly max: number };
   readonly subcalls: readonly RlmSubcall[];

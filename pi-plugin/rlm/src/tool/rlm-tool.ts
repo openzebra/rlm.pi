@@ -10,18 +10,14 @@ import { Container, Markdown, Spacer, Text, type Component } from "@earendil-wor
 import { Type } from "typebox";
 import type { RlmController, StartInput } from "../mode/rlm-mode.ts";
 import { spinnerFrame } from "../ui/theme.ts";
+import type { RunRegistry } from "../ui/panel/run-registry.ts";
 import { markdownTheme } from "../ui/theme-adapter.ts";
 import { previewText } from "../text/preview.ts";
 import { errorMessage } from "../util/errors.ts";
 import { type RlmDetails } from "./rlm-details.ts";
 import { RlmEmitter } from "./rlm-events.ts";
 import { RlmEventAggregator } from "./rlm-aggregator.ts";
-import {
-  cardHeader,
-  cardStatsLine,
-  renderCollapsedCard,
-  renderExpandedSubcallTree,
-} from "./subcall-render.ts";
+import { cardHeader, cardStatsLine, renderCollapsedCard } from "./subcall-render.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 
 /** Chars of the prompt shown on the tool call line. */
@@ -43,7 +39,7 @@ function rootStats(details: RlmDetails, theme: Theme): string {
 
 // ── Tool definition ──
 
-export function createRlmTool(controller: RlmController): ToolDefinition<typeof RlmToolParams, RlmDetails> {
+export function createRlmTool(controller: RlmController, runRegistry?: RunRegistry): ToolDefinition<typeof RlmToolParams, RlmDetails> {
   return {
     name: "rlm",
     label: "RLM",
@@ -64,6 +60,18 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
       const emitter = new RlmEmitter();
       const aggregator = new RlmEventAggregator(emitter, onUpdate ?? (() => {}));
       emitter.emitRootPrompt(params.prompt);
+
+      // Surface the run in the tree panel for its whole lifetime (unregistered in finally).
+      const unregisterRun = runRegistry?.register({
+        runId: `rlm-${_toolCallId}`,
+        label: previewText(params.prompt, 48),
+        emitter,
+        subcalls: () => aggregator.getState().subcalls,
+        totals: () => aggregator.getState().totals,
+        rootStatus: () => aggregator.getState().status,
+        rootPhase: () => aggregator.getState().rootPhase,
+        turns: () => aggregator.getState().turns,
+      });
 
       // Wire abort signal to controller
       if (signal) {
@@ -102,6 +110,7 @@ export function createRlmTool(controller: RlmController): ToolDefinition<typeof 
         };
       } finally {
         progress.stop();
+        unregisterRun?.();
         aggregator.dispose();
         emitter.shutdown();
       }
@@ -134,12 +143,6 @@ function renderExpanded(details: RlmDetails, theme: Theme): Component {
   const container = new Container();
   container.addChild(new Text(cardHeader("RLM", details.status, rootStats(details, theme), theme), 0, 0));
 
-  if (details.subcalls.length > 0) {
-    container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("muted", "─── Sub-calls ───"), 0, 0));
-    container.addChild(renderExpandedSubcallTree(details.subcalls, theme));
-  }
-
   if (details.answer) {
     container.addChild(new Spacer(1));
     container.addChild(new Text(theme.fg("muted", "─── Answer ───"), 0, 0));
@@ -152,5 +155,5 @@ function renderExpanded(details: RlmDetails, theme: Theme): Component {
 // ── Collapsed view ──
 
 function renderCollapsed(details: RlmDetails, theme: Theme): Text {
-  return renderCollapsedCard("RLM", details.status, rootStats(details, theme), details.subcalls, theme);
+  return renderCollapsedCard("RLM", details.status, rootStats(details, theme), theme);
 }

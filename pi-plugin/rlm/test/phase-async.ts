@@ -12,7 +12,6 @@ import { DepthGates, Semaphore } from "../src/util/concurrency.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { SubcallStore } from "../src/tool/subcall-store.ts";
 import { BackgroundTasks } from "../src/tool/background-tasks.ts";
-import { renderCollapsedSubcallTree } from "../src/tool/subcall-render.ts";
 import { buildReplResultText } from "../src/tool/repl-result.ts";
 import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
 import { NATIVE_PROMPT_BUDGET, NATIVE_PROMPT_STATIC } from "../src/prompts/native.ts";
@@ -280,10 +279,13 @@ function testBackgroundRegistry(): void {
   check("a drained subtree is not handed over twice",
     store.takeSettledSubtrees().subcalls.length === 0, "");
 
-  // The adopted subtree must actually render — the r1 blocker was that it would not.
-  const tree = renderCollapsedSubcallTree(drained.subcalls, PLAIN_THEME);
-  check("the adopted subtree renders (root and child both present)",
-    tree.includes("rlm_query") && tree.includes("llm_query"), tree.replace(/\n/g, " | ").slice(0, 80));
+  // The adopted subtree must be structurally complete — the r1 blocker was that it would not:
+  // a root with no parent plus its child, linkable into the tree widget's parent map.
+  const drainedRoot = drained.subcalls.find((sc) => sc.parentId === undefined);
+  const drainedChild = drained.subcalls.find((sc) => sc.parentId !== undefined);
+  check("the adopted subtree is complete (root and child both present, linked)",
+    drainedRoot?.label === "rlm_query" && drainedChild?.label === "llm_query" && drainedChild?.parentId === drainedRoot?.id,
+    drained.subcalls.map((sc) => `${sc.id}:${sc.parentId ?? "-"}`).join(" ").slice(0, 80));
 }
 
 async function testUnawaitedCostReported(): Promise<void> {

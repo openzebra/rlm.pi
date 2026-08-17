@@ -6,10 +6,6 @@ export function spinnerFrame(): string {
   return SPINNER[Math.floor(Date.now() / 100) % SPINNER.length] ?? "⠋";
 }
 
-export function formatCost(usd: number): string {
-  return `$${usd.toFixed(usd < 1 ? 4 : 2)}`;
-}
-
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;

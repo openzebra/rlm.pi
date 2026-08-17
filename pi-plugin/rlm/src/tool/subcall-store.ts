@@ -61,6 +61,7 @@ export class SubcallStore extends EmitterListener {
       sc.status = event.status;
       if (event.status !== "running") sc.endedAt = Date.now();
     }
+    if (event.phase !== undefined) sc.phase = event.phase;
     if (event.detail !== undefined) sc.detail = event.detail;
     if (event.args !== undefined) sc.args = event.args;
     if (event.resultPreview !== undefined) sc.resultPreview = event.resultPreview;
@@ -93,7 +94,7 @@ export class SubcallStore extends EmitterListener {
    * from the running totals so the caller can add them without double-counting.
    *
    * A root whose subtree still has a running node stays put. That matters because
-   * `renderCollapsedSubcallTree` walks down from `parentId === undefined`: a subcall handed
+   * The tree model (`ui/tree/tree-model.ts`) walks down from `parentId === undefined`: a subcall handed
    * over without its parent has no path from a root and is silently dropped from the tree.
    * Handing over whole subtrees is what keeps adopted nodes renderable.
    */

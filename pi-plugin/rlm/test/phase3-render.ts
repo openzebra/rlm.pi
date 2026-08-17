@@ -14,6 +14,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RlmController } from "../src/mode/rlm-mode.ts";
 import type { RlmDetails } from "../src/tool/rlm-details.ts";
 import { createRlmTool } from "../src/tool/rlm-tool.ts";
+import { SPINNER } from "../src/ui/theme.ts";
 
 // initTheme seeds the global Theme singleton so getMarkdownTheme() works.
 initTheme(undefined, false);
@@ -185,24 +186,13 @@ console.log("\n=== renderResult collapsed (done) ===");
 
   check("collapsed shows success glyph (✓)", text.includes("✓"));
   check("collapsed shows RLM label", text.includes("RLM"));
-  check("collapsed shows cost", text.includes("$0.0423"));
+  check("collapsed hides cost", !text.includes("$"));
   check("collapsed shows token count", text.includes("12.3k tok"));
   check("collapsed shows turn count", text.includes("3 turns"));
 
-  // Grouped subcalls
-  // Subcalls display their label (e.g. "read_file", "grep") not the generic kind ("tool").
-  check("collapsed shows both read_file calls", text.includes("read_file") && (text.match(/read_file/g) || []).length >= 2);
-  check("collapsed shows grep", text.includes("grep"));
-  check("collapsed shows edit label", text.includes("edit"));
-  check("collapsed shows write label", text.includes("write"));
-  check("collapsed shows rlm_query", text.includes("rlm_query"));
-
-  // llm_query subcalls are excluded from grouping — they're shown via the root header stats only
-  check("collapsed does NOT group llm_query", !text.includes("llm_query ×"));
-
-  // Tree glyphs
-  check("collapsed uses branch glyphs", text.includes("├─") || text.includes("└─"));
-  check("collapsed ends with └─ on last item", text.includes("└─"));
+  // Legacy tree is gone from the chat transcript — the live tree widget owns agent rendering.
+  check("collapsed hides the sub-call tree",
+    !text.includes("├─") && !text.includes("└─") && !text.includes("read_file") && !text.includes("llm_query"));
 
   // Expand hint
   check("collapsed shows expand hint", text.includes("to expand"));
@@ -223,19 +213,10 @@ console.log("\n=== renderResult expanded (done) ===");
   check("expanded shows success glyph (✓)", text.includes("✓"));
   check("expanded shows RLM label", text.includes("RLM"));
 
-  // Sections
-  check("expanded has Sub-calls section", text.includes("─── Sub-calls ───"));
+  // Sections: answer only — sub-calls live in the tree widget, not the transcript.
   check("expanded has Answer section", text.includes("─── Answer ───"));
-
-  // Individual subcalls
-  check("expanded shows llm_query items individually", (text.match(/llm_query/g)?.length ?? 0) >= 2);
-  check("expanded shows read_file args", text.includes("src/App.tsx:1-50"));
-  check("expanded shows grep args", text.includes("useState src/**/*.tsx"));
-  check("expanded shows result previews", text.includes("50 lines"));
-  check("expanded shows subcall stats with duration", text.includes(".1s") || text.includes(".0s") || text.includes("s"));
-
-  // Error subcall
-  // (none in completedDetails, tested separately below)
+  check("expanded hides the sub-call tree",
+    !text.includes("─── Sub-calls ───") && !text.includes("src/App.tsx:1-50") && !text.includes("llm_query"));
 
   // Answer content
   check("expanded renders answer markdown", text.includes("responsive charts"));
@@ -253,10 +234,11 @@ console.log("\n=== renderResult collapsed (running) ===");
   const text = renderPlain(result);
   console.log(`  output:\n${text}`);
 
-  check("collapsed running shows spinner (⏳)", text.includes("⏳"));
+  check("collapsed running shows spinner", SPINNER.some((frame) => text.includes(frame)));
   check("collapsed running does NOT show expand hint", !text.includes("to expand"));
-  check("collapsed running shows partial cost", text.includes("$0.0045"));
+  check("collapsed running hides partial cost", !text.includes("$"));
   check("collapsed running shows partial tokens", text.includes("2.1k tok"));
+  check("collapsed running hides the sub-call tree", !text.includes("├─") && !text.includes("llm_query"));
 }
 
 console.log("\n=== renderResult collapsed (error) ===");
@@ -288,8 +270,8 @@ console.log("\n=== renderResult expanded (error) ===");
   const text = renderPlain(result);
   console.log(`  output:\n${text}`);
 
-  check("expanded error shows error subcall detail", text.includes("rate limit exceeded"));
-  check("expanded error shows error glyph on subcall", text.includes("✗"));
+  check("expanded error shows error glyph (✗)", text.includes("✗"));
+  check("expanded error hides the sub-call tree", !text.includes("─── Sub-calls ───") && !text.includes("llm_query"));
 }
 
 console.log("\n=== renderResult null details ===");

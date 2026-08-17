@@ -33,6 +33,7 @@ import type { MemoryStore } from "../core/memory.ts";
 import { BackgroundTasks } from "./background-tasks.ts";
 import type { ReplResult } from "../sandbox/protocol.ts";
 import { RlmEmitter } from "./rlm-events.ts";
+import type { RunRegistry } from "../ui/panel/run-registry.ts";
 import { SubcallStore } from "./subcall-store.ts";
 import type { ReplDetails } from "./repl-details.ts";
 import type { RlmSubcall } from "./rlm-details.ts";
@@ -117,6 +118,8 @@ export interface ReplToolDeps {
   readonly resolveGates?: () => SubcallGates;
   /** Session-scoped home for detached spawn() work. */
   readonly background: BackgroundTasks;
+  /** Session tree panel index; omitted → runs don't appear in the widget. */
+  readonly runRegistry?: RunRegistry;
   /** v5 durable memory (session-wide `.rlm` store); omitted → memory off for this tool. */
   readonly memory?: MemoryStore;
   readonly signal?: AbortSignal;
@@ -250,6 +253,14 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
 
       const emitter = new RlmEmitter();
       const store = new SubcallStore(emitter);
+      // Surface the cell in the tree panel for its whole lifetime (unregistered in finally).
+      const unregisterRun = deps.runRegistry?.register({
+        runId: `repl-${_toolCallId}`,
+        label: `repl: ${previewText(params.code, 40)}`,
+        emitter,
+        subcalls: () => store.getSubcalls(),
+        totals: () => store.getTotals(),
+      });
       let capturedStdout = "";
       let capturedStderr = "";
       let progressStatus: ReplDetails["status"] = "running";
@@ -427,6 +438,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         };
       } finally {
         progress.stop();
+        unregisterRun?.();
         for (const off of detachTracers) off();
         store.dispose();
         emitter.shutdown();

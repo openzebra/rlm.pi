@@ -13,8 +13,8 @@
  */
 
 import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
-import type { RlmEmitter, TurnEvent, RootUsageEvent, AnswerEvent, StatusEvent, RootPromptEvent } from "./rlm-events.ts";
-import type { RlmDetails, RlmRunStatus } from "./rlm-details.ts";
+import type { RlmEmitter, TurnEvent, RootUsageEvent, AnswerEvent, StatusEvent, RootPromptEvent, RootPhaseEvent } from "./rlm-events.ts";
+import type { RlmDetails, RlmRunStatus, SubcallPhase } from "./rlm-details.ts";
 import { EmitterListener } from "./emitter-listener.ts";
 import { SubcallStore } from "./subcall-store.ts";
 
@@ -23,6 +23,7 @@ export class RlmEventAggregator extends EmitterListener {
 
   // Root-level state
   private rootStatus: RlmRunStatus = "running";
+  private rootPhase?: SubcallPhase;
   private rootPrompt = "";
   private turnCurrent = 0;
   private turnMax = 0;
@@ -41,6 +42,7 @@ export class RlmEventAggregator extends EmitterListener {
       emitter.onAnswer((e) => this.handleAnswer(e)),
       emitter.onStatus((e) => this.handleStatus(e)),
       emitter.onRootPrompt((e) => this.handleRootPrompt(e)),
+      emitter.onRootPhase((e) => this.handleRootPhase(e)),
     ]);
   }
 
@@ -72,12 +74,18 @@ export class RlmEventAggregator extends EmitterListener {
     // No notify — root prompt is set before listeners exist; no TUI re-render needed
   }
 
+  private handleRootPhase(event: RootPhaseEvent): void {
+    this.rootPhase = event.phase;
+    this.notify();
+  }
+
   // ── Read ──
 
   /** Snapshot the current accumulated state. O(1). */
   getState(): RlmDetails {
     return {
       status: this.rootStatus,
+      rootPhase: this.rootPhase,
       rootPrompt: this.rootPrompt,
       turns: { current: this.turnCurrent, max: this.turnMax },
       subcalls: this.store.getSubcalls(),

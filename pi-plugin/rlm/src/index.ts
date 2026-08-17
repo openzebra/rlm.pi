@@ -12,6 +12,8 @@ import { RlmController } from "./mode/rlm-mode.ts";
 import { cheapestModel } from "./mode/llm-model.ts";
 import { postRlmGuide } from "./ui/intro.ts";
 import { setRlmModeStatus } from "./ui/status.ts";
+import { RunRegistry } from "./ui/panel/run-registry.ts";
+import { installTreePanel } from "./ui/panel/tree-panel.ts";
 import { markdownTheme } from "./ui/theme-adapter.ts";
 import { SANDBOX_WATCHDOG_HEARTBEAT_MS } from "./sandbox/sandbox.ts";
 import { SandboxManager } from "./sandbox/sandbox-manager.ts";
@@ -98,6 +100,19 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     maxTokens: config.maxTokens,
     maxErrors: config.maxErrors,
   });
+  // Session tree panel: every repl cell / rlm run / detached bg task registers here;
+  // the below-editor widget + agent modal read from it. Background is persistent
+  // and hides itself while idle.
+  const runRegistry = new RunRegistry();
+  runRegistry.register({
+    runId: "background",
+    label: "background tasks",
+    emitter: background.emitter,
+    subcalls: () => background.liveSubcalls(),
+    totals: () => background.liveTotals(),
+    hideWhenEmpty: true,
+  });
+  let treePanelInstalled = false;
   // A detached child works in its OWN sandbox, so this one sees no frames and its request
   // watchdog would fire mid-await and SIGKILL a healthy worker, taking the REPL namespace
   // with it. Keep it alive while detached work is genuinely in flight.
@@ -163,7 +178,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   registerRlmConfigCommand(pi, controller);
 
   // ── Tool registration ──
-  pi.registerTool(createRlmTool(controller));
+  pi.registerTool(createRlmTool(controller, runRegistry));
   let guidePosted = false;
 
   pi.on("session_start", async (_event, ctx) => {
@@ -259,6 +274,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           gates: resolveSessionGates(),
           resolveGates: resolveSessionGates,
           background,
+          runRegistry,
           memory,
           registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
           registerContextBundle: (bundle) => {
@@ -283,6 +299,10 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     }
 
     setRlmModeStatus(ctx.ui, controller, ctx.getContextUsage());
+    if (!treePanelInstalled) {
+      treePanelInstalled = true;
+      installTreePanel(ctx, runRegistry);
+    }
     if (!guidePosted && controller.enabled) {
       guidePosted = true;
       postRlmGuide(pi, controller);
