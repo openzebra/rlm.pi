@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Identical `llm_query` leaves group into one expandable row.** A 20-item `llm_batch`
+  renders as `⠙ llm_query ×20` instead of 20 identical lines — grouped by label+model+status
+  per parent, collapsed by default, enter/←→ expands to the individual rows. Nothing is
+  lost: the data layer still emits one node per item, single leaves render as plain rows,
+  and **error leaves never group** — each ✗ keeps its own row with its own reason (the
+  "упало — почему?" rule). `rlm_query` agents are never grouped: one row per agent.
 - **Sub-agent tree hides nothing.** Every sub-call renders as its own row — `llm_batch`
   now emits one `llm_query` node per prompt and `rlm_batch` drops its wrapper row (the
   per-task `rlm_query` nodes were already emitted by `childRun`; the wrapper was pure

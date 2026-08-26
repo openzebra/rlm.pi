@@ -9,7 +9,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokens, spinnerFrame } from "../theme.ts";
-import type { NodeRow, TreeRow } from "./tree-model.ts";
+import type { GroupRow, NodeRow, TreeRow } from "./tree-model.ts";
 
 const GLYPHS = Object.freeze({ done: "✓", error: "✗", expanded: "▾", collapsed: "▸", leaf: " " } as const);
 const MODEL_MAX = 14;
@@ -29,24 +29,37 @@ function iconGlyph(row: NodeRow, theme: Theme): string {
 }
 
 /** Right-hand stats: "4.3k tok · gpt-5-mini" (model only when present). */
-function statsText(row: NodeRow): string {
-  const parts = [`${formatTokens(row.tokens)} tok`];
-  if (row.model !== undefined) parts.push(modelShort(row.model));
+function statsText(tokens: number, model: string | undefined): string {
+  const parts = [`${formatTokens(tokens)} tok`];
+  if (model !== undefined) parts.push(modelShort(model));
   return parts.join(" · ");
+}
+
+/** Left/right assembly shared by node and group rows — one padding rule, no fork. */
+function assembleLine(left: string, tokens: number, model: string | undefined, selected: boolean, width: number, theme: Theme): string {
+  const right = theme.fg("dim", statsText(tokens, model));
+  const gap = width - visibleWidth(left) - visibleWidth(right) - 1;
+  const line = gap > 0 ? `${left}${" ".repeat(gap)}${right}` : `${truncateToWidth(left, width - 1)} `;
+  return selected ? theme.fg("accent", line) : line;
 }
 
 function formatNode(row: NodeRow, selected: boolean, width: number, theme: Theme): string {
   const chevron = row.expandable ? (row.expanded ? GLYPHS.expanded : GLYPHS.collapsed) : GLYPHS.leaf;
   const cursor = selected ? theme.fg("accent", "❯") : " ";
   const left = `${cursor} ${row.prefix}${chevron} ${iconGlyph(row, theme)} ${row.label}`;
-  const right = theme.fg("dim", statsText(row));
-  const gap = width - visibleWidth(left) - visibleWidth(right) - 1;
-  const line = gap > 0 ? `${left}${" ".repeat(gap)}${right}` : `${truncateToWidth(left, width - 1)} `;
-  return selected ? theme.fg("accent", line) : line;
+  return assembleLine(left, row.tokens, row.model, selected, width, theme);
+}
+
+function formatGroup(row: GroupRow, selected: boolean, width: number, theme: Theme): string {
+  const chevron = row.expanded ? GLYPHS.expanded : GLYPHS.collapsed;
+  const cursor = selected ? theme.fg("accent", "❯") : " ";
+  const icon = row.icon === "done" ? theme.fg("success", GLYPHS.done) : row.icon === "error" ? theme.fg("error", GLYPHS.error) : theme.fg("warning", spinnerFrame());
+  const left = `${cursor} ${row.prefix}${chevron} ${icon} ${row.label} ×${row.count}`;
+  return assembleLine(left, row.tokens, row.model, selected, width, theme);
 }
 
 export function formatRow(row: TreeRow, selected: boolean, width: number, theme: Theme): string {
-  return formatNode(row, selected, width, theme);
+  return row.type === "group" ? formatGroup(row, selected, width, theme) : formatNode(row, selected, width, theme);
 }
 
 /** Pre-sized output — row count is known, no push-in-loop. */

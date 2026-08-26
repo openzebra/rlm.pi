@@ -9,7 +9,7 @@ import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { SubcallStore } from "../src/tool/subcall-store.ts";
 import { RlmEventAggregator } from "../src/tool/rlm-aggregator.ts";
 import { RunRegistry } from "../src/ui/panel/run-registry.ts";
-import { buildRows, type NodeRow } from "../src/ui/tree/tree-model.ts";
+import { buildRows, type GroupRow, type NodeRow } from "../src/ui/tree/tree-model.ts";
 import { formatRows, modelShort } from "../src/ui/tree/tree-rows.ts";
 import { buildModalLines, MODAL_LAYOUT } from "../src/ui/modal/modal-view.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -94,8 +94,11 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
   registry.register({ runId: "run1", label: "root", emitter, subcalls: () => store.getSubcalls(), totals: () => store.getTotals() });
   const agentId = emitter.emitSubcallCreated({ kind: "rlm", label: "rlm_query: auth", model: "openai/gpt-5", depth: 1 });
   emitter.emitSubcallUpdated({ id: agentId, phase: "waiting", tokens: 100 });
+  // Production shape: every llm_batch item carries the SAME label ("llm_query").
+  const leafIds: string[] = new Array<string>(7);
   for (let i = 0; i < 7; i++) {
-    const leaf = emitter.emitSubcallCreated({ kind: "llm", label: `llm_query: p${i}`, model: "openai/gpt-5-mini", depth: 1 });
+    const leaf = emitter.emitSubcallCreated({ kind: "llm", label: "llm_query", model: "openai/gpt-5-mini", depth: 1 });
+    leafIds[i] = leaf;
     emitter.emitSubcallUpdated({ id: leaf, status: "done", tokens: 10 });
   }
   const childLeaf = emitter.emitSubcallCreated({ kind: "llm", parentId: agentId, label: "llm_query: inner", model: "m/x", depth: 2 });
@@ -110,8 +113,26 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
   check("model: root row first", nodeRows[0]?.id === "run1");
   check("model: agent sorts before llm leaves", nodeRows[1]?.id === agentId);
   check("model: agent row shows own tokens only", nodeRows[1]?.tokens === 100);
-  check("model: no overflow marker — every leaf visible", rows.every((r) => r.type === "node") && nodeRows.length === 10);
+
+  // Identical leaves collapse into ONE group row (default view: root + agent + inner + group).
+  const group = rows.find((r): r is GroupRow => r.type === "group");
+  check("model: identical leaves form one group row", rows.length === 4 && group !== undefined);
+  check("model: group carries count, summed tokens, shared model",
+    group?.count === 7 && group?.tokens === 70 && group?.model === "openai/gpt-5-mini");
+  const expanded = buildRows(snapshot, new Set(), new Set([group?.id ?? ""]));
+  check("model: expanded group shows every member", expanded.length === 11);
   check("model: rows carry runId for modal lookup", nodeRows[1]?.runId === "run1");
+
+  // Errors NEVER group — one item fails mid-batch: ✗ keeps its own row, the rest stay grouped.
+  {
+    const failedId = leafIds[0] ?? "";
+    emitter.emitSubcallUpdated({ id: failedId, status: "error", detail: "401 unauthorized" });
+    const snap2 = registry.snapshots()[0] ?? snapshot;
+    const errRows = buildRows(snap2, new Set());
+    const errorNodes = errRows.filter((r): r is NodeRow => r.type === "node" && r.icon === "error");
+    check("model: error leaf stays individual, never grouped", errorNodes.length === 1 && errorNodes[0]?.id === failedId);
+    check("model: done group excludes the error", errRows.some((r): r is GroupRow => r.type === "group" && r.count === 6));
+  }
 
   const collapsedRows = buildRows(snapshot, new Set([agentId]));
   const collapsedAgent = collapsedRows.find((r): r is NodeRow => r.type === "node" && r.id === agentId);

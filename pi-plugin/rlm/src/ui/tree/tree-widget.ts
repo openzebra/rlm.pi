@@ -11,7 +11,7 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { RunRegistry } from "../panel/run-registry.ts";
-import { buildRows, type NodeRow, type TreeRow } from "./tree-model.ts";
+import { buildRows, type TreeRow } from "./tree-model.ts";
 import { formatRows } from "./tree-rows.ts";
 
 const SPINNER_INTERVAL_MS = 100;
@@ -35,6 +35,8 @@ export type KeyAction =
 
 export class TreeWidget implements Component {
   private readonly collapsed = new Set<string>();
+  /** Group rows default COLLAPSED — membership here means expanded. */
+  private readonly expandedGroups = new Set<string>();
   private rows: readonly TreeRow[] = [];
   private selectedId: string | undefined;
   private focused = false;
@@ -61,7 +63,7 @@ export class TreeWidget implements Component {
     this.focused = focused;
     if (focused) {
       this.rebuild();
-      this.selectedId = this.selectedId ?? this.nodeRows()[0]?.id;
+      this.selectedId = this.selectedId ?? this.rows[0]?.id;
     }
     this.tui.requestRender();
   }
@@ -78,7 +80,10 @@ export class TreeWidget implements Component {
     else if (data === KEYS.right) this.expandSelected();
     else if (data === KEYS.enter) {
       const row = this.selectedRow();
-      if (row !== undefined) return { type: "open", runId: row.runId, nodeId: row.id };
+      if (row !== undefined) {
+        if (row.type === "group") this.toggleGroup(row.id);
+        else return { type: "open", runId: row.runId, nodeId: row.id };
+      }
     }
     this.tui.requestRender();
     return { type: "swallowed" };
@@ -116,20 +121,20 @@ export class TreeWidget implements Component {
   private rebuild(): void {
     const all: TreeRow[] = [];
     for (const run of this.registry.snapshots()) {
-      for (const row of buildRows(run, this.collapsed)) all.push(row);
+      for (const row of buildRows(run, this.collapsed, this.expandedGroups)) all.push(row);
     }
     this.rows = Object.freeze(all);
     this.dirty = false;
     // A node that disappeared (run unregistered) must not stay selected.
-    if (this.selectedId !== undefined && !this.nodeRows().some((r) => r.id === this.selectedId)) {
-      this.selectedId = this.nodeRows()[0]?.id;
+    if (this.selectedId !== undefined && !this.rows.some((r) => r.id === this.selectedId)) {
+      this.selectedId = this.rows[0]?.id;
     }
     this.syncTimer();
   }
 
   /** Spinner ticks only while something is running; idle widgets cost zero. */
   private syncTimer(): void {
-    const anyRunning = this.rows.some((r) => r.type === "node" && r.icon === "running");
+    const anyRunning = this.rows.some((r) => r.icon === "running");
     if (anyRunning && this.timer === undefined) {
       const timer = setInterval(() => this.tui.requestRender(), SPINNER_INTERVAL_MS);
       timer.unref();
@@ -140,37 +145,42 @@ export class TreeWidget implements Component {
     }
   }
 
-  private nodeRows(): NodeRow[] {
-    const out: NodeRow[] = [];
-    for (const row of this.rows) if (row.type === "node") out.push(row);
-    return out;
+  /** Every row is navigable — node and group alike. */
+  private selectableRows(): readonly TreeRow[] {
+    return this.rows;
   }
 
-  private selectedRow(): NodeRow | undefined {
-    return this.nodeRows().find((r) => r.id === this.selectedId);
+  private selectedRow(): TreeRow | undefined {
+    return this.rows.find((r) => r.id === this.selectedId);
   }
 
   private move(delta: number): void {
-    const nodes = this.nodeRows();
-    if (nodes.length === 0) return;
-    const at = nodes.findIndex((r) => r.id === this.selectedId);
-    const next = nodes[Math.min(nodes.length - 1, Math.max(0, (at < 0 ? 0 : at) + delta))];
+    const rows = this.selectableRows();
+    if (rows.length === 0) return;
+    const at = rows.findIndex((r) => r.id === this.selectedId);
+    const next = rows[Math.min(rows.length - 1, Math.max(0, (at < 0 ? 0 : at) + delta))];
     if (next !== undefined) this.selectedId = next.id;
+  }
+
+  private toggleGroup(id: string): void {
+    if (this.expandedGroups.has(id)) this.expandedGroups.delete(id);
+    else this.expandedGroups.add(id);
+    this.dirty = true;
   }
 
   private collapseSelected(): void {
     const row = this.selectedRow();
-    if (row !== undefined && row.expandable && row.expanded) {
-      this.collapsed.add(row.id);
-      this.dirty = true;
-    }
+    if (row === undefined || !row.expandable || !row.expanded) return;
+    if (row.type === "group") this.expandedGroups.delete(row.id);
+    else this.collapsed.add(row.id);
+    this.dirty = true;
   }
 
   private expandSelected(): void {
     const row = this.selectedRow();
-    if (row !== undefined && row.expandable && !row.expanded) {
-      this.collapsed.delete(row.id);
-      this.dirty = true;
-    }
+    if (row === undefined || !row.expandable || row.expanded) return;
+    if (row.type === "group") this.expandedGroups.add(row.id);
+    else this.collapsed.delete(row.id);
+    this.dirty = true;
   }
 }
