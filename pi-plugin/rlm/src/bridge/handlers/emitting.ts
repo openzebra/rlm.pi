@@ -80,27 +80,7 @@ export async function emitting<T>(
   }
 }
 
-/** Summarize a batch result for the emitter. */
-export function summarizeBatch(out: readonly string[]): EmitSummary {
-  let failed = 0;
-  let firstError: string | undefined;
-  for (const s of out) {
-    if (isErrorText(s)) {
-      failed += 1;
-      firstError ??= s;
-    }
-  }
-  const first = previewText(out[0] ?? "");
-  const error =
-    failed === 0
-      ? undefined
-      : failed === out.length
-        ? `all ${out.length} sub-calls failed — reduce batch size or try llm_query individually`
-        : `${failed}/${out.length} sub-calls failed`;
-  return {
-    preview: out.length > 1 ? `${first}  (+${out.length - 1} more)` : first,
-    error: error ?? firstError,
-    failed,
-    total: out.length,
-  };
+/** Summarize a single leaf answer for the emitter — shared by llm_query and every llm_batch item. */
+export function summarizeLeaf(out: string): EmitSummary {
+  return { preview: previewText(out), error: isErrorText(out) ? out : undefined };
 }

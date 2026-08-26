@@ -84,7 +84,7 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
   bgEmitter.shutdown();
 }
 
-// ── tree model: agents first, overflow, collapse, subtree tokens ──
+// ── tree model: agents first, nothing hidden, own-spend tokens ──
 {
   const registry = new RunRegistry();
   const emitter = new RlmEmitter();
@@ -109,8 +109,8 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
   const nodeRows = rows.filter((r): r is NodeRow => r.type === "node");
   check("model: root row first", nodeRows[0]?.id === "run1");
   check("model: agent sorts before llm leaves", nodeRows[1]?.id === agentId);
-  check("model: agent row carries subtree tokens", nodeRows[1]?.tokens === 150);
-  check("model: overflow marker caps leaves", rows.some((r) => r.type === "overflow" && r.count === 4));
+  check("model: agent row shows own tokens only", nodeRows[1]?.tokens === 100);
+  check("model: no overflow marker — every leaf visible", rows.every((r) => r.type === "node") && nodeRows.length === 10);
   check("model: rows carry runId for modal lookup", nodeRows[1]?.runId === "run1");
 
   const collapsedRows = buildRows(snapshot, new Set([agentId]));
@@ -120,7 +120,7 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
   // ── row formatting: tokens + short model, never "$" ──
   const lines = formatRows(rows, agentId, 72, theme);
   check("rows: one line per row", lines.length === rows.length);
-  check("rows: agent line shows subtree tokens", lines[1]?.includes("150 tok") === true);
+  check("rows: agent line shows own tokens", lines[1]?.includes("100 tok") === true);
   check("rows: model shortened to last segment", lines[1]?.includes("gpt-5") === true);
   check("rows: no cost anywhere", lines.every((l) => !l.includes("$")));
   check("rows: selection cursor rendered", lines[1]?.includes("❯") === true);

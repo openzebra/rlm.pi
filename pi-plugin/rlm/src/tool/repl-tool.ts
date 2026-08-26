@@ -38,6 +38,7 @@ import { SubcallStore } from "./subcall-store.ts";
 import type { ReplDetails } from "./repl-details.ts";
 import type { RlmSubcall } from "./rlm-details.ts";
 import { createEngine } from "../core/engine.ts";
+import { modelRef } from "../config/settings.ts";
 import { spinnerFrame } from "../ui/theme.ts";
 import { previewText } from "../text/preview.ts";
 import { errorMessage } from "../util/errors.ts";
@@ -260,6 +261,12 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         emitter,
         subcalls: () => store.getSubcalls(),
         totals: () => store.getTotals(),
+        // Root = the session's default (pi) model driving this repl cell, own spend only.
+        rootModel: () => {
+          const m = getModel();
+          return modelRef(m) ?? m.id;
+        },
+        rootTokens: () => store.getRootUsage().tokens,
       });
       let capturedStdout = "";
       let capturedStderr = "";

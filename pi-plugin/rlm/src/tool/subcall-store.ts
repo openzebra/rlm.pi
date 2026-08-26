@@ -25,6 +25,8 @@ export class SubcallStore extends EmitterListener {
 
   private totalCostUsd = 0;
   private totalTokens = 0;
+  private rootCostUsd = 0;
+  private rootTokens = 0;
 
   constructor(emitter: RlmEmitter, private readonly onChange?: () => void) {
     super();
@@ -145,5 +147,12 @@ export class SubcallStore extends EmitterListener {
   addRootUsage(costUsd: number, tokens: number): void {
     this.totalCostUsd += costUsd;
     this.totalTokens += tokens;
+    this.rootCostUsd += costUsd;
+    this.rootTokens += tokens;
+  }
+
+  /** Root engine's OWN spend (driver-model turns only) — never blends sub-call models. */
+  getRootUsage(): SubcallTotals {
+    return { costUsd: this.rootCostUsd, tokens: this.rootTokens };
   }
 }

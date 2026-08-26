@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Sub-agent tree hides nothing.** Every sub-call renders as its own row — `llm_batch`
+  now emits one `llm_query` node per prompt and `rlm_batch` drops its wrapper row (the
+  per-task `rlm_query` nodes were already emitted by `childRun`; the wrapper was pure
+  decoration). The per-parent overflow cap (`maxChildrenPerParent: 5`), the global 24-row
+  cap and the synthesized `… ×N more` marker rows are gone — parity with pi's own TUI,
+  which renders each concurrent tool call individually. Batch failures are no longer
+  reduced to a `"3/5 sub-calls failed"` count: each ✗ row carries its own error text
+  (Enter → details modal), so "упало" is answerable at a glance.
+- **Token rows are own-spend only.** Container rows no longer show a subtree `sumTokens()`
+  blend across models. Every row reports its own model's spend (`4.3k tok · gpt-5-mini`),
+  and the run root shows the session's default pi model plus the root engine's own turn
+  spend (`RunRegistration.rootModel`/`rootTokens`; `SubcallStore.getRootUsage()` exposed
+  through `RlmEventAggregator`). The repl root reuses `getModel()` (session model), the
+  rlm tool reuses `controller.resolveModels()` — the one resolution path, no duplicate.
+
+### Fixed
+
+- **`×5 ×5` double label on batch nodes.** Handlers baked `×N` into the label and
+  `labelOf()` appended `totalCount` on top; labels now have a single owner (the handler)
+  and the re-append is deleted.
+- **Three copies of the leaf-summary lambda** (`llm_query`, the `rlm_query` demotion path,
+  and batch items) collapsed into `summarizeLeaf` in `bridge/handlers/emitting.ts`;
+  `summarizeBatch` deleted and AGENTS.md DRY rule #4 updated to point at the single
+  implementation. Tests that asserted the old hiding/blending behavior now assert the new
+  contract (own-spend tokens, nothing hidden); phase-tree, smoke, native-smoke,
+  native-mode suites green, `tsc --noEmit` clean (plugin + root).
+
 ### Fixed
 
 - **Native cells silently echoed every `rlm_query`/`rlm_batch` spawn.** `beginNativeCell`

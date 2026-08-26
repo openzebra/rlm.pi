@@ -43,6 +43,6 @@ export type {
 } from "./types.ts";
 
 export { limitsFromRemaining } from "./types.ts";
-export { summarizeBatch } from "./emitting.ts";
+export { summarizeLeaf } from "./emitting.ts";
 export { createTaskRegistry, SPAWN_HINT } from "./task-registry.ts";
 export type { TaskRegistry, SpawnDeps, AwaitDeps } from "./task-registry.ts";

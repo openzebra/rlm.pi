@@ -9,7 +9,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokens, spinnerFrame } from "../theme.ts";
-import type { NodeRow, OverflowRow, TreeRow } from "./tree-model.ts";
+import type { NodeRow, TreeRow } from "./tree-model.ts";
 
 const GLYPHS = Object.freeze({ done: "✓", error: "✗", expanded: "▾", collapsed: "▸", leaf: " " } as const);
 const MODEL_MAX = 14;
@@ -45,12 +45,8 @@ function formatNode(row: NodeRow, selected: boolean, width: number, theme: Theme
   return selected ? theme.fg("accent", line) : line;
 }
 
-function formatOverflow(row: OverflowRow, width: number, theme: Theme): string {
-  return truncateToWidth(theme.fg("dim", `  ${row.prefix}… ×${row.count} more`), width);
-}
-
 export function formatRow(row: TreeRow, selected: boolean, width: number, theme: Theme): string {
-  return row.type === "overflow" ? formatOverflow(row, width, theme) : formatNode(row, selected, width, theme);
+  return formatNode(row, selected, width, theme);
 }
 
 /** Pre-sized output — row count is known, no push-in-loop. */
@@ -58,7 +54,7 @@ export function formatRows(rows: readonly TreeRow[], selectedId: string | undefi
   const lines = new Array<string>(rows.length);
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    lines[i] = formatRow(row, row !== undefined && row.type === "node" && row.id === selectedId, width, theme);
+    lines[i] = formatRow(row, row !== undefined && row.id === selectedId, width, theme);
   }
   return lines;
 }

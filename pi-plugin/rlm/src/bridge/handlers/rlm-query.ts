@@ -15,8 +15,7 @@ import type { Invocation, SpawnResult, SubcallHandlerDeps } from "./types.ts";
 import type { SubcallOpts } from "../../sandbox/interrupts.ts";
 import { SPAWN_HINT, spawnAndRun, type SpawnDeps } from "./task-registry.ts";
 import { complete1, type Complete1Deps } from "./completion.ts";
-import { emitting } from "./emitting.ts";
-import { isErrorText } from "../../util/errors.ts";
+import { emitting, summarizeLeaf } from "./emitting.ts";
 import { leafClaimKey, runClaimedLeaf } from "./llm-query.ts";
 
 const UNWIRED = formatError("RLM bridge not wired for this invocation");
@@ -267,10 +266,7 @@ export function createRlmQueryHandler(deps: SubcallHandlerDeps, sd: SpawnDeps) {
                   args: previewText(task),
                 },
                 (track) => complete1(inv, task, track, completeDeps(deps)),
-                (out) => ({
-                  preview: previewText(out),
-                  error: isErrorText(out) ? out : undefined,
-                }),
+                summarizeLeaf,
               ),
           ),
         deps.trackDetached,
@@ -312,36 +308,17 @@ export function createRlmBatchHandler(deps: SubcallHandlerDeps, sd: SpawnDeps) {
     }
 
     const pathArg = opts.paths;
-    const id = inv.emitter.emitSubcallCreated({
-      kind: "batch",
-      parentId: inv.parentId,
-      label: `rlm_batch ×${tasks.length}`,
-      args: previewText(tasks[0] ?? ""),
-      depth: inv.depth,
-    });
-
+    // No wrapper "rlm_batch ×N" node: every task already gets its own rlm_query node from
+    // childRun (DRY #2), parented to the caller — the batch is spawn fan-out, not a UI row.
     return spawnAndRun(
       sd,
       "rlm_batch",
       tasks.length,
       async () => {
-        try {
-          const results = await Promise.all(
-            tasks.map((t) => childRun(deps, inv, t, pathArg)),
-          );
-          const answers = results.map((r) => r.answer);
-          inv.emitter.emitSubcallUpdated({
-            id,
-            status: "done",
-            resultPreview: previewText(answers[0] ?? ""),
-            totalCount: answers.length,
-          });
-          return answers;
-        } catch (err: unknown) {
-          const msg = errorMessage(err);
-          inv.emitter.emitSubcallUpdated({ id, status: "error", detail: msg });
-          throw err;
-        }
+        const results = await Promise.all(
+          tasks.map((t) => childRun(deps, inv, t, pathArg)),
+        );
+        return results.map((r) => r.answer);
       },
       deps.trackDetached,
       opts.detached,

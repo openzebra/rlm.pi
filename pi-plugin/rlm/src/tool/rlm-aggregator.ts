@@ -16,7 +16,7 @@ import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import type { RlmEmitter, TurnEvent, RootUsageEvent, AnswerEvent, StatusEvent, RootPromptEvent, RootPhaseEvent } from "./rlm-events.ts";
 import type { RlmDetails, RlmRunStatus, SubcallPhase } from "./rlm-details.ts";
 import { EmitterListener } from "./emitter-listener.ts";
-import { SubcallStore } from "./subcall-store.ts";
+import { SubcallStore, type SubcallTotals } from "./subcall-store.ts";
 
 export class RlmEventAggregator extends EmitterListener {
   private readonly store: SubcallStore;
@@ -92,6 +92,11 @@ export class RlmEventAggregator extends EmitterListener {
       totals: this.store.getTotals(),
       answer: this.answer,
     };
+  }
+
+  /** Root engine's OWN spend (driver-model turns) — never blends sub-call models. */
+  getRootUsage(): SubcallTotals {
+    return this.store.getRootUsage();
   }
 
   // ── Lifecycle ──

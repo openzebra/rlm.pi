@@ -58,7 +58,8 @@ implementation of `llm_query` / `llm_batch` / `rlm_query` / `rlm_batch`, and
 
 3. **Display model resolution** — one private `displayModel()` in `bridge/handlers/`, built on `modelRef` + `resolveModelId` from `config/settings.ts`.
 
-4. **Batch error summary** — `summarizeBatch()`, exported from `bridge/handlers/`.
+4. **Leaf answer summary** — `summarizeLeaf()`, exported from `bridge/handlers/`. Batch
+   handlers emit ONE node per item (`llm_query`/`rlm_query` rows — nothing collapsed, no `×N`).
 
 5. **The subcall emit pattern** (create → execute → update status/cost/tokens) — the `emitting()` helper in `bridge/handlers/` for leaf sub-calls; `childRun` emits its own node for recursive ones (never wrap it, or the node is reported twice). `interactive.ts` follows the same shape by hand. Adding a new subcall handler? Reuse these — don't invent a new pattern.
 

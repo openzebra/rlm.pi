@@ -5,8 +5,8 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import { modelRef } from "../../config/settings.ts";
 import { complete1, type Complete1Deps } from "./completion.ts";
-import { emitting, summarizeBatch } from "./emitting.ts";
-import { formatError, isErrorText, errorMessage } from "../../util/errors.ts";
+import { emitting, summarizeLeaf } from "./emitting.ts";
+import { formatError, errorMessage } from "../../util/errors.ts";
 import { previewText } from "../../text/preview.ts";
 import type { SpawnResult, SubcallHandlerDeps } from "./types.ts";
 import type { SubcallOpts } from "../../sandbox/interrupts.ts";
@@ -107,10 +107,7 @@ export function createLlmQueryHandler(
           model: displayModel(deps),
         },
         (track: (u: Usage) => void) => complete1(inv, prompt, track, cdeps),
-        (out) => ({
-          preview: previewText(out),
-          error: isErrorText(out) ? out : undefined,
-        }),
+        summarizeLeaf,
       );
     // v5 TaskLedger for leaves: identical prompts coalesce onto one completion (key has no
     // context — a leaf's entire world is the prompt text itself).
@@ -153,21 +150,23 @@ export function createLlmBatchHandler(
       sd,
       "llm_batch",
       prompts.length,
+      // One visible node per prompt — no collapsed "×N" row, no hidden failures: each item
+      // reports its own status/tokens/error (UI parity with pi: every concurrent call renders).
       () =>
-        emitting(
-          inv,
-          {
-            kind: "batch",
-            label: `llm_batch ×${prompts.length}`,
-            args: `prompt: ${previewText(prompts[0] ?? "")}`,
-            model: displayModel(deps),
-          },
-          // NO outer gate — complete1 takes the single leaf slot per prompt.
-          // v5 (audit H3): every item routes through the ledger — duplicate prompts inside
-          // one batch (or twins of other in-flight leaves) coalesce instead of paying N times.
-          (track: (u: Usage) => void) =>
-            Promise.all(
-              prompts.map((p) =>
+        Promise.all(
+          prompts.map((p) =>
+            emitting(
+              inv,
+              {
+                kind: "llm",
+                label: "llm_query",
+                args: `prompt: ${previewText(p)}`,
+                model: displayModel(deps),
+              },
+              // NO outer gate — complete1 takes the single leaf slot per prompt.
+              // v5 (audit H3): every item routes through the ledger — duplicate prompts inside
+              // one batch (or twins of other in-flight leaves) coalesce instead of paying N times.
+              (track: (u: Usage) => void) =>
                 runClaimedLeaf(
                   ledger,
                   ledger === undefined ? undefined : leafClaimKey(deps, p),
@@ -175,9 +174,9 @@ export function createLlmBatchHandler(
                   inv.depth,
                   () => complete1(inv, p, track, cdeps),
                 ),
-              ),
+              summarizeLeaf,
             ),
-          summarizeBatch,
+          ),
         ),
       deps.trackDetached,
       opts.detached,

@@ -9,6 +9,7 @@ import { type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { RlmController, StartInput } from "../mode/rlm-mode.ts";
+import { modelRef } from "../config/settings.ts";
 import { spinnerFrame } from "../ui/theme.ts";
 import type { RunRegistry } from "../ui/panel/run-registry.ts";
 import { markdownTheme } from "../ui/theme-adapter.ts";
@@ -71,6 +72,13 @@ export function createRlmTool(controller: RlmController, runRegistry?: RunRegist
         rootStatus: () => aggregator.getState().status,
         rootPhase: () => aggregator.getState().rootPhase,
         turns: () => aggregator.getState().turns,
+        // Reuses controller.resolveModels — the ONE model-resolution path (DRY); lazy so
+        // the pin resolution inside start() is reflected, and it shows own spend only.
+        rootModel: () => {
+          const m = controller.resolveModels(ctx)?.model;
+          return m === undefined ? undefined : modelRef(m) ?? m.id;
+        },
+        rootTokens: () => aggregator.getRootUsage().tokens,
       });
 
       // Wire abort signal to controller

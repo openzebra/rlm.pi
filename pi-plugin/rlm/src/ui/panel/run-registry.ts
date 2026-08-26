@@ -25,6 +25,10 @@ export interface RunRegistration {
   readonly rootStatus?: () => RlmRunStatus;
   readonly rootPhase?: () => SubcallPhase | undefined;
   readonly turns?: () => { readonly current: number; readonly max: number };
+  /** Root's OWN model ("provider/id") — the row never shows a blended/absent model. */
+  readonly rootModel?: () => string | undefined;
+  /** Root's OWN spend (driver-model turns) — never a subtree sum across models. */
+  readonly rootTokens?: () => number;
   /** Persistent entries (background work) stay hidden until they hold subcalls. */
   readonly hideWhenEmpty?: boolean;
 }
@@ -38,6 +42,8 @@ export interface RunEntry {
   readonly rootStatus: () => RlmRunStatus;
   readonly rootPhase: () => SubcallPhase | undefined;
   readonly turns: () => { readonly current: number; readonly max: number };
+  readonly rootModel: () => string | undefined;
+  readonly rootTokens: () => number;
   readonly hideWhenEmpty: boolean;
 }
 
@@ -58,6 +64,8 @@ export class RunRegistry {
       rootStatus: run.rootStatus ?? (() => "running"),
       rootPhase: run.rootPhase ?? (() => undefined),
       turns: run.turns ?? (() => DEFAULT_TURNS),
+      rootModel: run.rootModel ?? (() => undefined),
+      rootTokens: run.rootTokens ?? (() => 0),
       hideWhenEmpty: run.hideWhenEmpty ?? false,
     };
     this.entries.set(run.runId, entry);
@@ -109,7 +117,8 @@ export class RunRegistry {
         rootLabel: entry.label,
         status: entry.rootStatus(),
         rootPhase: entry.rootPhase(),
-        tokens: entry.totals().tokens,
+        rootModel: entry.rootModel(),
+        rootTokens: entry.rootTokens(),
         subcalls: entry.subcalls(),
       });
     }
