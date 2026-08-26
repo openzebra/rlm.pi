@@ -5,6 +5,10 @@
  */
 
 import { check, failureCount, MOCK_MODEL, MOCK_REGISTRY, ZERO_USAGE } from "./helpers.ts";
+import { MemoryStore } from "../src/core/memory.ts";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { createEngine } from "../src/core/engine.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
@@ -198,6 +202,25 @@ async function engineChildProbe(config: RlmConfig): Promise<{ readonly answer: s
   check("engine: legacy child keeps search",
     legacy.childLine.includes("child-has-search: True"), legacy.childLine.slice(0, 80));
   check("C5: legacy child prompt keeps the retrieval doctrine", legacy.childSys.includes("search("), "");
+}
+
+// ── memory scope: delegation children READ durable notes, never write ────────────
+
+{
+  const dir = await mkdtemp(join(tmpdir(), "rlm-mem-scope-"));
+  const store = new MemoryStore(dir, { dir: join(dir, "m") });
+  const childAdd = store.serviceOp("add", { content: "childnote-beta ships fast" }, "child");
+  const rootAdd = store.serviceOp("add", { content: "rootnote-alpha ships slow" }, "root");
+  check("memory: root scope can add", rootAdd.startsWith("ok note ") === true, rootAdd);
+  check(
+    "memory: child scope is read-only (add rejected with a reason)",
+    childAdd.startsWith("Error: memory.add is root-only") === true, childAdd,
+  );
+  // The rejected child add must not have written anything.
+  const q = store.serviceOp("query", { query: "childnote-beta", k: 8 }, "child");
+  check("memory: rejected child add wrote nothing", q === "no notes match", q);
+  const qRoot = store.serviceOp("query", { query: "rootnote-alpha", k: 8 }, "child");
+  check("memory: child CAN query what root wrote", qRoot.includes("rootnote-alpha"), qRoot);
 }
 
 finish();

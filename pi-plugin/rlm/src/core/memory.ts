@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import { closeSync, openSync, readSync } from "node:fs";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import { formatError } from "../util/errors.ts";
 
 const TOK = /[a-z0-9]{2,}/g;
 const EPISODE_CAP = 4_000;
@@ -122,6 +123,10 @@ export function rootContextPaths(context: unknown, max: number): readonly string
   }
   return Object.freeze(out);
 }
+
+/** Who is calling serviceOp — delegation children read durable notes but never write them
+ *  (their findings persist via recordEpisode in the rlm_query handler, one per run). */
+export type MemoryScope = "root" | "child";
 
 export class MemoryStore {
   readonly enabled: boolean;
@@ -462,9 +467,16 @@ export class MemoryStore {
   serviceOp(
     op: "query" | "add" | "stats",
     args: { readonly query?: string; readonly k?: number; readonly content?: string; readonly paths?: readonly string[]; readonly tags?: readonly string[] },
+    scope: MemoryScope = "root",
   ): string {
     if (!this.enabled) return "memory disabled";
     if (op === "stats") return JSON.stringify(this.stats());
+    if (op === "add" && scope === "child") {
+      return formatError(
+        "memory.add is root-only — query durable notes with memory.query; " +
+          "your final answer is recorded as an episode automatically",
+      );
+    }
     if (op === "add") {
       const n = this.addNote({ content: args.content ?? "", paths: args.paths ?? [], tags: args.tags ?? [] });
       return n === undefined ? "add skipped (empty content)" : `ok note ${n.id}`;

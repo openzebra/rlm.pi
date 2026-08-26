@@ -283,9 +283,12 @@ export function createEngine(deps: EngineDeps): RunRlm {
           }).handlers
         : {};
 
+      // v5 doctrine: one condition feeds BOTH the python surface and the memory scope —
+      // delegation children keep llm/memory-read/ledger, never repo retrieval or memory.add.
+      const surface = input.depth > 0 && deps.config.childSurface === "delegation" ? "child" : "root";
       sandbox = await PythonSandbox.spawn({
         depth: input.depth,
-        surface: input.depth > 0 && deps.config.childSurface === "delegation" ? "child" : "root",
+        surface,
         execTimeoutS: deps.config.execTimeoutS,
         requestTimeoutMs: deps.config.requestTimeoutMs,
         python: deps.config.python,
@@ -297,7 +300,10 @@ export function createEngine(deps: EngineDeps): RunRlm {
           ...subcalls,
           ...contextHandlers,
           ledgerClaims: () => Promise.resolve(runLedger.listClaims()),
-          memoryOp: (op, args) => Promise.resolve(rootMemory?.serviceOp(op, args) ?? "memory off"),
+          memoryOp: (op, args) =>
+            Promise.resolve(
+              rootMemory === undefined ? "memory off" : rootMemory.serviceOp(op, args, surface === "child" ? "child" : "root"),
+            ),
         },
       });
 

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Delegation-child agents now have read-only durable memory.** `rlm_query` children
+  could already reach the `.rlm/` store through the unconditional `memory` namespace
+  (`worker.py`) — including `memory.add`. The `memoryOp` interrupt now carries a scope
+  (`MemoryStore.serviceOp(op, args, "root" | "child")`): delegation children keep
+  `memory.query`/`stats` (durable knowledge from prior sessions) while `memory.add` is
+  rejected with an actionable reason — their findings already persist automatically as
+  episodes via `recordEpisode`. The scope derives from the SAME surface condition that
+  trims the child sandbox (one `surface` const feeds both — engine.ts), the native repl
+  root keeps full read/write, and the "legacy" childSurface rollback restores the old
+  full-surface behavior. Child prompts no longer teach `memory.add` (delegation glossary
+  documents the read-only line).
 - **Identical `llm_query` leaves group into one expandable row.** A 20-item `llm_batch`
   renders as `⠙ llm_query ×20` instead of 20 identical lines — grouped by label+model+status
   per parent, collapsed by default, enter/←→ expands to the individual rows. Nothing is
