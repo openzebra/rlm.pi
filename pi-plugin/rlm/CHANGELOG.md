@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.9] — 2026-08-27
+
+Observability + role-hardening pass over the sub-agent surface: the live tree shows every
+agent with its own model's token spend, `llm_batch` fan-outs collapse into one expandable
+`×N` row (errors never collapse — each ✗ keeps its reason), and delegation children gain
+read-only access to durable `.rlm/` memory. Includes two native-path reliability fixes
+(spawn echo, stall watchdog) from the unreleased backlog.
+
 ### Changed
 
 - **Delegation-child agents now have read-only durable memory.** `rlm_query` children
