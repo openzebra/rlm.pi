@@ -18,8 +18,8 @@
 
 **The ONLY Recursive Language Model plugin for Pi.** No new agent to learn, no
 separate CLI, no YAML workflows — just `/rlm` and your existing Pi session becomes a
-recursive orchestration engine that saves **99% tokens** by delegating work to cheap
-worker models.
+recursive orchestration engine — your best model orchestrates, cheap worker models
+do the reading.
 
 > **One install. One toggle. Infinite context.**
 

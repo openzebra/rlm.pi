@@ -1,4 +1,4 @@
-# pi-rlm — Save 99% tokens, Recursive Language Model (RLM) for the Pi
+# pi-rlm — Large contexts on cheap models: Recursive Language Model (RLM) for Pi
 
 <div align="center">
 
@@ -97,7 +97,7 @@ no bloat.
 
 The root uses your best model. Workers auto-pick the cheapest available. Child RLMs
 inherit the full `context` at zero token cost — the sandbox holds the files, the model
-only sees a size line. **Recursive delegation → 99% token savings.**
+only sees a size line. **Recursive delegation → cheap workers pay for the reading, not your main model.**
 
 ### ⏳ Long-running with goals
 
