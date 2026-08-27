@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.12] — 2026-08-28
+
+Rate limits are a queue, not a failure. 0.3.11's shared 3-attempt budget still killed
+leaves when an account-level limit outlasted ~3.5s of backoff (observed: whole `llm_batch`
+fan-outs at ×55/×160 with ✗ leaves at 0 tok while the window was still closed).
+
+### Changed
+
+- **429s park instead of dying.** Rate-limited failures now burn their own generous
+  budget (`rateLimitMaxAttempts`, default 8) — each attempt parks on the escalating
+  cooldown window (2s→4s→…≤60s ≈ up to ~4 min total) instead of counting against the
+  3-attempt transient budget. 5xx/timeouts keep the old budget; auth/quota still fails fast.
+
+### Added
+
+- **"Queued" is visible.** New `queued` subcall phase with a static `◷` glyph in tree rows
+  (distinct from the animated spinner), shown while a node parks on the rate-limit cooldown;
+  collapsed `×N` groups show it when any member is parked, and the node detail reads
+  `rate limit — waiting Ns`. Applies to leaf sub-calls, demoted leaves, and engine root
+  turns alike (`emitting()` gains a `note` arg; `throttleHooks()` is the one helper every
+  leaf call site shares).
+- `rateLimitMaxAttempts` config knob in `rlm.json` (default 8, min 1).
+
 ## [0.3.11] — 2026-08-28
 
 Rate-limit resilience for every LLM completion in the tree. Two failure modes motivated
