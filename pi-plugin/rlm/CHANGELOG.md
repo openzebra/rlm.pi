@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.11] — 2026-08-28
+
+Rate-limit resilience for every LLM completion in the tree. Two failure modes motivated
+this: parallel `llm_batch`/`rlm_batch` fan-out tripping zai's account rate limit
+(`429 {"code":"1302","message":"您的账户已达到速率限制"}` — 21 sub-calls dead in one
+burst) and glm-5.3 dying to `Upstream idle timeout exceeded` on fat contexts — both
+previously failing instantly with no second chance.
+
+### Added
+
+- **Retry with backoff at the single completion choke point.** `modelComplete`
+  (`bridge/model.ts`, the one place that calls pi-ai's `completeSimple`) now wraps every
+  call in `completeWithRetry` (`util/retry.ts`). Transient failures — HTTP 408/429/5xx,
+  or text like `rate limit` / `overloaded` / `upstream` / `timeout` / zai's `1302` — are
+  retried up to 3 total attempts. Auth/quota/billing errors fail fast and are never
+  retried. Covers all four completion paths: leaf `llm_query`/`llm_batch` sub-calls,
+  engine root turns, history compaction, and session-start memory consolidation.
+- **Provider signals are read, not guessed.** pi-ai's `onResponse` hook captures the raw
+  `{status, headers}` of every HTTP response; retry timing prefers the provider's own
+  `retry-after` / `retry-after-ms` (milliseconds, seconds, or HTTP-date, capped at
+  `retryMaxDelayMs`), falling back to exponential backoff (500ms→1s→2s, ±30% jitter).
+- **Adaptive per-provider throttle** (`util/throttle.ts`). A rate limit doesn't just
+  retry the one call — it penalizes a process-wide `ProviderCooldown` so every sibling
+  request queued behind the same provider slows down too. Consecutive strikes double the
+  window (2s→4s→8s…≤60s); any success resets escalation. Providers that send no timing
+  (zai's body carries none) get the strike heuristic; providers that do get their exact
+  window. Abort signals are honored throughout.
+- **Five config knobs** in `rlm.json` (validated + defaulted): `retryMaxAttempts` (3),
+  `retryBaseDelayMs` (500), `retryMaxDelayMs` (15 000), `throttleBaseMs` (2 000),
+  `throttleMaxMs` (60 000).
+- **`test/retry.ts`** — 32 checks over classification, header parsing, backoff caps,
+  cooldown escalation/reset/isolation, and the retry loop (transient-success, fail-fast,
+  exhaustion, abort). Registered in `smoke.ts`.
+
 ## [0.3.9] — 2026-08-27
 
 Observability + role-hardening pass over the sub-agent surface: the live tree shows every
