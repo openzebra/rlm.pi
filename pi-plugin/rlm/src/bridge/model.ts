@@ -2,12 +2,16 @@
  * modelComplete — a single, serverless, in-process LLM completion.
  *
  * This is the one place that talks to a provider. It resolves the API key from pi's
- * ModelRegistry (keys live here, never in the sandbox) and calls pi-ai's `completeSimple`.
- * Used both for `llm_query` (one user prompt) and for the headless RLM root (full history).
+ * ModelRegistry (keys live here, never in the sandbox) and calls pi-ai's `completeSimple`,
+ * wrapped in completeWithRetry: transient 429/5xx get exponential backoff (honoring
+ * `retry-after` via the onResponse hook) and rate limits additionally cool the shared
+ * per-provider throttle. Used both for `llm_query` (one user prompt) and for the headless
+ * RLM root (full history).
  */
 
 import { type Api, completeSimple, type Message, type Model, type ThinkingLevel, type Usage } from "@earendil-works/pi-ai/compat";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { completeWithRetry, DEFAULT_RETRY_POLICY, type RetryPolicy } from "../util/retry.ts";
 
 export type Role = "system" | "user" | "assistant";
 export interface ChatMsg {
@@ -23,6 +27,8 @@ export interface CompleteOptions {
   readonly temperature?: number;
   readonly reasoning?: ThinkingLevel;
   readonly signal?: AbortSignal;
+  /** Retry + adaptive throttle for transient 429/5xx; defaults apply when omitted. */
+  readonly retry?: RetryPolicy;
 }
 
 export interface CompleteResult {
@@ -78,20 +84,29 @@ export async function modelComplete(messages: readonly ChatMsg[], opts: Complete
       : opts.system
     : built.systemPrompt;
 
-  const msg = await completeSimple(
-    opts.model,
-    { systemPrompt, messages: built.messages },
-    {
-      apiKey: auth.apiKey,
-      headers: auth.headers,
-      maxTokens: opts.maxTokens,
-      temperature: opts.temperature,
-      reasoning: opts.reasoning,
-      signal: opts.signal,
+  const msg = await completeWithRetry(
+    async (note) => {
+      const response = await completeSimple(
+        opts.model,
+        { systemPrompt, messages: built.messages },
+        {
+          apiKey: auth.apiKey,
+          headers: auth.headers,
+          maxTokens: opts.maxTokens,
+          temperature: opts.temperature,
+          reasoning: opts.reasoning,
+          signal: opts.signal,
+          onResponse: (res) => { note(res.status, res.headers); },
+        },
+      );
+      // pi-ai folds provider failures into the message: "error"/"aborted" + errorMessage.
+      // Throwing here puts every completion failure onto ONE path — the retry classifier.
+      if (response.stopReason === "error" || response.stopReason === "aborted") {
+        throw new Error(response.errorMessage ?? response.stopReason);
+      }
+      return response;
     },
+    { policy: opts.retry ?? DEFAULT_RETRY_POLICY, provider: opts.model.provider, signal: opts.signal },
   );
-  if (msg.stopReason === "error" || msg.stopReason === "aborted") {
-    throw new Error(msg.errorMessage ?? msg.stopReason);
-  }
   return { text: extractText(msg.content), usage: msg.usage };
 }

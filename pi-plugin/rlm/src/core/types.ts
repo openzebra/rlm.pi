@@ -25,6 +25,17 @@ export interface RlmConfig {
   /** Concurrent recursive child engines admitted per depth. Lower than maxConcurrentSubcalls:
    *  each child is a Python subprocess holding its own copy of the inherited context. */
   readonly maxConcurrentChildren: number;
+  /** v5.1 rate-limit resilience (see util/retry.ts): transient 429/5xx are retried with
+   *  backoff, and rate limits additionally cool a shared per-provider throttle.
+   *  retryMaxAttempts counts TOTAL attempts per call (1 = never retry). */
+  readonly retryMaxAttempts?: number;
+  readonly retryBaseDelayMs?: number;
+  /** Cap for any single retry delay, including a parsed `retry-after`. */
+  readonly retryMaxDelayMs?: number;
+  /** First cooldown when a provider 429s without timing; doubles per consecutive strike. */
+  readonly throttleBaseMs?: number;
+  /** Ceiling for the adaptive per-provider cooldown. */
+  readonly throttleMaxMs?: number;
   /** Reject sub-LLM prompts larger than this many chars. */
   readonly maxPromptChars: number;
   /** Max wall-clock ms across the whole tree before the engine stops (undefined = no cap). */

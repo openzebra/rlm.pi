@@ -7,6 +7,7 @@
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { type ChatMsg, type CompleteOptions, type CompleteResult, modelComplete } from "../bridge/model.ts";
+import type { RetryPolicy } from "../util/retry.ts";
 import type { ReplResult } from "../sandbox/protocol.ts";
 import type { PythonSandbox } from "../sandbox/sandbox.ts";
 import { findReplBlocks } from "../text/parsing.ts";
@@ -31,6 +32,8 @@ export interface TurnDeps {
   readonly signal?: AbortSignal;
   /** Test-only override for model completion (scripted responses). */
   readonly complete?: CompleteFn;
+  /** v5.1 retry policy for modelComplete (rate-limit resilience); defaults apply when omitted. */
+  readonly retry?: RetryPolicy;
   /** Live activity reporting for the tree UI (thinking → repl/texting per turn). */
   readonly onPhase?: (phase: SubcallPhase) => void;
 }
@@ -44,6 +47,7 @@ export async function runTurn(history: readonly ChatMsg[], sandbox: PythonSandbo
     maxTokens: deps.sampling?.maxTokens,
     temperature: deps.sampling?.temperature,
     reasoning: deps.sampling?.reasoning,
+    retry: deps.retry,
     signal: deps.signal,
   });
 

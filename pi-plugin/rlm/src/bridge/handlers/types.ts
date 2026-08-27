@@ -93,6 +93,12 @@ export interface SubcallConfig {
   readonly rlmBudget?: number;
   /** v5 durable memory gates (optional; omitted → memory off). */
   readonly enableMemory?: boolean;
+  /** v5.1 retry knobs — structural slice of RlmConfig so retryPolicy() can read them. */
+  readonly retryMaxAttempts?: number;
+  readonly retryBaseDelayMs?: number;
+  readonly retryMaxDelayMs?: number;
+  readonly throttleBaseMs?: number;
+  readonly throttleMaxMs?: number;
 }
 
 export interface SubcallHandlerDeps {

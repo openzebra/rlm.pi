@@ -12,6 +12,7 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { type ChatMsg, modelComplete } from "../model.ts";
 import { checkResourceLimits } from "../../core/resource-limits.ts";
 import { errorMessage, formatError } from "../../util/errors.ts";
+import { retryPolicy } from "../../util/retry.ts";
 import type { Semaphore } from "../../util/concurrency.ts";
 import type { Invocation, SubcallConfig } from "./types.ts";
 
@@ -55,6 +56,7 @@ export async function complete1(
         maxTokens: config.subSampling?.maxTokens,
         temperature: config.subSampling?.temperature,
         reasoning: config.subSampling?.reasoning,
+        retry: retryPolicy(config),
         signal: deps.signal,
       }),
     );

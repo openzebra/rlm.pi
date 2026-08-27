@@ -29,6 +29,7 @@ import { previewStdout, previewText } from "../text/preview.ts";
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
 import { compactHistory, elideOldToolPayloads, shouldCompact } from "./compaction.ts";
+import { retryPolicy } from "../util/retry.ts";
 import { appendUserMessage } from "./history.ts";
 import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
@@ -329,6 +330,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
             registry: deps.registry,
             contextWindow: model.contextWindow,
             thresholdPct: deps.config.compactionThresholdPct,
+            retry: retryPolicy(deps.config),
             signal: deps.signal,
           };
           if (shouldCompact(history, compactionDeps)) {
@@ -372,6 +374,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           model: model,
           registry: deps.registry,
           sampling: rootSampling,
+          retry: deps.complete === undefined ? retryPolicy(deps.config) : undefined,
           signal: deps.signal,
           complete: deps.complete,
           onPhase: reportPhase,

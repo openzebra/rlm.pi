@@ -9,6 +9,7 @@
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
+import type { RetryPolicy } from "../util/retry.ts";
 import { estimateMessageTokens } from "../text/tokens.ts";
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -24,6 +25,8 @@ export interface CompactionDeps {
   readonly contextWindow?: number;
   readonly thresholdPct?: number;
   readonly signal?: AbortSignal;
+  /** v5.1 retry policy for modelComplete; defaults apply when omitted. */
+  readonly retry?: RetryPolicy;
 }
 
 /** True if the history is at/over the compaction threshold. */
@@ -93,6 +96,7 @@ export async function compactHistory(
     model: deps.model,
     registry: deps.registry,
     signal: deps.signal,
+    retry: deps.retry,
   });
   onUsage?.(usage);
   const system = history.find((m) => m.role === "system");

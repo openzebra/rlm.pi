@@ -23,6 +23,7 @@ import { buildSessionGates, type SubcallGates } from "./util/concurrency.ts";
 import { BackgroundTasks } from "./tool/background-tasks.ts";
 import { MemoryStore } from "./core/memory.ts";
 import { modelComplete } from "./bridge/model.ts";
+import { retryPolicy } from "./util/retry.ts";
 import { resolve } from "node:path";
 import { resolveSource } from "./context/resolve.ts";
 import { formatContextListing } from "./context/listing.ts";
@@ -256,7 +257,11 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       // the workspace root is only known once the session starts.
       const consolidateModel = llmModel;
       memory.setLlm((prompt) =>
-        modelComplete([{ role: "user", content: prompt }], { model: consolidateModel, registry: ctx.modelRegistry })
+        modelComplete([{ role: "user", content: prompt }], {
+          model: consolidateModel,
+          registry: ctx.modelRegistry,
+          retry: retryPolicy(controller.config),
+        })
           .then((r) => r.text));
       memory.setRoot(ctx.cwd ?? process.cwd());
       // v5 provider caps (audit C1/C6): ONE resolver shared by both composition roots — the

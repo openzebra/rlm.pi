@@ -68,6 +68,17 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (maxConcurrentSubcalls !== undefined) out.maxConcurrentSubcalls = maxConcurrentSubcalls;
   const maxConcurrentChildren = validateNumber(r.maxConcurrentChildren, 1);
   if (maxConcurrentChildren !== undefined) out.maxConcurrentChildren = maxConcurrentChildren;
+  // v5.1 rate-limit resilience knobs
+  const retryMaxAttempts = validateNumber(r.retryMaxAttempts, 1);
+  if (retryMaxAttempts !== undefined) out.retryMaxAttempts = retryMaxAttempts;
+  const retryBaseDelayMs = validateNumber(r.retryBaseDelayMs, 0);
+  if (retryBaseDelayMs !== undefined) out.retryBaseDelayMs = retryBaseDelayMs;
+  const retryMaxDelayMs = validateNumber(r.retryMaxDelayMs, 100);
+  if (retryMaxDelayMs !== undefined) out.retryMaxDelayMs = retryMaxDelayMs;
+  const throttleBaseMs = validateNumber(r.throttleBaseMs, 0);
+  if (throttleBaseMs !== undefined) out.throttleBaseMs = throttleBaseMs;
+  const throttleMaxMs = validateNumber(r.throttleMaxMs, 100);
+  if (throttleMaxMs !== undefined) out.throttleMaxMs = throttleMaxMs;
   const maxPromptChars = validateNumber(r.maxPromptChars, 1000);
   if (maxPromptChars !== undefined) out.maxPromptChars = maxPromptChars;
   const maxTimeoutMs = validateNumber(r.maxTimeoutMs, 1000);

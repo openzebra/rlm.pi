@@ -19,6 +19,13 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   // of the context it inherited, where a leaf is one HTTP request. Worst case is
   // (maxDepth - 1) × this many concurrent child engines.
   maxConcurrentChildren: 6,
+  // v5.1 rate-limit resilience (util/retry.ts): 3 total attempts, 500ms→15s backoff,
+  // 2s→60s adaptive per-provider cooldown. All overridable in rlm.json.
+  retryMaxAttempts: 3,
+  retryBaseDelayMs: 500,
+  retryMaxDelayMs: 15_000,
+  throttleBaseMs: 2_000,
+  throttleMaxMs: 60_000,
   maxPromptChars: 400_000,
   maxErrors: 5,
   orchestrator: true,
