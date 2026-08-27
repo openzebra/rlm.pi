@@ -1,5 +1,5 @@
 /**
- * Model context-window registry (port of rlm_test v4/v5 `models.py`).
+ * Model context-window registry (port of the v4/v5 `models.py` engine).
  *
  * The plugin already knows context windows from model metadata (`Model.contextWindow`); this
  * registry is the offline fallback for models whose metadata carries none: a conservative

@@ -1,6 +1,6 @@
 /**
  * Phase 3 (v5 port): durable memory — L1 replay, L2 notes, injection, sandbox surface.
- * Mirrors rlm_test mem_suite offline gates: record→replay, hash drift, empty-store silence,
+ * Mirrors mem_suite offline gates: record→replay, hash drift, empty-store silence,
  * inject budget, consolidate fallback, engine replay (0 API calls).
  */
 

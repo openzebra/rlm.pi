@@ -1,6 +1,6 @@
 /**
  * Phase 1 (v5 port): token budget cascade — unit + engine-level gates.
- * Ports rlm_test tests/test_budget.py + the continuation gates of test_governor.py.
+ * Ports test_budget.py + the continuation gates of test_governor.py.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

@@ -1,5 +1,5 @@
 /**
- * Token budget cascade (port of rlm_test v4/v5 `budget.py`).
+ * Token budget cascade (port of the v4/v5 `budget.py` engine).
  *
  * The budget is the PRIMARY run-length control: cap = budgetShare × model context window,
  * one soft wrap-up turn at `softFrac` of the cap, and at the hard cap a deterministic

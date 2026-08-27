@@ -1,5 +1,5 @@
 /**
- * TaskLedger — the session blackboard (port of rlm_test v5 `ledger.py`).
+ * TaskLedger — the session blackboard (port of the v5 `ledger.py` engine).
  *
  * One instance per root run (engine) or per session (native repl tool), threaded down to every
  * child through `SubcallHandlerDeps.ledger` / `RlmInput.ledger` — the same seam as

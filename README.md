@@ -140,8 +140,6 @@ on a **free** model (`poolside/laguna-xs-2.1:free`, ~32B parameters):
 | Coding retry_fix (50→500) | orchestrator | **correct** | — |
 | Live smoke needle | classic | **hit** | ~5k |
 
-> Full methodology and raw journals: [`rlm_test/RESULTS.md`](https://github.com/openzebra/rlm_test/blob/master/RESULTS.md)
-> and [`rlm_test/RESULTS_AGENT.md`](https://github.com/openzebra/rlm_test/blob/master/RESULTS_AGENT.md).
 > All results on a *free* model — frontier models perform even better.
 
 ## Install

@@ -1,6 +1,6 @@
 /**
  * Phase 2 (v5 port): TaskLedger blackboard — unit + handler + engine gates.
- * Mirrors rlm_test e2e-v2 offline gates: dup_spawn → 1 runner, echo → stub, near-dup → coalesce,
+ * Mirrors e2e-v2 offline gates: dup_spawn → 1 runner, echo → stub, near-dup → coalesce,
  * rlmBudget demotion, empty-inject silence.
  */
 

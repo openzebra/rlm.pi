@@ -83,7 +83,7 @@ read-only access to durable `.rlm/` memory. Includes two native-path reliability
 
 ## [0.3.8] — 2026-08-16
 
-Port of the rlm_test v5 engine (0.2.0 → 0.5.0 findings) plus the post-port audit fixes.
+Port of the v5 engine (0.2.0 → 0.5.0 findings) plus the post-port audit fixes.
 Five new subsystems, all on by default, each with a one-flip rollback in `rlm.json`.
 26/26 smoke suites green.
 
@@ -334,7 +334,7 @@ Five new subsystems, all on by default, each with a one-flip rollback in `rlm.js
 
 ### Changed
 
-- **Native/headless prompts → api_v5 style (rlm_test bake-off winner).** Front-loaded
+- **Native/headless prompts → api_v5 style (bake-off winner).** Front-loaded
   `<contract>` / `<routing>` / few-shots: multi-area work prefers `rlm_batch` /
   `rlm_query` as always-spawn Tasks (fire → free locate → `await_task`), not serial
   `repl` + native `read`. `repl` tool description and per-turn reminder match.

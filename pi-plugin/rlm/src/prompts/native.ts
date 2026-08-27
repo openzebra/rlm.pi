@@ -1,6 +1,6 @@
 /** Native-mode prompts — the main Pi agent drives the sandbox through the `repl` tool.
  *
- * Structure mirrors rlm_test api_v5_anthropic (best bake-off arm): role → contract → routing →
+ * Structure mirrors api_v5_anthropic (best bake-off arm): role → contract → routing →
  * few-shots → anti-patterns → REPL surface. Goal: multi-area work fires rlm_batch / rlm_query
  * as Task (BG), not serial repl+native read.
  */

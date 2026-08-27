@@ -1,5 +1,5 @@
 /**
- * Durable memory (port of rlm_test v5 `memory/store.py`).
+ * Durable memory (port of the v5 `memory/store.py` engine).
  *
  * L1 episodes: content-addressed replay — a recorded child/root answer replays for ZERO
  * API calls while every file it touched still hashes to the recorded sha256.

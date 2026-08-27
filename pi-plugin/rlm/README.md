@@ -156,8 +156,7 @@ on `poolside/laguna-xs-2.1:free` (a free ~32B model):
 | Coding (retry fix) | orchestrator | **correct** (file edited) |
 | Live smoke needle | classic RLM | **hit** (~5k tokens) |
 
-> On a *free* model. Frontier models do even better. See `rlm_test/RESULTS_AGENT.md`
-> and `rlm_test/RESULTS.md` for full methodology.
+> On a *free* model. Frontier models do even better.
 
 ## Security
 

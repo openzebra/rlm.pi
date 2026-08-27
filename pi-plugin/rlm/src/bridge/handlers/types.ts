@@ -3,7 +3,7 @@
  *
  * Every subcall (llm_query, llm_batch, rlm_query, rlm_batch) returns a SpawnResult
  * immediately with a task_id. The model must call await(task_id) to collect the
- * real answer. This contract is proven in rlm_test (api_v5 + batch, scores 0.89–1.0).
+ * real answer. This contract is proven in bake-off runs (api_v5 + batch, scores 0.89–1.0).
  */
 
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";

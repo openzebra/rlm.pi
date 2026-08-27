@@ -138,7 +138,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
     if (deps.config.enableLedger) runLedger.beginRun(input.rootPrompt);
 
     // v5 durable memory: read-only root replay — an identical prompt over an identical
-    // context answers for zero API calls (measured 10,051 → 0 tok in rlm_test).
+    // context answers for zero API calls (measured 10,051 → 0 tok in bake-off runs).
     const rootMemory =
       deps.memory !== undefined && deps.config.enableMemory ? deps.memory : undefined;
     const modelRefStr = `${model.provider}/${model.id}`;
@@ -341,7 +341,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           pendingReplOutputs = undefined;
         }
 
-        // Soft runtime nudge (rlm_test parity): remind the model to await pending host tasks.
+        // Soft runtime nudge (engine parity): remind the model to await pending host tasks.
         const pendingIds = taskRegistry.awaitDeps.unawaitedIds();
         if (pendingIds.length > 0) {
           appendUserMessage(
