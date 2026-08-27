@@ -27,8 +27,11 @@ export interface RlmConfig {
   readonly maxConcurrentChildren: number;
   /** v5.1 rate-limit resilience (see util/retry.ts): transient 429/5xx are retried with
    *  backoff, and rate limits additionally cool a shared per-provider throttle.
-   *  retryMaxAttempts counts TOTAL attempts per call (1 = never retry). */
+   *  retryMaxAttempts counts TOTAL attempts per call (1 = never retry).
+   *  rateLimitMaxAttempts is the SEPARATE budget a 429 may burn while parking on the
+   *  cooldown — generous, because "come back later" is a queue, not a failure. */
   readonly retryMaxAttempts?: number;
+  readonly rateLimitMaxAttempts?: number;
   readonly retryBaseDelayMs?: number;
   /** Cap for any single retry delay, including a parsed `retry-after`. */
   readonly retryMaxDelayMs?: number;

@@ -76,6 +76,10 @@ export function backoffMs(attempt: number, baseMs: number, maxMs: number): numbe
 export interface RetryPolicy {
   /** TOTAL attempts per call, including the first. 1 = never retry. */
   readonly maxAttempts: number;
+  /** Separate, GENEROUS budget for rate limits only: a 429 means "come back later",
+   *  not "fail" — the call keeps parking on the cooldown window instead of dying.
+   *  Burned only by rate-limited failures, never by 5xx/timeouts. */
+  readonly rateLimitMaxAttempts: number;
   readonly baseDelayMs: number;
   /** Cap for any single retry delay, including a parsed `retry-after`. */
   readonly maxDelayMs: number;
@@ -89,6 +93,7 @@ export interface RetryPolicy {
 
 export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze({
   maxAttempts: 3,
+  rateLimitMaxAttempts: 8,
   baseDelayMs: 500,
   maxDelayMs: 15_000,
   throttleBaseMs: 2_000,
@@ -98,6 +103,7 @@ export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze({
 /** Shape of the optional retry knobs on RlmConfig — kept structural to avoid a cycle. */
 export interface RetryConfigNumbers {
   readonly retryMaxAttempts?: number;
+  readonly rateLimitMaxAttempts?: number;
   readonly retryBaseDelayMs?: number;
   readonly retryMaxDelayMs?: number;
   readonly throttleBaseMs?: number;
@@ -108,6 +114,7 @@ export interface RetryConfigNumbers {
 export function retryPolicy(from: RetryConfigNumbers = {}): RetryPolicy {
   return {
     maxAttempts: from.retryMaxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts,
+    rateLimitMaxAttempts: from.rateLimitMaxAttempts ?? DEFAULT_RETRY_POLICY.rateLimitMaxAttempts,
     baseDelayMs: from.retryBaseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs,
     maxDelayMs: from.retryMaxDelayMs ?? DEFAULT_RETRY_POLICY.maxDelayMs,
     throttleBaseMs: from.throttleBaseMs ?? DEFAULT_RETRY_POLICY.throttleBaseMs,
@@ -118,14 +125,21 @@ export function retryPolicy(from: RetryConfigNumbers = {}): RetryPolicy {
 /**
  * Run `attempt` under the policy. `note` is how the caller feeds captured HTTP
  * `{status, headers}` back (pi-ai's onResponse hook) — cleared before every attempt so a
- * stale capture never misclassifies a fresh failure. Rate-limit retries park on the
- * cooldown instead of a private sleep, so sibling requests slow down with us.
+ * stale capture never misclassifies a fresh failure. Rate-limit failures park on the
+ * cooldown — their own, generous budget — so sibling requests slow down with us;
+ * `onPark`/`onRelease` surface the parking to the UI as a "queued" phase.
  */
 export async function completeWithRetry<T>(
   attempt: (note: (status: number, headers: Record<string, string>) => void) => Promise<T>,
-  opts: { readonly policy: RetryPolicy; readonly provider: string; readonly signal?: AbortSignal },
+  opts: {
+    readonly policy: RetryPolicy;
+    readonly provider: string;
+    readonly signal?: AbortSignal;
+    readonly onPark?: (ms: number) => void;
+    readonly onRelease?: () => void;
+  },
 ): Promise<T> {
-  const { policy, provider, signal } = opts;
+  const { policy, provider, signal, onPark, onRelease } = opts;
   const cooldown = policy.cooldown ?? sharedCooldown;
   let status: number | undefined;
   let headers: Record<string, string> | undefined;
@@ -133,8 +147,9 @@ export async function completeWithRetry<T>(
     status = s;
     headers = h;
   };
+  let rlTries = 0; // rate-limit failures burn their OWN budget, never maxAttempts
   for (let tries = 0; ; tries++) {
-    await cooldown.wait(provider, signal);
+    await cooldown.wait(provider, signal, onPark, onRelease);
     status = undefined;
     headers = undefined;
     try {
@@ -144,17 +159,22 @@ export async function completeWithRetry<T>(
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (signal?.aborted) throw err;
+      if (isRateLimited(status, msg)) {
+        // "Come back later" — park on the shared cooldown instead of dying. The strike
+        // heuristic escalates the window; the wait itself happens at the loop top, so
+        // sibling requests behind the same provider slow down together.
+        if (rlTries + 1 >= policy.rateLimitMaxAttempts) throw err;
+        rlTries++;
+        const hint = retryAfterMs(headers);
+        cooldown.penalize(provider, hint !== undefined ? Math.min(hint, policy.throttleMaxMs) : undefined);
+        continue;
+      }
       if (tries + 1 >= policy.maxAttempts) throw err;
       if (!retryableError(status, msg)) throw err;
-      const limited = isRateLimited(status, msg);
-      const hint = limited ? retryAfterMs(headers) : undefined;
-      if (limited) {
-        // The cooldown carries the wait (penalize floors at the strike heuristic), so
-        // sibling requests behind the same provider slow down together.
-        cooldown.penalize(provider, hint !== undefined ? Math.min(hint, policy.throttleMaxMs) : undefined);
-      } else {
-        await sleepMs(Math.min(hint ?? backoffMs(tries, policy.baseDelayMs, policy.maxDelayMs), policy.maxDelayMs), signal);
-      }
+      await sleepMs(
+        Math.min(retryAfterMs(headers) ?? backoffMs(tries, policy.baseDelayMs, policy.maxDelayMs), policy.maxDelayMs),
+        signal,
+      );
     }
   }
 }

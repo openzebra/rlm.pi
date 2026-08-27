@@ -34,6 +34,7 @@ export async function complete1(
   prompt: string,
   track: (usage: Usage) => void,
   deps: Complete1Deps,
+  hooks?: { readonly onThrottlePark?: (ms: number) => void; readonly onThrottleRelease?: () => void },
 ): Promise<string> {
   const config = deps.getConfig();
   const limitError = checkResourceLimits({
@@ -57,6 +58,8 @@ export async function complete1(
         temperature: config.subSampling?.temperature,
         reasoning: config.subSampling?.reasoning,
         retry: retryPolicy(config),
+        onThrottlePark: hooks?.onThrottlePark,
+        onThrottleRelease: hooks?.onThrottleRelease,
         signal: deps.signal,
       }),
     );

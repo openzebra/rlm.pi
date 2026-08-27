@@ -40,7 +40,8 @@ export interface NodeRow {
   readonly prefix: string;
   readonly expandable: boolean;
   readonly expanded: boolean;
-  readonly icon: SubcallStatus;
+  /** SubcallStatus, or "queued" while the node parks on the rate-limit cooldown. */
+  readonly icon: SubcallStatus | "queued";
   readonly phase?: SubcallPhase;
   readonly label: string;
   /** The row's OWN token spend for its OWN model — never a subtree sum. */
@@ -63,7 +64,8 @@ export interface GroupRow {
   readonly model?: string;
   /** Sum over members — one model only (the group key pins it), so never a blend. */
   readonly tokens: number;
-  readonly icon: SubcallStatus;
+  /** SubcallStatus, or "queued" while any member parks on the rate-limit cooldown. */
+  readonly icon: SubcallStatus | "queued";
   readonly expandable: boolean;
   readonly expanded: boolean;
 }
@@ -98,9 +100,12 @@ function partition(children: readonly RlmSubcall[], byParent: ReadonlyMap<string
   return out;
 }
 
-/** RlmRunStatus has "aborted"; the row icon set does not — aborted renders as error. */
-function iconOf(status: SubcallStatus | RlmRunStatus): SubcallStatus {
-  return status === "aborted" ? "error" : status;
+/** RlmRunStatus has "aborted"; the row icon set does not — aborted renders as error.
+ *  A RUNNING node parked on the rate-limit cooldown renders as "queued" (◷). */
+function iconOf(status: SubcallStatus | RlmRunStatus, phase: SubcallPhase | undefined): SubcallStatus | "queued" {
+  if (status === "aborted") return "error";
+  if (status === "running" && phase === "queued") return "queued";
+  return status;
 }
 
 /**
@@ -138,7 +143,7 @@ export function buildRows(
       prefix,
       expandable: children.length > 0,
       expanded,
-      icon: iconOf(sc.status),
+      icon: iconOf(sc.status, sc.phase),
       phase: sc.phase,
       label: sc.label,
       tokens: sc.tokens,
@@ -187,7 +192,7 @@ export function buildRows(
       label: entry.label,
       model: entry.model,
       tokens,
-      icon: iconOf(entry.status),
+      icon: iconOf(entry.status, entry.members.some((m) => m.phase === "queued") ? "queued" : undefined),
       expandable: true,
       expanded,
     });
@@ -209,7 +214,7 @@ export function buildRows(
     prefix: "",
     expandable: roots.length > 0,
     expanded: !collapsed.has(run.runId),
-    icon: iconOf(run.status),
+    icon: iconOf(run.status, run.rootPhase),
     phase: run.rootPhase,
     label: run.rootLabel,
     tokens: run.rootTokens,

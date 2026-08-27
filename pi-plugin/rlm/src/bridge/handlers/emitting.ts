@@ -8,6 +8,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import { isErrorText } from "../../util/errors.ts";
 import { previewText } from "../../text/preview.ts";
+import type { SubcallPhase } from "../../tool/rlm-details.ts";
 import type { Invocation } from "./types.ts";
 
 export interface EmitOpts {
@@ -24,14 +25,19 @@ export interface EmitSummary {
   readonly total?: number;
 }
 
+/** Targeted update for THIS node — the 2nd arg every `fn` handed to emitting() receives. */
+export type EmitNote = (u: { readonly phase?: SubcallPhase; readonly detail?: string }) => void;
+
 /**
  * Create a subcall node, run `fn`, then update the node with status/cost/preview.
  * `fn` should not throw for soft failures (prefer Error: strings). Hard throws mark error.
+ * The `note` arg lets `fn` surface live per-node state — e.g. parking on the rate-limit
+ * cooldown (throttleHooks below).
  */
 export async function emitting<T>(
   inv: Invocation,
   opts: EmitOpts,
-  fn: (track: (usage: Usage) => void) => Promise<T>,
+  fn: (track: (usage: Usage) => void, note: EmitNote) => Promise<T>,
   summarize: (out: T) => EmitSummary,
 ): Promise<T> {
   const id = inv.emitter.emitSubcallCreated({
@@ -44,6 +50,9 @@ export async function emitting<T>(
   });
   // Leaf nodes spend their whole lifetime waiting on the model — say so from birth.
   inv.emitter.emitSubcallUpdated({ id, phase: "waiting" });
+  const note: EmitNote = (u): void => {
+    inv.emitter.emitSubcallUpdated({ id, ...u });
+  };
 
   let costUsd = 0;
   let tokens = 0;
@@ -53,7 +62,7 @@ export async function emitting<T>(
   };
 
   try {
-    const out = await fn(track);
+    const out = await fn(track, note);
     const summary = summarize(out);
     inv.emitter.emitSubcallUpdated({
       id,
@@ -83,4 +92,23 @@ export async function emitting<T>(
 /** Summarize a single leaf answer for the emitter — shared by llm_query and every llm_batch item. */
 export function summarizeLeaf(out: string): EmitSummary {
   return { preview: previewText(out), error: isErrorText(out) ? out : undefined };
+}
+
+/**
+ * Wire a leaf's `note` into modelComplete's throttle callbacks: parked → "queued" with the
+ * pending seconds in detail; released → back to plain "waiting". One helper so every leaf
+ * call site reports the queue state identically.
+ */
+export function throttleHooks(note: EmitNote): {
+  readonly onThrottlePark: (ms: number) => void;
+  readonly onThrottleRelease: () => void;
+} {
+  return {
+    onThrottlePark: (ms): void => {
+      note({ phase: "queued", detail: `rate limit — waiting ${Math.max(1, Math.round(ms / 1000))}s` });
+    },
+    onThrottleRelease: (): void => {
+      note({ phase: "waiting" });
+    },
+  };
 }

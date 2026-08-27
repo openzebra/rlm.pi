@@ -22,6 +22,8 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   // v5.1 rate-limit resilience (util/retry.ts): 3 total attempts, 500ms→15s backoff,
   // 2s→60s adaptive per-provider cooldown. All overridable in rlm.json.
   retryMaxAttempts: 3,
+  // 429s park on the cooldown instead of dying — up to 8 windows (2s→4s→…≤60s ≈ 4 min).
+  rateLimitMaxAttempts: 8,
   retryBaseDelayMs: 500,
   retryMaxDelayMs: 15_000,
   throttleBaseMs: 2_000,

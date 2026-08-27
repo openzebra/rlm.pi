@@ -44,13 +44,19 @@ export class ProviderCooldown {
     return Math.max(0, (this.blockedUntil.get(provider) ?? 0) - Date.now());
   }
 
-  /** Park until the window opens. Re-checks after every wake — penalize() may extend it. */
-  async wait(provider: string, signal?: AbortSignal): Promise<void> {
+  /** Park until the window opens. Re-checks after every wake — penalize() may extend it.
+   *  `onPark` fires with the pending ms before each sleep (UI: "queued on rate limit"),
+   *  `onRelease` once right after the wait ends — but only if we actually parked. */
+  async wait(provider: string, signal?: AbortSignal, onPark?: (ms: number) => void, onRelease?: () => void): Promise<void> {
+    let parked = false;
     for (;;) {
       const ms = this.waitMs(provider);
-      if (ms <= 0) return;
+      if (ms <= 0) break;
+      parked = true;
+      onPark?.(ms);
       await sleepMs(ms, signal);
     }
+    if (parked) onRelease?.();
   }
 
   /**

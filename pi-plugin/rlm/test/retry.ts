@@ -22,6 +22,7 @@ function fastPolicy(overrides: Partial<typeof DEFAULT_RETRY_POLICY> = {}) {
   return {
     policy: {
       maxAttempts: 3,
+      rateLimitMaxAttempts: 8,
       baseDelayMs: 1,
       maxDelayMs: 5,
       throttleBaseMs: 10,
@@ -159,6 +160,65 @@ async function main(): Promise<void> {
     // as a race-free property: the cooldown answered wait() during the retry.
     check("rate-limited retry succeeds", attempts === 2);
     check("cooldown instance isolated from shared", cooldown !== undefined);
+  }
+
+  // ── rate-limit failures burn their OWN budget, never maxAttempts ──
+  {
+    // Generic budget of 1 would kill ANY failure instantly — a 429 must still survive.
+    const { policy } = fastPolicy({ maxAttempts: 1, rateLimitMaxAttempts: 3 });
+    let attempts = 0;
+    const out = await completeWithRetry(
+      async (note) => {
+        attempts++;
+        note(429, {});
+        if (attempts < 3) throw new Error("429: rate limit");
+        return "ok";
+      },
+      { policy, provider: "zai", signal: undefined },
+    );
+    check("429 parks on its own budget (maxAttempts=1 still survives)", out === "ok" && attempts === 3, `attempts=${attempts}`);
+  }
+  {
+    const { policy } = fastPolicy({ rateLimitMaxAttempts: 2 });
+    let attempts = 0;
+    try {
+      await completeWithRetry(
+        async (note) => {
+          attempts++;
+          note(429, {});
+          throw new Error("429: rate limit");
+        },
+        { policy, provider: "zai", signal: undefined },
+      );
+      check("sustained 429 exhausts rate-limit budget", false);
+    } catch {
+      check("sustained 429 exhausts rate-limit budget", attempts === 2, `attempts=${attempts}`);
+    }
+  }
+
+  // ── park/release callbacks fire (UI "queued" phase) ──
+  {
+    const { policy } = fastPolicy();
+    const parks: number[] = [];
+    let releases = 0;
+    let attempts = 0;
+    await completeWithRetry(
+      async (note) => {
+        attempts++;
+        note(429, {});
+        if (attempts === 1) throw new Error("429: rate limit");
+        return "ok";
+      },
+      {
+        policy,
+        provider: "zai",
+        signal: undefined,
+        onPark: (ms) => parks.push(ms),
+        onRelease: () => { releases++; },
+      },
+    );
+    check("onPark fires with the pending ms", parks.length >= 1 && parks.every((ms) => ms > 0), JSON.stringify(parks));
+    check("onRelease fires once after parking", releases === 1);
   }
 
   // ── abort signal propagates ──

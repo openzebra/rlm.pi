@@ -15,7 +15,7 @@ import type { Invocation, SpawnResult, SubcallHandlerDeps } from "./types.ts";
 import type { SubcallOpts } from "../../sandbox/interrupts.ts";
 import { SPAWN_HINT, spawnAndRun, type SpawnDeps } from "./task-registry.ts";
 import { complete1, type Complete1Deps } from "./completion.ts";
-import { emitting, summarizeLeaf } from "./emitting.ts";
+import { emitting, summarizeLeaf, throttleHooks } from "./emitting.ts";
 import { leafClaimKey, runClaimedLeaf } from "./llm-query.ts";
 
 const UNWIRED = formatError("RLM bridge not wired for this invocation");
@@ -265,7 +265,7 @@ export function createRlmQueryHandler(deps: SubcallHandlerDeps, sd: SpawnDeps) {
                   label: "rlm_query→llm (demoted)",
                   args: previewText(task),
                 },
-                (track) => complete1(inv, task, track, completeDeps(deps)),
+                (track, note) => complete1(inv, task, track, completeDeps(deps), throttleHooks(note)),
                 summarizeLeaf,
               ),
           ),

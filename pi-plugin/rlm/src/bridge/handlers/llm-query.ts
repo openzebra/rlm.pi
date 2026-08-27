@@ -5,7 +5,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import { modelRef } from "../../config/settings.ts";
 import { complete1, type Complete1Deps } from "./completion.ts";
-import { emitting, summarizeLeaf } from "./emitting.ts";
+import { emitting, summarizeLeaf, throttleHooks } from "./emitting.ts";
 import { formatError, errorMessage } from "../../util/errors.ts";
 import { previewText } from "../../text/preview.ts";
 import type { SpawnResult, SubcallHandlerDeps } from "./types.ts";
@@ -106,7 +106,7 @@ export function createLlmQueryHandler(
           args: `prompt: ${previewText(prompt)}`,
           model: displayModel(deps),
         },
-        (track: (u: Usage) => void) => complete1(inv, prompt, track, cdeps),
+        (track: (u: Usage) => void, note) => complete1(inv, prompt, track, cdeps, throttleHooks(note)),
         summarizeLeaf,
       );
     // v5 TaskLedger for leaves: identical prompts coalesce onto one completion (key has no
@@ -166,13 +166,13 @@ export function createLlmBatchHandler(
               // NO outer gate — complete1 takes the single leaf slot per prompt.
               // v5 (audit H3): every item routes through the ledger — duplicate prompts inside
               // one batch (or twins of other in-flight leaves) coalesce instead of paying N times.
-              (track: (u: Usage) => void) =>
+              (track: (u: Usage) => void, note) =>
                 runClaimedLeaf(
                   ledger,
                   ledger === undefined ? undefined : leafClaimKey(deps, p),
                   p,
                   inv.depth,
-                  () => complete1(inv, p, track, cdeps),
+                  () => complete1(inv, p, track, cdeps, throttleHooks(note)),
                 ),
               summarizeLeaf,
             ),

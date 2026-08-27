@@ -9,8 +9,9 @@
 export type SubcallKind = "root" | "rlm" | "llm" | "batch" | "tool";
 export type SubcallStatus = "running" | "done" | "error";
 
-/** Live activity of a node while status is "running" — powers the tree/modal UI. */
-export type SubcallPhase = "thinking" | "texting" | "repl" | "waiting" | "spawning";
+/** Live activity of a node while status is "running" — powers the tree/modal UI.
+ *  "queued" = parked on the rate-limit cooldown (util/throttle.ts), not in flight. */
+export type SubcallPhase = "thinking" | "texting" | "repl" | "waiting" | "spawning" | "queued";
 export type RlmRunStatus = "running" | "done" | "error" | "aborted";
 
 export interface RlmSubcall {

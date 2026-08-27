@@ -71,6 +71,8 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   // v5.1 rate-limit resilience knobs
   const retryMaxAttempts = validateNumber(r.retryMaxAttempts, 1);
   if (retryMaxAttempts !== undefined) out.retryMaxAttempts = retryMaxAttempts;
+  const rateLimitMaxAttempts = validateNumber(r.rateLimitMaxAttempts, 1);
+  if (rateLimitMaxAttempts !== undefined) out.rateLimitMaxAttempts = rateLimitMaxAttempts;
   const retryBaseDelayMs = validateNumber(r.retryBaseDelayMs, 0);
   if (retryBaseDelayMs !== undefined) out.retryBaseDelayMs = retryBaseDelayMs;
   const retryMaxDelayMs = validateNumber(r.retryMaxDelayMs, 100);

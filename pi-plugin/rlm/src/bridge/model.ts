@@ -29,6 +29,9 @@ export interface CompleteOptions {
   readonly signal?: AbortSignal;
   /** Retry + adaptive throttle for transient 429/5xx; defaults apply when omitted. */
   readonly retry?: RetryPolicy;
+  /** v5.1 UX: fired while parked on the rate-limit cooldown ("queued") / when released. */
+  readonly onThrottlePark?: (ms: number) => void;
+  readonly onThrottleRelease?: () => void;
 }
 
 export interface CompleteResult {
@@ -106,7 +109,7 @@ export async function modelComplete(messages: readonly ChatMsg[], opts: Complete
       }
       return response;
     },
-    { policy: opts.retry ?? DEFAULT_RETRY_POLICY, provider: opts.model.provider, signal: opts.signal },
+    { policy: opts.retry ?? DEFAULT_RETRY_POLICY, provider: opts.model.provider, signal: opts.signal, onPark: opts.onThrottlePark, onRelease: opts.onThrottleRelease },
   );
   return { text: extractText(msg.content), usage: msg.usage };
 }

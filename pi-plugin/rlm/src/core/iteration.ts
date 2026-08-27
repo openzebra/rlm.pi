@@ -48,6 +48,9 @@ export async function runTurn(history: readonly ChatMsg[], sandbox: PythonSandbo
     temperature: deps.sampling?.temperature,
     reasoning: deps.sampling?.reasoning,
     retry: deps.retry,
+    // Rate-limit parking is a visible phase too — the root/child spinner says "queued".
+    onThrottlePark: deps.onPhase ? () => deps.onPhase?.("queued") : undefined,
+    onThrottleRelease: deps.onPhase ? () => deps.onPhase?.("thinking") : undefined,
     signal: deps.signal,
   });
 

@@ -95,6 +95,7 @@ export interface SubcallConfig {
   readonly enableMemory?: boolean;
   /** v5.1 retry knobs — structural slice of RlmConfig so retryPolicy() can read them. */
   readonly retryMaxAttempts?: number;
+  readonly rateLimitMaxAttempts?: number;
   readonly retryBaseDelayMs?: number;
   readonly retryMaxDelayMs?: number;
   readonly throttleBaseMs?: number;

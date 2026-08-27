@@ -11,7 +11,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokens, spinnerFrame } from "../theme.ts";
 import type { GroupRow, NodeRow, TreeRow } from "./tree-model.ts";
 
-const GLYPHS = Object.freeze({ done: "✓", error: "✗", expanded: "▾", collapsed: "▸", leaf: " " } as const);
+const GLYPHS = Object.freeze({ done: "✓", error: "✗", queued: "◷", expanded: "▾", collapsed: "▸", leaf: " " } as const);
 const MODEL_MAX = 14;
 
 /** "openai/gpt-5-mini" → "gpt-5-mini", hard-capped so rows stay on one line. */
@@ -24,6 +24,7 @@ function iconGlyph(row: NodeRow, theme: Theme): string {
   switch (row.icon) {
     case "done": return theme.fg("success", GLYPHS.done);
     case "error": return theme.fg("error", GLYPHS.error);
+    case "queued": return theme.fg("warning", GLYPHS.queued);
     default: return theme.fg("warning", spinnerFrame());
   }
 }
