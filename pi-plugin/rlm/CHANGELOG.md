@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.13] — 2026-08-28
+
+Gentler default concurrency for per-account rate limits.
+
+### Changed
+
+- **`maxConcurrentSubcalls` 16 → 8** (leaf `llm_query`/`llm_batch` completions) and
+  **`maxConcurrentChildren` 6 → 4** (concurrent `rlm_query` child engines per depth).
+  Both were sized for liberal provider limits; under zai-style per-account rate limits the
+  old defaults kept the cooldown throttling almost permanently engaged. Both remain
+  editable in `/rlm-config` (sub-calls: 2–32, children: 1–8) or `rlm.json`. Existing
+  configs that persist explicit values are untouched — only the default changes.
+
 ## [0.3.12] — 2026-08-28
 
 Rate limits are a queue, not a failure. 0.3.11's shared 3-attempt budget still killed
