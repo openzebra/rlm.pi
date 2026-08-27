@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.14] — 2026-08-28
+
+### Changed
+
+- **`@firecrawl/anydoc` 0.1.7 → 0.2.4.** Pure-additive for our surface (`formatFromPath`/
+  `toMarkdown` unchanged); new math/checkbox block kinds flow through conversions for free.
+  New v0.2.4 `ConvertErrorCode` values are preserved as skip reasons instead of collapsing
+  to `convert-failed`: `needsOcr` (scanned/image-only PDF pages — actionable: the file needs
+  OCR, not a retry) and `hosted` (Firecrawl Parse unreachable). Native darwin-arm64 binary
+  verified end-to-end (CSV → GFM table).
+
 ## [0.3.13] — 2026-08-28
 
 Gentler default concurrency for per-account rate limits.
