@@ -25,7 +25,8 @@ function skipReasonFromError(err: unknown): SkipReason {
     const code: unknown = err.code;
     // Preserve anydoc ConvertErrorCode values rather than collapsing to "convert-failed".
     if (code === "unsupported" || code === "malformed" || code === "encrypted"
-      || code === "resourceLimit" || code === "missingPart" || code === "io") {
+      || code === "resourceLimit" || code === "missingPart" || code === "io"
+      || code === "needsOcr" || code === "hosted") {
       return code;
     }
   }

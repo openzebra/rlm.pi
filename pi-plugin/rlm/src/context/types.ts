@@ -27,6 +27,10 @@ export type SkipReason =
   | "unsupported"
   | "malformed"
   | "encrypted"
+  /** v0.2.4: scanned/image-only PDF pages that need OCR (anydoc doesn't do OCR). */
+  | "needsOcr"
+  /** v0.2.4: `ocr: 'hosted'` could not reach Firecrawl Parse. */
+  | "hosted"
   | "resourceLimit"
   | "missingPart"
   | "io"

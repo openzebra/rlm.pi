@@ -1,6 +1,6 @@
 {
 	"name": "@hicaru/pi-rlm",
-	"version": "0.3.13",
+	"version": "0.3.14",
 	"author": "hicaru",
 	"repository": {
 		"type": "git",
@@ -53,6 +53,6 @@
 	},
 	"dependencies": {
 		"@earendil-works/pi-agent-core": "^0.84.1",
-		"@firecrawl/anydoc": "^0.1.7"
+		"@firecrawl/anydoc": "^0.2.4"
 	}
 }
