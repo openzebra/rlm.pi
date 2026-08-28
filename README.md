@@ -8,8 +8,7 @@
 
 <div align="center">
 
-**Recursive Language Models (RLMs)**, implemented natively as a Pi extension —
-FULLY LOCAL.
+**Recursive Language Models (RLMs)**, implemented natively as a Pi extension.
 
 </div>
 
@@ -105,11 +104,6 @@ Toggle `/rlm` on, set a goal, let it loop. Runs persist across chat turns. The e
 respects depth caps, wall-clock ceilings, token budgets, and consecutive-error limits
 so it won't runaway. Come back to a finished answer — or `/rlm-stop` mid-run.
 
-### 🔒 Fully local, fully private
-
-No servers. Your API keys never leave your machine. One `python3` subprocess — that's
-the entire infrastructure.
-
 ## Benchmarks
 
 Tested against `rlm-lab` prompt bake-off and full dual-mode RLM runtime benchmarks
@@ -174,14 +168,11 @@ Toggle with `Ctrl+Shift+R` or `/rlm` — plain prompts now route through the RLM
           └────────────┬────────────┘  results  └────────────────────┘
                        │ recursion (depth-capped)
                        └────► child RLMs ────► (same loop)
-
-   All local · one python3 process · no servers
 ```
 
 - The **smart model** thinks and writes Python in a REPL.
 - The **worker models** do the heavy lifting (read, summarize, classify).
 - Hard sub-problems **recurse** into child RLMs.
-- Everything runs **fully local** — your API keys never leave Pi.
 
 ## Commands
 
