@@ -17,10 +17,13 @@ import { ProviderCooldown, sleepMs, sharedCooldown } from "./throttle.ts";
 
 // Auth/quota failures must not be retried — they burn attempts and never recover.
 const NON_RETRYABLE_TEXT =
-  /api[ -]?key|unauthorized|forbidden|permission denied|billing|insufficient|balance|quota exceeded|not.?found|context length|too large|invalid request|malformed/i;
-// Transport/server transients — worth another attempt.
+  /api[ -]?key|unauthorized|forbidden|permission denied|billing|insufficient|balance|quota exceeded|not.?found|context length|too large|invalid request|malformed|content.?filter/i;
+// Transport/server transients — worth another attempt. "Provider finish_reason: error" is the
+// generic shape OpenRouter relays when the UPSTREAM kills a generation mid-stream (observed
+// from Cohere's free pool: native_finish_reason "error", no message, no code, partial usage) —
+// HTTP 200, so it is inherently transient-by-nature and must be retried.
 const RETRYABLE_TEXT =
-  /\b429\b|rate.?limit|overloaded|service.?unavailable|upstream|timeout|timed.?out|temporarily|try.?again|econnreset|econnrefused|etimedout|socket hang up|network|1302|速率|频率/i;
+  /\b429\b|rate.?limit|overloaded|service.?unavailable|upstream|timeout|timed.?out|temporarily|try.?again|econnreset|econnrefused|etimedout|socket hang up|network|finish.?reason: ?(error|network_error)|1302|速率|频率/i;
 const RATE_LIMIT_TEXT = /\b429\b|rate.?limit|1302|速率|频率/i;
 
 const NON_RETRYABLE_STATUS = new Set([400, 401, 402, 403, 404, 413, 422]);

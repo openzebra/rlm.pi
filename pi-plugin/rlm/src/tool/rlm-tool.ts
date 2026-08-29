@@ -53,7 +53,7 @@ export function createRlmTool(controller: RlmController, runRegistry?: RunRegist
         rootPrompt: "",
         turns: { current: 0, max: 0 },
         subcalls: [],
-        totals: { costUsd: 0, tokens: 0 },
+        totals: { costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0 },
       }));
       if (!validation.ok) return validation.error;
       const params = validation.value;
@@ -79,6 +79,8 @@ export function createRlmTool(controller: RlmController, runRegistry?: RunRegist
           return m === undefined ? undefined : modelRef(m) ?? m.id;
         },
         rootTokens: () => aggregator.getRootUsage().tokens,
+        rootTokensIn: () => aggregator.getRootUsage().tokensIn,
+        rootTokensOut: () => aggregator.getRootUsage().tokensOut,
       });
 
       // Wire abort signal to controller

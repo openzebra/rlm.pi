@@ -47,13 +47,17 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
   check("cap: 1M ctx × 0.25 → 250k", b1M.cap === 250_000, String(b1M.cap));
   check("cap: soft = 80% → 200k", b1M.soft === 200_000, String(b1M.soft));
   const b32k = resolveBudget(32_000, cfg());
-  check("cap: 32k → 8k / soft 6.4k", b32k.cap === 8_000 && b32k.soft === 6_400, `${b32k.cap}/${b32k.soft}`);
+  check("cap: 32k window < floor → unbounded (rule does not apply)", b32k.cap === Number.MAX_SAFE_INTEGER, String(b32k.cap));
+  const b250k = resolveBudget(250_000, cfg());
+  check("cap: exactly at floor → 250k × 0.25 = 62.5k", b250k.cap === 62_500, String(b250k.cap));
+  const b249k = resolveBudget(249_999, cfg());
+  check("cap: just under floor → unbounded", b249k.cap === Number.MAX_SAFE_INTEGER, String(b249k.cap));
 
   const clipped = resolveBudget(1_000_000, cfg({ budgetTaskCap: 50_000 }));
   check("cap: budgetTaskCap clips share cap", clipped.cap === 50_000, String(clipped.cap));
 
   const noCtx = resolveBudget(undefined, cfg());
-  check("cap: unknown ctx falls back to 32k × 0.25", noCtx.cap === 8_000, String(noCtx.cap));
+  check("cap: unknown ctx falls back to 32k → below floor → unbounded", noCtx.cap === Number.MAX_SAFE_INTEGER, String(noCtx.cap));
 }
 
 {

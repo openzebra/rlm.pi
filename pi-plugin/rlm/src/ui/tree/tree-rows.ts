@@ -29,16 +29,16 @@ function iconGlyph(row: NodeRow, theme: Theme): string {
   }
 }
 
-/** Right-hand stats: "4.3k tok · gpt-5-mini" (model only when present). */
-function statsText(tokens: number, model: string | undefined): string {
-  const parts = [`${formatTokens(tokens)} tok`];
+/** Right-hand stats: "190.2k↑ 18.6k↓ tok · gpt-5-mini" (split + model only when present). */
+function statsText(tokens: number, tokensIn: number, tokensOut: number, model: string | undefined): string {
+  const parts = [tokensOut > 0 ? formatTokensSplit(tokensIn, tokensOut) : `${formatTokens(tokens)} tok`];
   if (model !== undefined) parts.push(modelShort(model));
   return parts.join(" · ");
 }
 
 /** Left/right assembly shared by node and group rows — one padding rule, no fork. */
-function assembleLine(left: string, tokens: number, model: string | undefined, selected: boolean, width: number, theme: Theme): string {
-  const right = theme.fg("dim", statsText(tokens, model));
+function assembleLine(left: string, tokens: number, tokensIn: number, tokensOut: number, model: string | undefined, selected: boolean, width: number, theme: Theme): string {
+  const right = theme.fg("dim", statsText(tokens, tokensIn, tokensOut, model));
   const gap = width - visibleWidth(left) - visibleWidth(right) - 1;
   const line = gap > 0 ? `${left}${" ".repeat(gap)}${right}` : `${truncateToWidth(left, width - 1)} `;
   return selected ? theme.fg("accent", line) : line;
@@ -48,7 +48,7 @@ function formatNode(row: NodeRow, selected: boolean, width: number, theme: Theme
   const chevron = row.expandable ? (row.expanded ? GLYPHS.expanded : GLYPHS.collapsed) : GLYPHS.leaf;
   const cursor = selected ? theme.fg("accent", "❯") : " ";
   const left = `${cursor} ${row.prefix}${chevron} ${iconGlyph(row, theme)} ${row.label}`;
-  return assembleLine(left, row.tokens, row.model, selected, width, theme);
+  return assembleLine(left, row.tokens, row.tokensIn, row.tokensOut, row.model, selected, width, theme);
 }
 
 function formatGroup(row: GroupRow, selected: boolean, width: number, theme: Theme): string {
@@ -56,7 +56,7 @@ function formatGroup(row: GroupRow, selected: boolean, width: number, theme: The
   const cursor = selected ? theme.fg("accent", "❯") : " ";
   const icon = row.icon === "done" ? theme.fg("success", GLYPHS.done) : row.icon === "error" ? theme.fg("error", GLYPHS.error) : theme.fg("warning", spinnerFrame());
   const left = `${cursor} ${row.prefix}${chevron} ${icon} ${row.label} ×${row.count}`;
-  return assembleLine(left, row.tokens, row.model, selected, width, theme);
+  return assembleLine(left, row.tokens, row.tokensIn, row.tokensOut, row.model, selected, width, theme);
 }
 
 export function formatRow(row: TreeRow, selected: boolean, width: number, theme: Theme): string {

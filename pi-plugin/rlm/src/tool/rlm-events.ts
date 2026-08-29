@@ -41,6 +41,9 @@ export interface SubcallUpdatedEvent {
   readonly costUsd?: number;
   /** Delta — additive on both the subcall and running totals. */
   readonly tokens?: number;
+  /** Deltas for the in/out split shown in the tree (input / output). Additive like tokens. */
+  readonly tokensIn?: number;
+  readonly tokensOut?: number;
   /** For batch subcalls: failed prompt count. */
   readonly failedCount?: number;
   /** For batch subcalls: total prompt count. */
@@ -55,6 +58,8 @@ export interface TurnEvent {
 export interface RootUsageEvent {
   readonly costUsd: number;
   readonly tokens: number;
+  readonly tokensIn?: number;
+  readonly tokensOut?: number;
 }
 
 export interface AnswerEvent {
@@ -114,8 +119,8 @@ export class RlmEmitter {
   }
 
   /** Accumulate usage directly to root-level totals. */
-  emitRootUsage(costUsd: number, tokens: number): void {
-    this.ee.emit("root-usage", { costUsd, tokens } satisfies RootUsageEvent);
+  emitRootUsage(costUsd: number, tokens: number, tokensIn?: number, tokensOut?: number): void {
+    this.ee.emit("root-usage", { costUsd, tokens, tokensIn, tokensOut } satisfies RootUsageEvent);
   }
 
   /** Set the final answer text (root-only). */

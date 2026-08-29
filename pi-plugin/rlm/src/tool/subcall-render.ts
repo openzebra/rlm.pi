@@ -9,7 +9,7 @@
 import { Text } from "@earendil-works/pi-tui";
 import { keyText } from "@earendil-works/pi-coding-agent";
 import type { SubcallStatus } from "./rlm-details.ts";
-import { formatTokens, spinnerFrame } from "../ui/theme.ts";
+import { formatTokens, formatTokensSplit, spinnerFrame } from "../ui/theme.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 // ── Glyphs ──
@@ -25,15 +25,21 @@ export function headlineStatusGlyph(status: SubcallStatus | "aborted" | "done", 
 
 // ── Stats formatting ──
 
-/** The `4.2k tok · 812ms` run of a card header. Omits any zero component. */
+/** The `4.2k tok · 812ms` run of a card header. In/out split when known; omits zero parts. */
 export function cardStatsLine(
-  totals: { readonly tokens: number },
+  totals: { readonly tokens: number; readonly tokensIn?: number; readonly tokensOut?: number },
   theme: Theme,
   extra?: string,
   backgroundPending?: number,
 ): string {
   const parts: string[] = [];
-  if (totals.tokens > 0) parts.push(`${formatTokens(totals.tokens)} tok`);
+  if (totals.tokens > 0) {
+    parts.push(
+      totals.tokensOut !== undefined && totals.tokensOut > 0
+        ? formatTokensSplit(totals.tokensIn ?? totals.tokens, totals.tokensOut)
+        : `${formatTokens(totals.tokens)} tok`,
+    );
+  }
   if (extra) parts.push(extra);
   const line = theme.fg("dim", parts.join(" · "));
   // The one thing no single line can show: spawned work that may outlive this block.

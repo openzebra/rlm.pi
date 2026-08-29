@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bench/` — first-party e2e benchmark harness for THIS repo's engine** (task suites, fixtures,
+  and graders ported from the `rlm_test` lab; the lab's Python engine is not used). Drives
+  `core/engine.ts` headlessly against real OpenRouter models: lite suites `needle` / `codeqa` /
+  `coding` (offline, deterministic tasks) and the paper tier `s_niah` / `oolong` /
+  `browsecomp` / `codeqa_lb` (LongBench-v2) with the lab's scorers ported 1:1. Paper-tier
+  datasets auto-download from the public HF datasets-server on first use and cache in
+  `bench/data/` (gitignored); **run journals live in `bench/runs/*.jsonl` and are committed —
+  they are the results history**, with the aggregate written to `bench/RESULTS.md` per run.
+  Run: `OPENROUTER_API_KEY=… bun run bench` (`--suite all|paper|…`, `--limit`, `--model`,
+  `--journal`, `--list`). Runner retries tasks 4× / 15 s so a row means "model failed the
+  task", not "free-pool hiccuped". First results (see `bench/runs/`): lite 7/7 on
+  `cohere/north-mini-code:free`; paper OOLONG 0.625 on `google/gemma-3-27b-it` — matching the
+  lab's 0.62.
+- **Token in/out split across the whole tree UI.** `SubcallUpdatedEvent` / `RootUsageEvent`
+  carry `tokensIn` / `tokensOut` deltas; `SubcallStore` accumulates them per node, in grand
+  totals, and subtracts them in `takeSettledSubtrees`; `RlmDetails` / `RunSnapshot` / tree rows
+  and groups thread them through; rows and card headers render `190.2k↑ 18.6k↓ tok`
+  (`formatTokensSplit`, plain `N tok` fallback when output is zero). `Usage` always had the
+  split — it was collapsed to `totalTokens` on the way to the display.
+
+### Fixed
+
+- **OpenRouter upstream stream kills are now retried.** Free/cheap providers abort generations
+  mid-stream with `finish_reason: "error"` (observed from Cohere's pool: no message, no code,
+  partial usage; HTTP 200). pi-ai maps that to the generic `Provider finish_reason: error`
+  text, which the retry classifier matched nowhere → fatal, zero engine retries. `util/retry.ts`
+  now retries `finish_reason: error` / `network_error` and refuses to retry `content_filter`
+  (`test/retry.ts` covers all three).
+
+### Changed
+
+- **Token-budget cascade only engages for windows ≥ 250k** (`core/budget.ts`
+  `BUDGET_WINDOW_FLOOR`). The `window × budgetShare` formula strangled small-window models:
+  a 32k window derived an 8k task cap — below the fixed per-task overhead (system prompt +
+  per-turn history re-send + sub-LLM calls), making even trivial tasks unwinnable. Below the
+  floor the cascade does not apply (unbounded budget); runs stay bounded by `maxIterations` /
+  `maxErrors` / wall-clock. Unknown windows (32k fallback) sit below the floor by design.
+  `MOCK_MODEL` in tests raised to 262k so engine-level cascade tests keep firing; floor
+  boundary covered in `test/budget.ts`.
+
 Field audit of `rlm_query`/`llm_query` failures against real usage
 (468 episodes across `sollab` + `zebra-catch` `.rlm` artifacts). No code changes yet —
 this entry records the findings; the full report with file:line evidence, evidence

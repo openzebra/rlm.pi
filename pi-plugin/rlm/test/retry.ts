@@ -45,6 +45,9 @@ async function main(): Promise<void> {
   check("quota text is NOT retryable even pattern-adjacent", !retryableError(undefined, "insufficient quota: billing hard limit reached"));
   check("invalid api key text is NOT retryable", !retryableError(undefined, "invalid api key provided"));
   check("random text is NOT retryable", !retryableError(undefined, "something completely different"));
+  check("openrouter upstream finish_reason error IS retryable", retryableError(undefined, "Provider finish_reason: error"));
+  check("finish_reason network_error IS retryable", retryableError(undefined, "Provider finish_reason: network_error"));
+  check("content_filter finish_reason is NOT retryable", !retryableError(undefined, "Provider finish_reason: content_filter"));
 
   check("isRateLimited: 429 status", isRateLimited(429, "x"));
   check("isRateLimited: zai 1302 text", isRateLimited(undefined, "您的账户已达到速率限制 (1302)"));

@@ -107,8 +107,30 @@ export class TokenBudget {
 }
 
 /** Cap derivation (v5 `resolve_budget`): share × context window, clamped by the task cap. */
+/**
+ * Minimum context window (tokens) for the token-budget cascade to engage at all.
+ *
+ * The formula (window × budgetShare) assumes the window is large enough that a fraction of it
+ * is a meaningful working budget. Below this floor the derived cap shrinks below a task's FIXED
+ * overhead (system prompt + per-turn history re-send + sub-LLM calls) and strangles the run —
+ * a 32k window would cap a task at 8k tokens, less than the protocol scaffolding alone.
+ * So for smaller windows the rule does not apply: the budget is effectively unbounded and runs
+ * stay bounded by maxIterations / maxErrors / wall-clock instead.
+ */
+export const BUDGET_WINDOW_FLOOR = 250_000;
+
+/** An effective budget that can never trigger — the cascade "switched off" without changing
+ *  any call-site types (budget: TokenBudget | undefined). */
+function unboundedBudget(config: RlmConfig): TokenBudget {
+  return new TokenBudget(Number.MAX_SAFE_INTEGER, {
+    softFrac: config.budgetSoftFrac,
+    maxContinuations: config.budgetMaxContinuations,
+  });
+}
+
 export function resolveBudget(contextWindow: number | undefined, config: RlmConfig): TokenBudget {
   const ctx = contextWindow !== undefined && contextWindow > 0 ? contextWindow : 32_000;
+  if (ctx < BUDGET_WINDOW_FLOOR) return unboundedBudget(config);
   const shareCap = Math.floor(ctx * config.budgetShare);
   const cap = config.budgetTaskCap > 0 ? Math.min(shareCap, config.budgetTaskCap) : shareCap;
   return new TokenBudget(Math.max(cap, 1), {

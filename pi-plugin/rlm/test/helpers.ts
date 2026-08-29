@@ -44,7 +44,7 @@ export const MOCK_MODEL = {
   reasoning: false,
   input: ["text"] as const,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
+  contextWindow: 262_144, // ≥ BUDGET_WINDOW_FLOOR so engine-level cascade tests keep firing
   maxTokens: 4096,
 } as unknown as Model<Api>;
 

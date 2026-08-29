@@ -386,8 +386,17 @@ export function createEngine(deps: EngineDeps): RunRlm {
           emitter.emitSubcallUpdated({ id: selfReportId, args: `▶ ${allBlocks}`, resultPreview: previewStdout(turn.results) });
         }
         limits.addUsage(turn.usage);
-        if (selfReportId) emitter.emitSubcallUpdated({ id: selfReportId, costUsd: turn.usage.cost.total, tokens: turn.usage.totalTokens });
-        else emitter.emitRootUsage(turn.usage.cost.total, turn.usage.totalTokens);
+        if (selfReportId) {
+          emitter.emitSubcallUpdated({
+            id: selfReportId,
+            costUsd: turn.usage.cost.total,
+            tokens: turn.usage.totalTokens,
+            tokensIn: turn.usage.input,
+            tokensOut: turn.usage.output,
+          });
+        } else {
+          emitter.emitRootUsage(turn.usage.cost.total, turn.usage.totalTokens, turn.usage.input, turn.usage.output);
+        }
         deps.onUsage?.(turn.usage, "root");
         const answerContent = latestAnswerContentOf(turn.results);
         if (answerContent) best = answerContent;

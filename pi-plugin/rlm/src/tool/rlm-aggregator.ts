@@ -55,7 +55,7 @@ export class RlmEventAggregator extends EmitterListener {
   }
 
   private handleRootUsage(event: RootUsageEvent): void {
-    this.store.addRootUsage(event.costUsd, event.tokens);
+    this.store.addRootUsage(event.costUsd, event.tokens, event.tokensIn, event.tokensOut);
     this.notify();
   }
 

@@ -17,6 +17,10 @@ RLM_V5_*.md
 .rlm-e2e/
 pi-plugin/rlm/test/.env.e2e
 
+# Bench downloaded paper-tier datasets stay local (fetch-if-missing); run journals under
+# bench/runs/ ARE tracked — they are the results history.
+bench/data/
+
 # Python bytecode from the sandbox worker package
 __pycache__/
 *.pyc

@@ -1,0 +1,20 @@
+[
+  {
+    "id": "http_timeout_default",
+    "repo": "repo_http",
+    "question": "What is the default timeout in milliseconds used by with_retry when timeout_ms is None? Answer with only the number.",
+    "answer": "50"
+  },
+  {
+    "id": "http_max_retries",
+    "repo": "repo_http",
+    "question": "How many retries does with_retry attempt (MAX_RETRIES)? Answer with only the number.",
+    "answer": "3"
+  },
+  {
+    "id": "http_get_json",
+    "repo": "repo_http",
+    "question": "Which function in client.py performs the HTTP-like call using with_retry? Answer with only the function name.",
+    "answer": "get_json"
+  }
+]

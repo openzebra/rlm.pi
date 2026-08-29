@@ -267,6 +267,8 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           return modelRef(m) ?? m.id;
         },
         rootTokens: () => store.getRootUsage().tokens,
+        rootTokensIn: () => store.getRootUsage().tokensIn,
+        rootTokensOut: () => store.getRootUsage().tokensOut,
       });
       let capturedStdout = "";
       let capturedStderr = "";

@@ -56,9 +56,13 @@ export async function emitting<T>(
 
   let costUsd = 0;
   let tokens = 0;
+  let tokensIn = 0;
+  let tokensOut = 0;
   const track = (u: Usage): void => {
     costUsd += u.cost.total;
     tokens += u.totalTokens;
+    tokensIn += u.input;
+    tokensOut += u.output;
   };
 
   try {
@@ -70,6 +74,8 @@ export async function emitting<T>(
       resultPreview: summary.preview,
       costUsd,
       tokens,
+      tokensIn,
+      tokensOut,
       detail: summary.error,
       failedCount: summary.failed,
       totalCount: summary.total,
@@ -83,6 +89,8 @@ export async function emitting<T>(
       resultPreview: msg,
       costUsd,
       tokens,
+      tokensIn,
+      tokensOut,
       detail: msg,
     });
     throw err;

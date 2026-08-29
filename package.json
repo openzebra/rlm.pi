@@ -7,7 +7,8 @@
     "start": "bun run index.ts",
     "dev": "bun --watch run index.ts",
     "test": "bun run pi-plugin/rlm/test/smoke.ts",
-    "test:e2e": "bun run pi-plugin/rlm/test/e2e.ts"
+    "test:e2e": "bun run pi-plugin/rlm/test/e2e.ts",
+    "bench": "bun run bench/run.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "latest",

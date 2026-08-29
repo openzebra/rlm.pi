@@ -18,6 +18,9 @@ type MutableSubcall = {
 export interface SubcallTotals {
   readonly costUsd: number;
   readonly tokens: number;
+  /** In/out split (input / output) — mirrors tokens, shown separately in the tree. */
+  readonly tokensIn: number;
+  readonly tokensOut: number;
 }
 
 export class SubcallStore extends EmitterListener {
@@ -25,8 +28,12 @@ export class SubcallStore extends EmitterListener {
 
   private totalCostUsd = 0;
   private totalTokens = 0;
+  private totalTokensIn = 0;
+  private totalTokensOut = 0;
   private rootCostUsd = 0;
   private rootTokens = 0;
+  private rootTokensIn = 0;
+  private rootTokensOut = 0;
 
   constructor(emitter: RlmEmitter, private readonly onChange?: () => void) {
     super();
@@ -52,6 +59,8 @@ export class SubcallStore extends EmitterListener {
       startedAt: Date.now(),
       costUsd: 0,
       tokens: 0,
+      tokensIn: 0,
+      tokensOut: 0,
     });
   }
 
@@ -75,6 +84,14 @@ export class SubcallStore extends EmitterListener {
       sc.tokens += event.tokens;
       this.totalTokens += event.tokens;
     }
+    if (event.tokensIn !== undefined) {
+      sc.tokensIn += event.tokensIn;
+      this.totalTokensIn += event.tokensIn;
+    }
+    if (event.tokensOut !== undefined) {
+      sc.tokensOut += event.tokensOut;
+      this.totalTokensOut += event.tokensOut;
+    }
     if (event.failedCount !== undefined) sc.failedCount = event.failedCount;
     if (event.totalCount !== undefined) sc.totalCount = event.totalCount;
   }
@@ -87,8 +104,8 @@ export class SubcallStore extends EmitterListener {
   }
 
   /** Snapshot running totals. O(1). */
-  getTotals(): { readonly costUsd: number; readonly tokens: number } {
-    return { costUsd: this.totalCostUsd, tokens: this.totalTokens };
+  getTotals(): SubcallTotals {
+    return { costUsd: this.totalCostUsd, tokens: this.totalTokens, tokensIn: this.totalTokensIn, tokensOut: this.totalTokensOut };
   }
 
   /**
@@ -126,33 +143,43 @@ export class SubcallStore extends EmitterListener {
     const taken: RlmSubcall[] = [];
     let costUsd = 0;
     let tokens = 0;
+    let tokensIn = 0;
+    let tokensOut = 0;
     for (const root of children.get(undefined) ?? []) {
       const subtree = settledSubtree(root);
       if (subtree === undefined) continue;
       for (const node of subtree) {
         costUsd += node.costUsd;
         tokens += node.tokens;
+        tokensIn += node.tokensIn;
+        tokensOut += node.tokensOut;
         taken.push(Object.freeze({ ...node, status: node.status as SubcallStatus }));
         this.subcalls.delete(node.id);
       }
     }
     this.totalCostUsd -= costUsd;
     this.totalTokens -= tokens;
-    return { subcalls: taken, totals: { costUsd, tokens } };
+    this.totalTokensIn -= tokensIn;
+    this.totalTokensOut -= tokensOut;
+    return { subcalls: taken, totals: { costUsd, tokens, tokensIn, tokensOut } };
   }
 
   // ── Root usage (delegated from RlmEventAggregator) ──
 
   /** Accumulate root-level usage into shared totals. Called by aggregator. */
-  addRootUsage(costUsd: number, tokens: number): void {
+  addRootUsage(costUsd: number, tokens: number, tokensIn = 0, tokensOut = 0): void {
     this.totalCostUsd += costUsd;
     this.totalTokens += tokens;
+    this.totalTokensIn += tokensIn;
+    this.totalTokensOut += tokensOut;
     this.rootCostUsd += costUsd;
     this.rootTokens += tokens;
+    this.rootTokensIn += tokensIn;
+    this.rootTokensOut += tokensOut;
   }
 
   /** Root engine's OWN spend (driver-model turns only) — never blends sub-call models. */
   getRootUsage(): SubcallTotals {
-    return { costUsd: this.rootCostUsd, tokens: this.rootTokens };
+    return { costUsd: this.rootCostUsd, tokens: this.rootTokens, tokensIn: this.rootTokensIn, tokensOut: this.rootTokensOut };
   }
 }

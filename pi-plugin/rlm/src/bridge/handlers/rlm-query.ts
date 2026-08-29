@@ -206,6 +206,8 @@ async function childRun(
       id: subId,
       status: "done",
       resultPreview: res.answer.slice(0, 200),
+      tokensIn: res.inputTokens,
+      tokensOut: res.outputTokens,
     });
     return res;
   } catch (err: unknown) {

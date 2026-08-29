@@ -1,0 +1,1 @@
+{"suite":"needle","taskId":"needle_1_short","model":"openrouter/mistralai/mistral-nemo","correct":false,"recall":0,"latencyMs":168682,"inputTokens":38060,"outputTokens":165,"iterations":12,"costUsd":0,"answer":"magic token","gold":"SECRET_ALPHA_42"}

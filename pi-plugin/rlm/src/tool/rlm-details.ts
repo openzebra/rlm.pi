@@ -33,6 +33,9 @@ export interface RlmSubcall {
   readonly endedAt?: number;
   readonly costUsd: number;
   readonly tokens: number;
+  /** In/out split (input / output) — mirrors tokens. */
+  readonly tokensIn: number;
+  readonly tokensOut: number;
   /** For batch subcalls: failed prompt count (partial failure). */
   readonly failedCount?: number;
   /** For batch subcalls: total prompt count. */
@@ -46,7 +49,7 @@ export interface RlmDetails {
   readonly rootPrompt: string;
   readonly turns: { readonly current: number; readonly max: number };
   readonly subcalls: readonly RlmSubcall[];
-  readonly totals: { readonly costUsd: number; readonly tokens: number };
+  readonly totals: { readonly costUsd: number; readonly tokens: number; readonly tokensIn: number; readonly tokensOut: number };
   readonly answer?: string;
 }
 

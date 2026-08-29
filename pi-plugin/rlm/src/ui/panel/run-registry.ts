@@ -29,6 +29,8 @@ export interface RunRegistration {
   readonly rootModel?: () => string | undefined;
   /** Root's OWN spend (driver-model turns) — never a subtree sum across models. */
   readonly rootTokens?: () => number;
+  readonly rootTokensIn?: () => number;
+  readonly rootTokensOut?: () => number;
   /** Persistent entries (background work) stay hidden until they hold subcalls. */
   readonly hideWhenEmpty?: boolean;
 }
@@ -44,6 +46,8 @@ export interface RunEntry {
   readonly turns: () => { readonly current: number; readonly max: number };
   readonly rootModel: () => string | undefined;
   readonly rootTokens: () => number;
+  readonly rootTokensIn: () => number;
+  readonly rootTokensOut: () => number;
   readonly hideWhenEmpty: boolean;
 }
 
@@ -66,6 +70,8 @@ export class RunRegistry {
       turns: run.turns ?? (() => DEFAULT_TURNS),
       rootModel: run.rootModel ?? (() => undefined),
       rootTokens: run.rootTokens ?? (() => 0),
+      rootTokensIn: run.rootTokensIn ?? (() => 0),
+      rootTokensOut: run.rootTokensOut ?? (() => 0),
       hideWhenEmpty: run.hideWhenEmpty ?? false,
     };
     this.entries.set(run.runId, entry);

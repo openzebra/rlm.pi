@@ -26,6 +26,8 @@ export interface RunSnapshot {
   readonly rootModel?: string;
   /** Root's OWN token spend (driver-model turns) — never a subtree sum. */
   readonly rootTokens: number;
+  readonly rootTokensIn: number;
+  readonly rootTokensOut: number;
   readonly subcalls: readonly RlmSubcall[];
 }
 
@@ -46,6 +48,8 @@ export interface NodeRow {
   readonly label: string;
   /** The row's OWN token spend for its OWN model — never a subtree sum. */
   readonly tokens: number;
+  readonly tokensIn: number;
+  readonly tokensOut: number;
   readonly model?: string;
 }
 
@@ -64,6 +68,8 @@ export interface GroupRow {
   readonly model?: string;
   /** Sum over members — one model only (the group key pins it), so never a blend. */
   readonly tokens: number;
+  readonly tokensIn: number;
+  readonly tokensOut: number;
   /** SubcallStatus, or "queued" while any member parks on the rate-limit cooldown. */
   readonly icon: SubcallStatus | "queued";
   readonly expandable: boolean;
@@ -147,6 +153,8 @@ export function buildRows(
       phase: sc.phase,
       label: sc.label,
       tokens: sc.tokens,
+      tokensIn: sc.tokensIn,
+      tokensOut: sc.tokensOut,
       model: sc.model,
     });
     if (!expanded || children.length === 0) return;
@@ -181,7 +189,13 @@ export function buildRows(
     const id = `grp:${run.runId}:${entry.key}:${first.id}`;
     const expanded = expandedGroups.has(id);
     let tokens = 0;
-    for (const m of entry.members) tokens += m.tokens;
+    let tokensIn = 0;
+    let tokensOut = 0;
+    for (const m of entry.members) {
+      tokens += m.tokens;
+      tokensIn += m.tokensIn;
+      tokensOut += m.tokensOut;
+    }
     rows.push({
       type: "group",
       id,
@@ -192,6 +206,8 @@ export function buildRows(
       label: entry.label,
       model: entry.model,
       tokens,
+      tokensIn,
+      tokensOut,
       icon: iconOf(entry.status, entry.members.some((m) => m.phase === "queued") ? "queued" : undefined),
       expandable: true,
       expanded,
@@ -218,6 +234,8 @@ export function buildRows(
     phase: run.rootPhase,
     label: run.rootLabel,
     tokens: run.rootTokens,
+    tokensIn: run.rootTokensIn,
+    tokensOut: run.rootTokensOut,
     model: run.rootModel,
   });
   if (!collapsed.has(run.runId)) visitChildren(roots, 0, "");
