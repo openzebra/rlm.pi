@@ -24,8 +24,10 @@ import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
 import type { SubcallPhase } from "../tool/rlm-details.ts";
 import { PythonSandbox, SANDBOX_WATCHDOG_HEARTBEAT_MS } from "../sandbox/sandbox.ts";
+import type { ReplResult } from "../sandbox/protocol.ts";
 import { pinContext, type PinnedContext } from "../sandbox/context-file.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
+import { findReplBlocks } from "../text/parsing.ts";
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
 import { compactHistory, elideOldToolPayloads, shouldCompact } from "./compaction.ts";
@@ -467,7 +469,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         }
       }
       if (pendingReplOutputs) appendUserMessage(history, pendingReplOutputs);
-      const finalized = result(await finalize(history, model, deps, limits), deps.config.maxIterations, limits);
+      const finalized = result(await finalize(history, model, deps, limits, sandbox), deps.config.maxIterations, limits);
       persistRoot(finalized.answer);
       lastAnswer = finalized.answer;
       return finalized;
@@ -525,8 +527,16 @@ function contextWindowOrFallback(model: Model<Api>, registry: ModelContextRegist
   return registry.limitFor(`${model.provider}/${model.id}`);
 }
 
-/** Out of turns: ask the model for its best final answer (plain text). */
-async function finalize(history: ChatMsg[], model: Model<Api>, deps: EngineDeps, limits: LimitGuard): Promise<string> {
+/** Out of turns: ask the model for its best final answer. FINALIZE_PROMPT asks for a fenced
+ *  ```repl``` block, so execute it like any turn and prefer the captured answer (H2) — a raw
+ *  fence echoed verbatim must never become the run answer. Plain text stays the fallback. */
+async function finalize(
+  history: ChatMsg[],
+  model: Model<Api>,
+  deps: EngineDeps,
+  limits: LimitGuard,
+  sandbox: PythonSandbox,
+): Promise<string> {
   const finalHistory = [...history];
   appendUserMessage(finalHistory, FINALIZE_PROMPT);
   const complete = deps.complete ?? modelComplete;
@@ -537,5 +547,12 @@ async function finalize(history: ChatMsg[], model: Model<Api>, deps: EngineDeps,
     signal: deps.signal,
   });
   limits.addUsage(usage);
+  const blocks = findReplBlocks(text);
+  const results = new Array<ReplResult>(blocks.length);
+  for (let i = 0; i < blocks.length; i++) {
+    results[i] = await sandbox.exec(blocks[i]);
+  }
+  const final = finalAnswerOf(results) ?? latestAnswerContentOf(results);
+  if (final !== null && final.trim() !== "") return final.trim();
   return text.trim();
 }

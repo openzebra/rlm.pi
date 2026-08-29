@@ -341,6 +341,65 @@ function pick(reg: ModelRegistry, provider: string, id: string): Model<Api> | un
   return reg.getAvailable().find((m) => m.provider === provider && m.id === id);
 }
 
+/**
+ * H2: the finalize turn's ```repl``` block must be EXECUTED — a fence echoed verbatim as the run
+ * answer is the bench-journal bug (qwen recorded `answer["content"] = ...` un-executed).
+ */
+async function testFinalizeExecutesBlocks(): Promise<boolean> {
+  let pass = true;
+  const log = (n: string, ok: boolean, extra = "") => {
+    console.log(`${ok ? "✓" : "✗"} ${n}${extra ? `  — ${extra}` : ""}`);
+    if (!ok) pass = false;
+  };
+  let turns = 0;
+  const complete: CompleteFn = async (messages) => {
+    const last = messages.at(-1);
+    if ((last?.content ?? "").includes("Finalize NOW")) {
+      return { text: repl('answer["content"] = "FINAL-VALUE"\nanswer["ready"] = True'), usage: ZERO_USAGE };
+    }
+    turns += 1;
+    return { text: `still gathering evidence (${turns})`, usage: ZERO_USAGE };
+  };
+  const res = await createEngine({
+    emitter: new RlmEmitter(),
+    model: MOCK_MODEL,
+    llmModel: MOCK_MODEL,
+    registry: MOCK_REGISTRY,
+    config: { ...DEFAULT_CONFIG, maxIterations: 2, compaction: false },
+    complete,
+  })({ rootPrompt: "finalize me", context: "ctx", depth: 0 });
+  log("H2: finalize executes the repl block and surfaces the captured answer",
+    res.answer === "FINAL-VALUE", JSON.stringify(res.answer.slice(0, 80)));
+  log("H2: the raw fence never becomes the answer", !res.answer.includes("```"), res.answer.slice(0, 60));
+  return pass;
+}
+
+/** H2: an empty ready-capture must not end the run — a later turn that answers properly wins. */
+async function testEmptyReadyDoesNotEndRun(): Promise<boolean> {
+  let pass = true;
+  const log = (n: string, ok: boolean, extra = "") => {
+    console.log(`${ok ? "✓" : "✗"} ${n}${extra ? `  — ${extra}` : ""}`);
+    if (!ok) pass = false;
+  };
+  let calls = 0;
+  const complete: CompleteFn = async () => {
+    calls += 1;
+    if (calls === 1) return { text: repl('answer["ready"] = True'), usage: ZERO_USAGE };
+    return { text: repl('answer["content"] = "LATE-WINNER"\nanswer["ready"] = True'), usage: ZERO_USAGE };
+  };
+  const res = await createEngine({
+    emitter: new RlmEmitter(),
+    model: MOCK_MODEL,
+    llmModel: MOCK_MODEL,
+    registry: MOCK_REGISTRY,
+    config: { ...DEFAULT_CONFIG, maxIterations: 4, compaction: false },
+    complete,
+  })({ rootPrompt: "empty ready", context: "ctx", depth: 0 });
+  log("H2: empty ready-capture does not end the run", calls === 2, `calls=${calls}`);
+  log("H2: the later proper answer wins", res.answer === "LATE-WINNER", JSON.stringify(res.answer.slice(0, 60)));
+  return pass;
+}
+
 async function main() {
   const recursionOk = await testRecursionBridge();
   if (!recursionOk) process.exit(1);
@@ -356,6 +415,12 @@ async function main() {
 
   const guardOk = await testPreSpawnGuard();
   if (!guardOk) process.exit(1);
+
+  const finalizeOk = await testFinalizeExecutesBlocks();
+  if (!finalizeOk) process.exit(1);
+
+  const emptyReadyOk = await testEmptyReadyDoesNotEndRun();
+  if (!emptyReadyOk) process.exit(1);
 
   const registry = MOCK_REGISTRY;
   const available = registry.getAvailable();

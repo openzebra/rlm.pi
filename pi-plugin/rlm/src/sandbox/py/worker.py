@@ -61,7 +61,15 @@ class _AnswerDict(dict):
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
         if key == "ready" and value:
-            self._on_ready(self.get("content", ""))
+            content = self.get("content", "")
+            # An empty ready-flip must not capture "": defer it — a later non-blank content
+            # assignment while ready stays True (branch below) is the real submission.
+            if str(content).strip():
+                self._on_ready(content)
+        elif key == "content" and self.get("ready"):
+            content = str(value)
+            if content.strip():
+                self._on_ready(content)
 
 
 
@@ -151,7 +159,7 @@ class Worker(WorkerScaffold):
             if isinstance(cur, dict):
                 for k, v in cur.items():
                     dict.__setitem__(ans, k, v)
-                if cur.get("ready") and self._final_answer is None:
+                if cur.get("ready") and self._final_answer is None and str(cur.get("content", "")).strip():
                     self._final_answer = str(cur.get("content", ""))
             ns["answer"] = ans
         # Single context variable (RLM paper: the context lives in the environment and

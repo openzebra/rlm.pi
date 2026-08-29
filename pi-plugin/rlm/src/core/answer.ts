@@ -3,9 +3,12 @@
 import type { ReplResult } from "../sandbox/protocol.ts";
 import { formatReplStderr } from "../text/repl-output.ts";
 
-/** First non-null final answer across a turn's executed blocks, or null. */
+/** First non-blank final answer across a turn's executed blocks, or null. A blank capture counts
+ *  as absent (H2): an empty `answer.ready` flip must never terminate a run with "". */
 export function finalAnswerOf(results: readonly ReplResult[]): string | null {
-  for (const r of results) if (r.finalAnswer != null) return r.finalAnswer;
+  for (const r of results) {
+    if (r.finalAnswer != null && r.finalAnswer.trim() !== "") return r.finalAnswer;
+  }
   return null;
 }
 

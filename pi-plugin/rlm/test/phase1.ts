@@ -10,7 +10,7 @@ import { check, failureCount } from "./helpers.ts";
 import { RlmController } from "../src/mode/rlm-mode.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { loadSettings, mergeConfig, saveSettings } from "../src/config/settings.ts";
-import { formatReplOutputs, turnHadError } from "../src/core/answer.ts";
+import { formatReplOutputs, finalAnswerOf, turnHadError } from "../src/core/answer.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { buildMetadataLine, buildRlmSystemPrompt } from "../src/prompts/system.ts";
 import { findReplBlocks, truncateOutput } from "../src/text/parsing.ts";
@@ -132,6 +132,19 @@ async function main() {
   check("answer.ready surfaces final answer", r.finalAnswer === "42", String(r.finalAnswer));
   r = await sandbox.exec("answer['content'] = ''\nanswer['ready'] = False\nanswer['ready'] = True\nanswer['content'] = 'late content'");
   check("F2: ready before content still surfaces same-block final answer", r.finalAnswer === "late content", String(r.finalAnswer));
+
+  // H2: an empty ready-flip must not capture "" — the capture is deferred, and a later non-blank
+  // content assignment (ready still True) becomes the real submission.
+  r = await sandbox.exec("answer['content'] = ''\nanswer['ready'] = False\nanswer['ready'] = True");
+  check("H2: empty ready-flip captures nothing", r.finalAnswer === null, String(r.finalAnswer));
+  r = await sandbox.exec("answer['content'] = 'late winner'");
+  check("H2: content assigned after an empty ready-flip is captured", r.finalAnswer === "late winner", String(r.finalAnswer));
+
+  // H2 (engine-side belt-and-suspenders): finalAnswerOf treats blank captures as absent.
+  const blankCapture = { stdout: "", stderr: "", finalAnswer: "", answerContent: "", raised: false, executionTimeMs: 0, varNames: [], pendingTasks: [] };
+  const realCapture = { ...blankCapture, finalAnswer: "real" };
+  check("H2: finalAnswerOf ignores blank captures",
+    finalAnswerOf([blankCapture]) === null && finalAnswerOf([blankCapture, realCapture]) === "real");
 
   // stderr on error
   r = await sandbox.exec("import sys; print('progress warning', file=sys.stderr)");
