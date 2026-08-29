@@ -28,6 +28,21 @@ async function main() {
   check("findReplBlocks extracts 2 blocks", blocks.length === 2, JSON.stringify(blocks));
   const nestedFenceBlocks = findReplBlocks("````repl\nprint('``` inner fence')\n````");
   check("M6: length-matched repl fence allows inner triple backticks", nestedFenceBlocks[0]?.includes("inner fence") === true, JSON.stringify(nestedFenceBlocks));
+  const pythonFallback = findReplBlocks("think\n```python\nprint(1)\n```");
+  check("fallback: python fence used when no repl block", pythonFallback.length === 1 && pythonFallback[0] === "print(1)", JSON.stringify(pythonFallback));
+  const untaggedFallback = findReplBlocks("```\nx = 2\n```");
+  check("fallback: untagged fence used when no repl block", untaggedFallback.length === 1 && untaggedFallback[0] === "x = 2", JSON.stringify(untaggedFallback));
+  const replWins = findReplBlocks("```repl\nprint(1)\n```\n```python\nx=2\n```");
+  check("repl block wins over python block", replWins.length === 1 && replWins[0] === "print(1)", JSON.stringify(replWins));
+  const textRejected = findReplBlocks("```text\nhello\n```");
+  const jsonRejected = findReplBlocks("```json\n{\"a\": 1}\n```");
+  check("fallback rejects non-code tags (text/json)", textRejected.length === 0 && jsonRejected.length === 0, JSON.stringify([textRejected, jsonRejected]));
+  const twoPython = findReplBlocks("```python\na=1\n```\nmid\n```python\nb=2\n```");
+  check("fallback: multiple python blocks in document order", twoPython.length === 2 && twoPython[0] === "a=1" && twoPython[1] === "b=2", JSON.stringify(twoPython));
+  const nestedPython = findReplBlocks("````python\nprint('``` inner fence')\n````");
+  check("M6: length-matched python fence allows inner triple backticks", nestedPython[0]?.includes("inner fence") === true, JSON.stringify(nestedPython));
+  const whitespacePython = findReplBlocks("```python\n   \n```");
+  check("fallback skips whitespace-only python body", whitespacePython.length === 0, JSON.stringify(whitespacePython));
   check("truncateOutput elides", truncateOutput("a".repeat(100), 40).includes("elided"));
   const sp = buildRlmSystemPrompt(
     { contextType: "json", contextChars: 5000 },
