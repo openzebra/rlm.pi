@@ -8,7 +8,7 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { formatTokens, spinnerFrame } from "../theme.ts";
+import { formatTokens, formatTokensSplit, spinnerFrame } from "../theme.ts";
 import type { GroupRow, NodeRow, TreeRow } from "./tree-model.ts";
 
 const GLYPHS = Object.freeze({ done: "✓", error: "✗", queued: "◷", expanded: "▾", collapsed: "▸", leaf: " " } as const);

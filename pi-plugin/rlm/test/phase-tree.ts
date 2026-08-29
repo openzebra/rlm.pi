@@ -147,6 +147,15 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
   check("rows: selection cursor rendered", lines[1]?.includes("❯") === true);
   check("rows: modelShort caps length", modelShort("provider/a-very-long-model-name-here").length <= 15);
 
+  emitter.emitSubcallUpdated({ id: agentId, tokensIn: 190_200, tokensOut: 18_600 });
+  const splitSnap = registry.snapshots()[0];
+  check("rows: split snapshot exists", splitSnap !== undefined);
+  if (splitSnap !== undefined) {
+    const splitLines = formatRows(buildRows(splitSnap, new Set()), agentId, 72, theme);
+    check("rows: in/out split shown when tokensOut > 0",
+      splitLines[1]?.includes("190.2k↑") === true && splitLines[1]?.includes("18.6k↓") === true);
+  }
+
   // ── modal view: header + timeline, stable height, no "$" ──
   const run = registry.find("run1");
   check("modal: run found", run !== undefined);
