@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Field audit of `rlm_query`/`llm_query` failures against real usage
+(468 episodes across `sollab` + `zebra-catch` `.rlm` artifacts). No code changes yet —
+this entry records the findings; the full report with file:line evidence, evidence
+statistics, and the prioritized fix plan (B1–B16 / F1–F17) lives in
+[`docs/audit-2026-08-30.md`](docs/audit-2026-08-30.md).
+
+### Documented
+
+- **Garbage final answers — the "fence bug" (root cause found).** When a child RLM runs out
+  of turns, `FINALIZE_PROMPT` asks the model to answer via a fenced ```repl block, but
+  `finalize()` returns that raw text **without executing or stripping it** (`core/engine.ts`,
+  `prompts/user.ts`) — the fence block becomes the official answer. Same family: the
+  abort/`LimitError` "best partial" freezes the *first* raw model response (`engine.ts`), and
+  nothing validates any answer path (`core/answer.ts`). Evidence: 45/468 persisted episodes
+  (9.6%) are literal code-fence results (one contains the model's own comment "we are out of
+  turns"); 4 of 8 sub-RLM studies fired during the audit returned their own repl scripts as
+  the answer. Compounding it: the episode replay cache (`memory.replay`) stores these
+  successes unconditionally and replays the junk forever for identical
+  `kind|model|paths|prompt|ctx` keys.
+- **Budget overshoot via intra-turn fan-out.** `TokenBudget.observeTotal` runs once per turn;
+  within one turn a child can fan out unbounded leaf volume (session gate is only
+  `maxConcurrentSubcalls`). Observed: a glm-5.2 episode at **6,747,276 tokensIn** against a
+  "bounded" `min(0.25×1M, 400k)×3 ≈ 750k` chain total — ~9× overshoot. The cap is real but
+  per-turn; intra-turn spend is not observed.
+- **"524k tok on a 500k-window model" is not a context overflow.** The per-node token figure
+  is cumulative Σ `usage.totalTokens` over that node's own turn completions
+  (`tool/subcall-store.ts`, emitted per turn from the engine) and includes `cacheRead` /
+  `cacheWrite`, which budget accounting (`input+output`) does not count. Individual turns stay
+  under the window via compaction (65% threshold); the sum across ~30 turns is not bounded by
+  the window. Display/labeling improvement tracked as F11.
+- **`.rlm` artifacts are success-only by design — failures are invisible.** `recordEpisode`
+  skips empty results, the childRun error path writes no episode, and `llm_query`/`llm_batch`
+  never write episodes at all (only kinds `rlm`/`root` exist). This is why the artifacts looked
+  clean while failures happened; tracking failure rows + episode rotation as F9/F10.
+- **Failure taxonomy documented** (report §1): leaf calls fail soft with `Error: …` strings
+  (prompt > `maxPromptChars`, resource timeout, provider errors after 3 transport retries,
+  unwired bridge, and one hard throw rejecting a whole `llm_batch` via `Promise.all`); child
+  runs fail hard (`"Error: child RLM failed - …"`) with no turn-level retry — a single
+  provider failure after retries kills a run that may already have spent 300k+ tokens.
+  Non-retryable context-overflow 400s have no preflight estimate (compaction-only at 65%).
+
 ## [0.3.14] — 2026-08-28
 
 ### Changed
