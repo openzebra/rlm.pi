@@ -16,10 +16,10 @@
  *   bun run bench/run.ts --model openrouter/google/gemma-4-31b-it:free
  *   bun run bench/run.ts --list               # print tasks + context sizes, no engine
  *
- * Artifacts: JSONL journal bench/runs/bench-<ts>.jsonl + aggregate report bench/RESULTS.md.
+ * Artifacts: JSONL journal bench/runs/bench-<ts>.jsonl — journal only, no aggregate report.
  */
 
-import { appendRow, makeRow, writeReport, type BenchRow } from "./journal.ts";
+import { appendRow, makeRow, type BenchRow } from "./journal.ts";
 import { gradeAnswer } from "./grade.ts";
 import { DEFAULT_MODEL_REF, makeRun, requireApiKey, resolveTarget } from "./engine.ts";
 import { buildTasks, type BenchTask, type SuiteName } from "./tasks.ts";
@@ -172,8 +172,7 @@ async function main(): Promise<void> {
     );
   }
 
-  writeReport(rows, "bench/RESULTS.md", target.ref);
-  console.log(`\nwrote ${journalPath} and bench/RESULTS.md (${rows.length} rows)`);
+  console.log(`\nwrote ${journalPath} (${rows.length} rows)`);
 }
 
 main().catch((err: unknown) => {

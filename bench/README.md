@@ -59,9 +59,7 @@ Optional env vars:
 
 - `bench/runs/bench-<ts>.jsonl` — one JSONL row per task: `suite, taskId, model, correct,
   recall, answer, gold, error, latencyMs, inputTokens, outputTokens, iterations, costUsd`
-  (mirrors the lab's journal schema).
-- `bench/RESULTS.md` — aggregate table per suite (n / errors / accuracy / mean recall /
-  latency / tokens). Regenerated every run.
+  (mirrors the lab's journal schema). Journal only — no aggregate report is written.
 
 ## Engine wiring (bench/engine.ts)
 
