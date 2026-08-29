@@ -206,6 +206,44 @@ async function main(): Promise<void> {
     r = await sandbox.exec('print(json.dumps(sorted(n for n in SHOW_VARS().split() if "answers" in n or "plan" in n)))');
     check("answers/plan are user-visible in SHOW_VARS (so they get snapshotted)",
       r.stdout.includes("answers") && r.stdout.includes("plan"), r.stdout.trim());
+
+    // ── H1: search snippets center on the earliest matched term, not the chunk head ───────
+    const fillerLine = "lorem ipsum padding filler vocabulary line";
+    await sandbox.loadContext([
+      {
+        // 25 + 14 filler lines around the needle keep it in one 40-line window, >1000 chars deep.
+        path: "deep/needle.md",
+        content: [
+          ...Array.from({ length: 25 }, () => fillerLine),
+          "NEEDLE_DEEP_TOKEN marks the vault",
+          ...Array.from({ length: 14 }, () => fillerLine),
+        ].join("\n"),
+        tokens: 50,
+      },
+      { path: "head/needle.md", content: "NEEDLE_HEAD_TOKEN sits at the very top\nsecond line", tokens: 5 },
+      { path: "headlong/needle.md", content: `NEEDLE_HEAD_LONG_TOKEN ${"tail filler words ".repeat(120)}`, tokens: 60 },
+    ]);
+
+    r = await sandbox.exec('import json\nprint(json.dumps(search("NEEDLE_HEAD_TOKEN", k=5)))');
+    const hits1 = parsePrinted(r.stdout);
+    const snips = Array.isArray(hits1) ? (hits1 as { path: string; snippet: string }[]) : [];
+    const headHit = snips.find((h) => h.path === "head/needle.md");
+    check("H1: match at offset 0 keeps the head-window snippet (no markers)",
+      headHit?.snippet === "NEEDLE_HEAD_TOKEN sits at the very top\nsecond line", JSON.stringify(headHit?.snippet));
+
+    const deepHit = snips.find((h) => h.path === "deep/needle.md");
+    check("H1: deep match surfaces inside the snippet",
+      deepHit?.snippet.includes("NEEDLE_DEEP_TOKEN") === true, JSON.stringify(deepHit?.snippet.slice(0, 80)));
+    check("H1: clipped snippet is ...-marked and capped at _SNIPPET_CHARS",
+      deepHit !== undefined && deepHit.snippet.length <= 400
+      && deepHit.snippet.startsWith("...") && deepHit.snippet.endsWith("..."),
+      `len=${deepHit?.snippet.length}`);
+
+    const headLongHit = snips.find((h) => h.path === "headlong/needle.md");
+    check("H1: head match in a long chunk stays head-anchored with only a trailing marker",
+      headLongHit?.snippet.startsWith("NEEDLE_HEAD_LONG_TOKEN tail") === true
+      && headLongHit.snippet.length === 400,
+      `len=${headLongHit?.snippet.length}`);
   } finally {
     await sandbox.dispose();
   }

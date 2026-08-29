@@ -36,6 +36,30 @@ def _chunk_text(text: str, chunk_chars: int) -> list[str]:
     return chunks
 
 
+def _snippet_window(text: str, terms: set[str]) -> str:
+    """Slice `text` around the earliest occurrence of any query term, capped at _SNIPPET_CHARS.
+
+    BM25 finds the right window chunk; the snippet must show the match, not the chunk head.
+    Clipped edges get "..." markers, which count toward the cap (the body is trimmed to fit).
+    Falls back to the chunk head when no term occurs (tokenize/camelCase mismatches).
+    """
+    lowered = text.lower()
+    hits = [p for p in (lowered.find(t) for t in terms) if p >= 0]
+    if not hits:
+        return text[:_SNIPPET_CHARS]
+    start = max(0, min(hits) - _SNIPPET_LEAD)
+    end = min(len(text), start + _SNIPPET_CHARS)
+    lead = "..." if start > 0 else ""
+    trail = "..." if end < len(text) else ""
+    body = text[start:end]
+    if len(body) > _SNIPPET_CHARS - len(lead) - len(trail):
+        body = body[:_SNIPPET_CHARS - len(lead) - len(trail)]
+    if start + len(body) < len(text):
+        trail = "..."  # trimming pulled the window edge back inside the chunk
+        body = body[:_SNIPPET_CHARS - len(lead) - len(trail)]
+    return lead + body + trail
+
+
 # ---- deterministic retrieval over `context` -----------------------------------------------
 #
 # The RLM paper's trajectories retrieve by having the root model hand-write regex over the
@@ -48,6 +72,7 @@ def _chunk_text(text: str, chunk_chars: int) -> list[str]:
 _INDEX_WINDOW_LINES = 40       # a window is the retrieval unit: big enough to carry meaning
 _INDEX_MAX_WINDOWS = 20_000    # ceiling so a huge add_context() cannot exhaust worker memory
 _SNIPPET_CHARS = 400
+_SNIPPET_LEAD = 100            # chars of lead-in kept before the earliest matched term
 _GREP_HARD_CAP = 200           # absolute ceiling on returned grep hits, whatever k asks for
 _BM25_K1 = 1.2
 _BM25_B = 0.75
@@ -165,9 +190,10 @@ class _Bm25Index:
             return []
         top = heapq.nlargest(k, scores.items(), key=lambda kv: kv[1])
         out: list[dict[str, Any]] = [None] * len(top)  # type: ignore[list-item]
+        term_set = set(terms)
         for i, (idx, score) in enumerate(top):
             text = self.texts[idx]
-            snip = text[:_SNIPPET_CHARS]
+            snip = _snippet_window(text, term_set)
             # Both `snippet` and `text` so agents never KeyError mixing search vs grep shapes.
             out[i] = {
                 "path": self.paths[idx],
