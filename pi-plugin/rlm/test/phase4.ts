@@ -400,6 +400,43 @@ async function testEmptyReadyDoesNotEndRun(): Promise<boolean> {
   return pass;
 }
 
+/**
+ * H3: after two retrieval-free turns the engine injects the [coach] nudge exactly once — and
+ * never again once a block actually called search()/grep_context().
+ */
+async function testRetrievalNudge(): Promise<boolean> {
+  let pass = true;
+  const log = (n: string, ok: boolean, extra = "") => {
+    console.log(`${ok ? "✓" : "✗"} ${n}${extra ? `  — ${extra}` : ""}`);
+    if (!ok) pass = false;
+  };
+  const turnPrompts: string[] = [];
+  const complete: CompleteFn = async (messages) => {
+    const last = messages.at(-1);
+    turnPrompts.push(last?.content ?? "");
+    const i = turnPrompts.length - 1;
+    if (i <= 1) return { text: "guessing from thin air", usage: ZERO_USAGE };
+    if (i === 2) return { text: repl('hits = search("vault")'), usage: ZERO_USAGE };
+    return { text: repl('answer["content"] = "done"\nanswer["ready"] = True'), usage: ZERO_USAGE };
+  };
+  const res = await createEngine({
+    emitter: new RlmEmitter(),
+    model: MOCK_MODEL,
+    llmModel: MOCK_MODEL,
+    registry: MOCK_REGISTRY,
+    config: { ...DEFAULT_CONFIG, maxIterations: 6, compaction: false },
+    complete,
+  })({ rootPrompt: "find it", context: "ctx", depth: 0 });
+  log("H3: turns 1-2 carry no nudge",
+    turnPrompts[0]?.includes("[coach]") === false && turnPrompts[1]?.includes("[coach]") === false);
+  log("H3: turn 3 injects the [coach] nudge via the gate-message seam",
+    turnPrompts[2]?.includes("[coach]") === true, JSON.stringify(turnPrompts[2]?.slice(0, 100)));
+  log("H3: no nudge after a search( block ran, run still completes",
+    turnPrompts.slice(3).every((p) => !p.includes("[coach]")) && res.answer === "done",
+    `answer=${JSON.stringify(res.answer.slice(0, 40))}`);
+  return pass;
+}
+
 async function main() {
   const recursionOk = await testRecursionBridge();
   if (!recursionOk) process.exit(1);
@@ -421,6 +458,9 @@ async function main() {
 
   const emptyReadyOk = await testEmptyReadyDoesNotEndRun();
   if (!emptyReadyOk) process.exit(1);
+
+  const nudgeOk = await testRetrievalNudge();
+  if (!nudgeOk) process.exit(1);
 
   const registry = MOCK_REGISTRY;
   const available = registry.getAvailable();

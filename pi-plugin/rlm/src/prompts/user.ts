@@ -26,3 +26,11 @@ export const FINALIZE_PROMPT =
   "You are out of turns. Finalize NOW: set `answer[\"content\"]` and `answer[\"ready\"] = True` " +
     "(fenced ```repl```) with your best final answer from everything you have gathered. " +
     "Only if the REPL is unavailable, answer as plain text.";
+
+/** One-shot retrieval-discipline nudge (the engine owns the when — see core/engine.ts). The
+ *  context is external by design, so a model that never calls search()/grep_context() is
+ *  guessing from padding vocabulary; after two retrieval-free turns it gets this once. */
+export const RETRIEVAL_NUDGE =
+  "[coach] You have not inspected the external context yet — it is NOT included in this " +
+  "chat, and guessing is useless: the text is padding. On THIS turn, call search(\"...\") " +
+  "or grep_context(\"...\") inside a ```repl block before answering.";

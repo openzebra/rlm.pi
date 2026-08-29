@@ -20,7 +20,7 @@ import { TaskLedger, contextSig, taskKey } from "./ledger.ts";
 import { type MemoryStore, rootContextPaths } from "./memory.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
-import { buildTurnPrompt, FINALIZE_PROMPT } from "../prompts/user.ts";
+import { buildTurnPrompt, FINALIZE_PROMPT, RETRIEVAL_NUDGE } from "../prompts/user.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
 import type { SubcallPhase } from "../tool/rlm-details.ts";
 import { PythonSandbox, SANDBOX_WATCHDOG_HEARTBEAT_MS } from "../sandbox/sandbox.ts";
@@ -250,6 +250,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
     // v5 budget cascade state: the wrap-up note fires for exactly ONE turn after crossing soft.
     let softFired = false;
     let softNoteTurn = -1;
+    // H3: retrieval-discipline coach — one-shot per run; children inherit it via the same loop.
+    let sawRetrieval = false;
+    let retrievalNudged = false;
 
     try {
       const meta = {
@@ -357,11 +360,15 @@ export function createEngine(deps: EngineDeps): RunRlm {
         // v5 [ledger] blackboard + [memory] notes — each silent ("") when it has nothing to say.
         const ledgerBlock = deps.config.enableLedger ? runLedger.injectBlock() : "";
         const memoryBlock = rootMemory !== undefined ? rootMemory.injectBlock(input.rootPrompt) : "";
+        // H3: after two retrieval-free turns, inject the coach nudge exactly once, for one turn.
+        const nudgeNow = i >= 2 && !sawRetrieval && !retrievalNudged;
+        if (nudgeNow) retrievalNudged = true;
         const notes =
           [
             i === softNoteTurn ? WRAP_UP_BUDGET : undefined,
             ledgerBlock === "" ? undefined : ledgerBlock,
             memoryBlock === "" ? undefined : memoryBlock,
+            nudgeNow ? RETRIEVAL_NUDGE : undefined,
           ]
             .filter((s): s is string => s !== undefined)
             .join("\n\n") || undefined;
@@ -381,6 +388,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           complete: deps.complete,
           onPhase: reportPhase,
         });
+        if (turn.blocks.some((b) => /\b(?:search|grep_context)\s*\(/.test(b))) sawRetrieval = true;
         const allBlocks = turn.blocks.length > 0
           ? turn.blocks.map((b) => previewText(b, 400)).join("\n")
           : previewText(turn.response, 400);
