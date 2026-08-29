@@ -22,6 +22,7 @@ awaited in a LATER exec than the one that started it.
 from __future__ import annotations
 
 import argparse
+import ast
 import io
 import json
 import os
@@ -303,8 +304,25 @@ class Worker(WorkerScaffold):
 
     def _exec(self, code: str, ns: dict[str, Any]) -> None:
         t = self.exec_timeout_s
+        # Jupyter-style auto-echo: plain exec() discards a trailing bare expression's value
+        # (models write `search("...")` and never see the hits), so split the block: exec the
+        # head, eval the tail, and repr() the value when it is not None (None stays silent).
+        tree = ast.parse(code)
+        tail = tree.body[-1] if tree.body else None
+        tail_is_expr = isinstance(tail, ast.Expr)
+
+        def _run() -> None:
+            if tail_is_expr and tail is not None:
+                head = ast.Module(body=tree.body[:-1], type_ignores=[])
+                exec(compile(head, "<repl>", "exec"), ns, ns)  # noqa: S102
+                value = eval(compile(ast.Expression(tail.value), "<repl>", "eval"), ns, ns)  # noqa: S102
+                if value is not None:
+                    print(repr(value))
+            else:
+                exec(compile(tree, "<repl>", "exec"), ns, ns)  # noqa: S102
+
         if t <= 0 or not hasattr(signal, "SIGALRM"):
-            exec(compile(code, "<repl>", "exec"), ns, ns)  # noqa: S102
+            _run()
             return
 
         def _alarm(signum, frame):  # noqa: ARG001
@@ -313,7 +331,7 @@ class Worker(WorkerScaffold):
         old = signal.signal(signal.SIGALRM, _alarm)
         signal.setitimer(signal.ITIMER_REAL, t)
         try:
-            exec(compile(code, "<repl>", "exec"), ns, ns)  # noqa: S102
+            _run()
         finally:
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, old)

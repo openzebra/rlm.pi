@@ -160,6 +160,26 @@ async function main() {
   r = await sandbox.exec("print('alive')");
   check("sandbox survives a timed-out block", r.stdout.trim() === "alive", r.stdout.trim());
 
+  // H4: Jupyter-style auto-echo of the last bare expression (exec() mode discards it otherwise)
+  r = await sandbox.exec("search_x = [1, 2]\nsearch_x");
+  check("H4: bare expression echoes repr(value)", r.stdout.includes("[1, 2]"), r.stdout.trim());
+  r = await sandbox.exec("y = 42");
+  check("H4: trailing assignment does not echo", r.stdout.trim() === "", r.stdout.trim());
+  r = await sandbox.exec("print(y)");
+  check("H4: var assigned in an echo block visible later", r.stdout.trim() === "42", r.stdout.trim());
+  r = await sandbox.exec("(lambda: None)()");
+  check("H4: None-returning expression does not echo", r.stdout.trim() === "", r.stdout.trim());
+  r = await sandbox.exec("print('hi')");
+  check("H4: explicit print is not duplicated", r.stdout.trim() === "hi", JSON.stringify(r.stdout));
+  r = await sandbox.exec("total = 1 + 1\ntotal * 10");
+  check("H4: head statements run before the tail echo", r.stdout.trim() === "20", r.stdout.trim());
+  r = await sandbox.exec("print(total)");
+  check("H4: head bindings persist to later blocks", r.stdout.trim() === "2", r.stdout.trim());
+
+  // H4: the tail eval sits inside the SIGALRM window too
+  r = await sandbox.exec("sum(i for i in iter(int, 1))");
+  check("H4: infinite tail expression still hits exec timeout", r.stderr.includes("timeout"), r.stderr.trim().slice(0, 80));
+
   // F3: context is an ordinary variable — rebinds persist, deletion re-injects the original.
   r = await sandbox.exec("context = 'changed'");
   r = await sandbox.exec("print(context)");
