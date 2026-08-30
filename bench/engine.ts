@@ -111,9 +111,11 @@ export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts
     baseUrl: "https://openrouter.ai/api/v1",
     reasoning: opts?.reasoning !== undefined,
     input: ["text"] as const,
+    // pi-ai's calculateCost expects rates in USD per MILLION tokens; OpenRouter prices are
+    // USD per token — convert here, at the only place units meet (×1e6, not ÷).
     cost: {
-      input: opts?.pricing?.inputPerToken ?? 0,
-      output: opts?.pricing?.outputPerToken ?? 0,
+      input: (opts?.pricing?.inputPerToken ?? 0) * 1_000_000,
+      output: (opts?.pricing?.outputPerToken ?? 0) * 1_000_000,
       cacheRead: 0,
       cacheWrite: 0,
     },
