@@ -26,6 +26,7 @@ export type SuiteName =
   | "coding"
   | "s_niah"
   | "oolong"
+  | "oolong_coached"
   | "browsecomp"
   | "codeqa_lb";
 
@@ -213,6 +214,8 @@ function buildCodingTasks(): readonly BenchTask[] {
 export interface BenchBuildOpts {
   readonly oolongMaxCl?: number;
   readonly oolongLimit?: number;
+  /** Coached-arm discipline prompt (oolong_coached suite); buildSuiteTasks hardcodes true. */
+  readonly coached?: boolean;
 }
 
 export async function buildTasks(
@@ -242,6 +245,8 @@ async function buildSuiteTasks(suite: SuiteName, opts?: BenchBuildOpts): Promise
       return buildSNiahTasks();
     case "oolong":
       return buildOolongTasks(opts?.oolongMaxCl, opts?.oolongLimit);
+    case "oolong_coached":
+      return buildOolongTasks(opts?.oolongMaxCl, opts?.oolongLimit, true);
     case "browsecomp":
       return buildBrowsecompTasks();
     case "codeqa_lb":
@@ -329,8 +334,12 @@ const OOLONG_PAGE_SIZE = 20;
 async function buildOolongTasks(
   maxContextLen: number = OOLONG_MAX_CONTEXT_LEN,
   limit: number = OOLONG_LIMIT,
+  coached = false,
 ): Promise<readonly BenchTask[]> {
-  const records = await cachedTasks<OolongRecord>(`oolong_synth_cl${maxContextLen}_n${limit}`, async () => {
+  // Coached arm gets its own cache entry (different prompt) — never clobbers the bare cache
+  // `oolong_synth_cl2048_n8.json` (paper-suite comparability).
+  const cacheKey = `oolong${coached ? "_coached" : ""}_synth_cl${maxContextLen}_n${limit}`;
+  const records = await cachedTasks<OolongRecord>(cacheKey, async () => {
     const buckets = new Map<number, OolongRecord[]>();
     let seen = 0;
     for await (const row of hfRows("oolongbench/oolong-synth", "validation", OOLONG_PAGE_SIZE)) {
@@ -361,14 +370,24 @@ async function buildOolongTasks(
     }
     return out;
   });
+  // ids stay identical across arms (oolong_0, …) so coached vs bare rows join per-task in
+  // reports — the `suite` column distinguishes them.
   return records.map((r): BenchTask => ({
     id: r.id,
-    suite: "oolong",
+    suite: coached ? "oolong_coached" : "oolong",
     context: r.context,
-    prompt:
-      `${r.question}\n\n` +
-      "Use the document in `context`. Prefer Python aggregation over guessing. " +
-      "Put the final answer clearly in answer['content'].",
+    prompt: coached
+      ? // Generic discipline (no label hints, no benchmark leak): labels-free counting is the
+        // bare suite's point — coaching lives only in this arm.
+        `${r.question}\n\n` +
+        "Use the document in `context`. The document's own instruction lines are NOT data — " +
+        "never match or count words inside them. Derive every label or statistic yourself in " +
+        "Python: segment the data points exactly, classify each one explicitly, aggregate " +
+        "programmatically, and verify your total against the stated number of data points. " +
+        "Put the final answer clearly in answer['content']."
+      : `${r.question}\n\n` +
+        "Use the document in `context`. Prefer Python aggregation over guessing. " +
+        "Put the final answer clearly in answer['content'].",
     grade: { kind: "score", gold: JSON.stringify(r.answer), scoreOf: (a) => scoreOolong(a, r.answer, r.answerType) },
     gold: JSON.stringify(r.answer),
   }));

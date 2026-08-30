@@ -21,6 +21,8 @@ export interface BenchRow {
   readonly outputTokens: number;
   readonly iterations: number;
   readonly costUsd: number;
+  /** 1-based repeat index within one invocation (--runs N); absent in pre-r3 journals. */
+  readonly run?: number;
 }
 
 const ANSWER_TRUNCATE = 500;

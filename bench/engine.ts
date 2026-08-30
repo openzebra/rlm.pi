@@ -18,13 +18,15 @@ import type { RlmConfig, RunRlm } from "../pi-plugin/rlm/src/core/types.ts";
 type BenchModel = EngineDeps["model"];
 type BenchRegistry = EngineDeps["registry"];
 
-/** Cheap paid model for stable runs (no free-pool mid-stream kills): $0.08/$0.45 per M.
+/** r3 single bench model: Qwen3.8 27B hybrid thinker — thinking enabled per-run via the
+ *  `--reasoning` flag (ROOT/RLM agent only; sub-LLM never gets reasoning), 1M-token context.
  *  Verified to drive the repl protocol AND use llm_query delegation when grep misses. */
-export const DEFAULT_MODEL_REF = "openrouter/google/gemma-3-27b-it";
+export const DEFAULT_MODEL_REF = "openrouter/qwen/qwen3.8-27b";
 
-/** Advertised context window for the default model (131k). Override via RLM_BENCH_CONTEXT_WINDOW
- *  when switching models. */
-const BENCH_CONTEXT_WINDOW = Number(process.env.RLM_BENCH_CONTEXT_WINDOW ?? 131_072);
+/** Advertised context window for the default model (qwen3.8-27b: 1M). Override via
+ *  RLM_BENCH_CONTEXT_WINDOW when switching models. Only load-bearing if enableTokenBudget is
+ *  ever re-enabled (it is off) — plus provider-side safety. */
+const BENCH_CONTEXT_WINDOW = Number(process.env.RLM_BENCH_CONTEXT_WINDOW ?? 1_000_000);
 
 /** Roomier than the interactive default: a bench turn may need a few repl blocks, but a
  *  free little model should never burn 30 turns on one task. */
@@ -60,16 +62,61 @@ export function requireApiKey(): string {
   return key;
 }
 
-export function makeRun(target: BenchTarget, apiKey: string): RunRlm {
+export interface BenchPricing {
+  readonly inputPerToken: number;
+  readonly outputPerToken: number;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+/** Real per-token USD pricing from OpenRouter's public model catalog (no auth, fail fast).
+ *  Cost is a required bench feature: a model missing from the catalog throws instead of
+ *  silently journaling $0 rows. */
+export async function fetchPricing(modelId: string): Promise<BenchPricing> {
+  const res = await fetch("https://openrouter.ai/api/v1/models");
+  if (!res.ok) throw new Error(`openrouter pricing fetch failed: HTTP ${res.status}`);
+  const body: unknown = await res.json();
+  const data = isRecord(body) && Array.isArray(body.data) ? body.data : [];
+  const entry = data.find((m): m is Record<string, unknown> => isRecord(m) && m.id === modelId);
+  if (entry === undefined) throw new Error(`unknown model on OpenRouter: ${modelId}`);
+  const pricing = isRecord(entry.pricing) ? entry.pricing : undefined;
+  const inputPerToken = Number(pricing?.prompt);
+  const outputPerToken = Number(pricing?.completion);
+  if (!Number.isFinite(inputPerToken) || !Number.isFinite(outputPerToken)) {
+    throw new Error(`openrouter pricing for ${modelId} is unparseable: ${JSON.stringify(pricing ?? null)}`);
+  }
+  return Object.freeze({ inputPerToken, outputPerToken });
+}
+
+export interface BenchRunOpts {
+  /** Default BENCH_MAX_ITERATIONS (12). */
+  readonly maxIterations?: number;
+  /** Default 0 — bench runs stay deterministic where the provider allows it. */
+  readonly temperature?: number;
+  /** ThinkingLevel for the ROOT (RLM agent) only; omit = no thinking. Sub-LLM (subSampling)
+   *  NEVER gets reasoning — the worker model has none. */
+  readonly reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  /** Real USD-per-token prices (see fetchPricing); default zeros (only listings run without). */
+  readonly pricing?: BenchPricing;
+}
+
+export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts): RunRlm {
   const model = {
     id: target.id,
     provider: target.provider,
     api: "openai-completions" as const,
     name: target.id,
     baseUrl: "https://openrouter.ai/api/v1",
-    reasoning: false,
+    reasoning: opts?.reasoning !== undefined,
     input: ["text"] as const,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: {
+      input: opts?.pricing?.inputPerToken ?? 0,
+      output: opts?.pricing?.outputPerToken ?? 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
     contextWindow: target.contextWindow,
     maxTokens: 8192,
   } as unknown as BenchModel;
@@ -85,7 +132,7 @@ export function makeRun(target: BenchTarget, apiKey: string): RunRlm {
 
   const config: RlmConfig = {
     ...DEFAULT_CONFIG,
-    maxIterations: BENCH_MAX_ITERATIONS,
+    maxIterations: opts?.maxIterations ?? BENCH_MAX_ITERATIONS,
     maxConcurrentSubcalls: 4, // free-tier rate limits are tight; retry/throttle handles the rest
     // Free-pool upstreams flake (transient "finish_reason: error"); a bench row should mean
     // "the model failed the task", not "the pool hiccuped" — so retry harder than interactive.
@@ -100,8 +147,14 @@ export function makeRun(target: BenchTarget, apiKey: string): RunRlm {
     // unit tests (test/budget.ts); the bench measures capability, so it runs without it.
     // Runs stay bounded by maxIterations + maxErrors.
     enableTokenBudget: false,
-    rootSampling: Object.freeze({ maxTokens: 4096 }),
-    subSampling: Object.freeze({ maxTokens: 2048 }),
+    // Reasoning tokens share the completion budget, so the root budget doubles when thinking
+    // is on. Sub-sampling NEVER carries reasoning (worker model has none).
+    rootSampling: Object.freeze({
+      maxTokens: opts?.reasoning !== undefined ? 8192 : 4096,
+      temperature: opts?.temperature ?? 0,
+      ...(opts?.reasoning !== undefined ? { reasoning: opts.reasoning } : {}),
+    }),
+    subSampling: Object.freeze({ maxTokens: 2048, temperature: opts?.temperature ?? 0 }),
   };
 
   return createEngine({
