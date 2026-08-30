@@ -235,7 +235,10 @@ def grep_context(
     `counts` is complete even when `hits` is capped.
     """
     try:
-        rx = re.compile(pattern)
+        # MULTILINE: the doc-level gate below must not veto line-anchored patterns (^/$) —
+        # without it, `^foo` on a multi-line doc never matches outside position 0 and every
+        # line hit is silently filtered out (grep is line-oriented; match that).
+        rx = re.compile(pattern, re.MULTILINE)
     except re.error as e:
         return {"hits": [], "counts": {}, "total": 0, "truncated": False, "error": f"bad regex: {e}"}
     try:

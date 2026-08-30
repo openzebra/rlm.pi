@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Extended `oolong` bench suite.** `bench/run.ts --suite oolong` now takes `--oolong-max-cl <n>`
+  (context_len cap in dataset units; default 2048 = lab paper run) and `--oolong-limit <n>`
+  (task count; default 8). The dataset (`oolongbench/oolong-synth` validation, 1300 rows) spans
+  context_len 1024 → 4,194,304 with task_groups counting / user / timeline; extended runs select
+  tasks round-robin across context_len buckets so longer lengths and all groups are covered
+  (the old code only ever took the first ≤2048 rows). Selection is deterministic per
+  `oolong_synth_cl<max>_n<limit>` cache file; the default cache (`…_cl2048_n8`) is unchanged, so
+  `--suite paper` results stay comparable. The scorer already handles every answer_type found at
+  longer buckets (label / numeric / list-containment fallback). Example:
+  `bun run bench/run.ts --suite oolong --oolong-max-cl 65536 --oolong-limit 24` (~40k tok of
+  context per 65536-unit task).
+- **`bench/debug-task.ts` — single-task post-mortem runner.** Re-runs one bench task with full
+  engine tracing (`RLM_TRACE_FILE`) so failed rows can be dissected call-by-call without
+  re-running a suite: `RLM_TRACE_FILE=/tmp/t.jsonl bun run bench/debug-task.ts <model-ref> <taskId> [--ext]`.
+- **Sandbox trace carries payloads.** With `RLM_TRACE_FILE` set, `frame.out` now includes exec
+  `code` (400-char prefix) and `frame.in` responses include `stdout` / `finalAnswer` / var count —
+  matching what repl-tool already traced, so headless bench runs are dissectible too.
+
+### Fixed
+
+- **`grep_context` doc-level gate vetoed line-anchored patterns.** The whole-document
+  `rx.search(content)` pre-gate ran without `re.MULTILINE`, so `^foo` / `^.*$` never matched past
+  position 0 of a multi-line context and every line hit was silently dropped (observed live: a
+  bench model burned a turn on `grep_context(r'^.*$') → 0 hits`). The regex now compiles with
+  `re.MULTILINE` — grep-style line semantics; per-line scanning unchanged; phase-retrieval green.
+
 ## [0.3.15] — 2026-08-30
 
 ### Added

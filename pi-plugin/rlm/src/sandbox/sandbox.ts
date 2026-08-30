@@ -344,6 +344,8 @@ export class PythonSandbox {
         frame: msg.type,
         id: "id" in msg ? msg.id : undefined,
         rid: "rid" in msg ? msg.rid : undefined,
+        // Post-mortem needs the payload, not just the shape (mirrors repl-tool's 400-char cap).
+        ...(msg.type === "exec" ? { chars: msg.code.length, code: msg.code.slice(0, 400) } : {}),
       });
     }
     // Never write to a corpse. The write would fail asynchronously and, historically, take the
@@ -423,7 +425,18 @@ export class PythonSandbox {
           prompts: "prompts" in msg ? msg.prompts?.length : 1,
         });
       } else {
-        trace("frame.in", { frame: "response", id: msg.id, ok: msg.ok });
+        trace("frame.in", {
+          frame: "response",
+          id: msg.id,
+          ok: msg.ok,
+          ...(msg.ok
+            ? {
+                stdout: msg.stdout?.slice(0, 300),
+                finalAnswer: msg.final_answer ?? undefined,
+                vars: msg.var_names?.length,
+              }
+            : { error: msg.error?.slice(0, 200) }),
+        });
       }
     }
     if (isInterrupt(msg)) {

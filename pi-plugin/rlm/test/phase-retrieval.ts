@@ -110,6 +110,22 @@ async function main(): Promise<void> {
     r = await sandbox.exec('print(json.dumps(len(grep_context(r"^## ", k=10, path_glob="docs/*")["hits"])))');
     check("grep_context honours path_glob", parsePrinted(r.stdout) === 2, r.stdout.trim());
 
+    // BUG-1 regression: the document-level gate must compile line-anchored patterns with
+    // re.MULTILINE — ^Date:-style patterns must hit non-first lines of a multi-line doc
+    // instead of silently vetoing it (called via retrieval.grep_context with explicit entries
+    // for a controlled multi-line document).
+    r = await sandbox.exec(
+      'import retrieval\n'
+      + 'entries = [("<context>", "The following lines contain 10 messages, spam or ham.\\n\\n'
+      + 'Date: Dec 28, 2022 || Instance: hello\\nDate: Jul 28, 2024 || Instance: world")]\n'
+      + 'print(json.dumps({"date": retrieval.grep_context(entries, r"^Date:")["total"], '
+      + '"anyline": retrieval.grep_context(entries, r"^.*$")["total"], '
+      + '"plain": retrieval.grep_context(entries, "Instance: world")["total"]}))',
+    );
+    const gm = parsePrinted(r.stdout) as { date?: number; anyline?: number; plain?: number } | undefined;
+    check("grep_context doc gate passes line-anchored patterns on multi-line docs (BUG-1)",
+      gm?.date === 2 && gm?.anyline === 4 && gm?.plain === 1, r.stdout.trim());
+
     // ── outline ──────────────────────────────────────────────────────────────────────────
     r = await sandbox.exec('print(json.dumps(outline("engine.ts")))');
     const outline = String(parsePrinted(r.stdout) ?? "");

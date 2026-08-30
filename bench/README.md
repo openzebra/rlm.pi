@@ -20,7 +20,7 @@ on first use and cache in `bench/data/`, gitignored — delete a file to refetch
 | Suite | Task | Source dataset | Scoring |
 |-------|------|----------------|---------|
 | `s_niah` | Single needle at 8k/16k/32k/64k-char buckets (n=4) | synthetic (seed 42) | substring recall |
-| `oolong` | Aggregation questions over synth records, `context_len ≤ 2048` (n=8) | `oolongbench/oolong-synth` | label / numeric / list heuristic (0–1) |
+| `oolong` | Aggregation questions over synth records, `context_len ≤ 2048` (n=8); extendable via `--oolong-max-cl` / `--oolong-limit` (rows round-robin across context_len buckets) | `oolongbench/oolong-synth` | label / numeric / list heuristic (0–1) |
 | `browsecomp` | Deep-research QA: decrypted query + gold/evidence + ≤20 negatives, ≤400k chars (n=4) | `Tevatron/browsecomp-plus` | containment or token-overlap (0–1) |
 | `codeqa_lb` | LongBench-v2 code-repo MCQ, short/medium, ≤200k chars (n=3) | `THUDM/LongBench-v2` | exact letter A–D |
 
@@ -41,6 +41,8 @@ bun run bench/run.ts                       # lite suites, default free model
 bun run bench/run.ts --suite needle        # needle|codeqa|coding (offline)
 bun run bench/run.ts --suite paper         # s_niah + oolong + browsecomp + codeqa_lb (downloads data on first run)
 bun run bench/run.ts --suite s_niah        # one paper suite
+bun run bench/run.ts --suite oolong --oolong-max-cl 65536 --oolong-limit 24
+                                           # extended oolong: cap context_len units, more tasks
 bun run bench/run.ts --limit 1             # first task per suite
 bun run bench/run.ts --list                # offline: print tasks, no engine
 bun run bench/run.ts --model openrouter/google/gemma-4-31b-it:free

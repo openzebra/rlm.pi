@@ -13,6 +13,8 @@
  *   bun run bench/run.ts                      # all suites
  *   bun run bench/run.ts --suite needle       # one suite: needle|codeqa|coding|all
  *   bun run bench/run.ts --limit 1            # first task per suite only
+ *   bun run bench/run.ts --suite oolong --oolong-max-cl 65536 --oolong-limit 24
+ *                                             # extended oolong: context_len cap / task count
  *   bun run bench/run.ts --model openrouter/google/gemma-4-31b-it:free
  *   bun run bench/run.ts --list               # print tasks + context sizes, no engine
  *
@@ -30,6 +32,8 @@ interface Args {
   readonly limit?: number;
   readonly model?: string;
   readonly journal?: string;
+  readonly oolongMaxCl?: number;
+  readonly oolongLimit?: number;
   readonly list: boolean;
 }
 
@@ -38,6 +42,8 @@ function parseArgs(argv: readonly string[]): Args {
   let limit: number | undefined;
   let model: string | undefined;
   let journal: string | undefined;
+  let oolongMaxCl: number | undefined;
+  let oolongLimit: number | undefined;
   let list = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -57,6 +63,14 @@ function parseArgs(argv: readonly string[]): Args {
       const v = Number(next());
       if (!Number.isInteger(v) || v < 1) throw new Error(`--limit must be a positive integer`);
       limit = v;
+    } else if (a === "--oolong-max-cl") {
+      const v = Number(next());
+      if (!Number.isInteger(v) || v < 1) throw new Error(`--oolong-max-cl must be a positive integer`);
+      oolongMaxCl = v;
+    } else if (a === "--oolong-limit") {
+      const v = Number(next());
+      if (!Number.isInteger(v) || v < 1) throw new Error(`--oolong-limit must be a positive integer`);
+      oolongLimit = v;
     } else if (a === "--model") {
       model = next();
     } else if (a === "--journal") {
@@ -67,7 +81,7 @@ function parseArgs(argv: readonly string[]): Args {
       throw new Error(`unknown argument: ${a}`);
     }
   }
-  return { suite, limit, model, journal, list };
+  return { suite, limit, model, journal, oolongMaxCl, oolongLimit, list };
 }
 
 function printTasks(tasks: readonly BenchTask[]): void {
@@ -112,7 +126,10 @@ async function runTaskWithRetries(run: RunRlm, task: BenchTask): Promise<Partial
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const tasks = await buildTasks(args.suite, args.limit);
+  const tasks = await buildTasks(args.suite, args.limit, {
+    oolongMaxCl: args.oolongMaxCl,
+    oolongLimit: args.oolongLimit,
+  });
 
   if (args.list) {
     printTasks(tasks);
@@ -124,7 +141,11 @@ async function main(): Promise<void> {
   const run = makeRun(target, apiKey);
   const journalPath = args.journal ?? `bench/runs/bench-${Date.now()}.jsonl`;
 
-  console.log(`rlm bench  model=${target.ref}  suite=${args.suite}${args.limit !== undefined ? ` limit=${args.limit}` : ""}  journal=${journalPath}`);
+  // GAP-4: record effective oolong selection opts in the header (journal schema unchanged).
+  const oolongOpts = args.oolongMaxCl !== undefined || args.oolongLimit !== undefined
+    ? `  oolong(max-cl=${args.oolongMaxCl ?? "default"}, limit=${args.oolongLimit ?? "default"})`
+    : "";
+  console.log(`rlm bench  model=${target.ref}  suite=${args.suite}${args.limit !== undefined ? ` limit=${args.limit}` : ""}${oolongOpts}  journal=${journalPath}`);
 
   const rows: BenchRow[] = [];
   for (const task of tasks) {

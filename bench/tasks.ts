@@ -210,21 +210,27 @@ function buildCodingTasks(): readonly BenchTask[] {
 
 // ------------------------------------------------------------------ api ----
 
+export interface BenchBuildOpts {
+  readonly oolongMaxCl?: number;
+  readonly oolongLimit?: number;
+}
+
 export async function buildTasks(
   suite: SuiteName | "all" | "paper",
   limit?: number,
+  opts?: BenchBuildOpts,
 ): Promise<readonly BenchTask[]> {
   const suites: readonly (SuiteName | "paper")[] =
     suite === "all" ? ["needle", "codeqa", "coding"] : suite === "paper" ? ["s_niah", "oolong", "browsecomp", "codeqa_lb"] : [suite];
   const tasks: BenchTask[] = [];
   for (const s of suites) {
-    const built = s === "paper" ? [] : await buildSuiteTasks(s);
+    const built = s === "paper" ? [] : await buildSuiteTasks(s, opts);
     tasks.push(...(limit !== undefined ? built.slice(0, limit) : built));
   }
   return tasks;
 }
 
-async function buildSuiteTasks(suite: SuiteName): Promise<readonly BenchTask[]> {
+async function buildSuiteTasks(suite: SuiteName, opts?: BenchBuildOpts): Promise<readonly BenchTask[]> {
   switch (suite) {
     case "needle":
       return buildNeedleTasks();
@@ -235,7 +241,7 @@ async function buildSuiteTasks(suite: SuiteName): Promise<readonly BenchTask[]> 
     case "s_niah":
       return buildSNiahTasks();
     case "oolong":
-      return buildOolongTasks();
+      return buildOolongTasks(opts?.oolongMaxCl, opts?.oolongLimit);
     case "browsecomp":
       return buildBrowsecompTasks();
     case "codeqa_lb":
@@ -311,17 +317,30 @@ interface OolongRecord {
 
 const OOLONG_MAX_CONTEXT_LEN = 2048; // lab paper run: context_len ≤ 2048 units
 const OOLONG_LIMIT = 8;
+/** Rows here are ≤ ~160 KB at cl 65536 (vs browsecomp's multi-MB docs) — bigger pages are safe
+ *  and cut request count ~4×, well under the datasets-server rate limit. */
+const OOLONG_PAGE_SIZE = 20;
 
-async function buildOolongTasks(): Promise<readonly BenchTask[]> {
-  const records = await cachedTasks<OolongRecord>("oolong_synth_cl2048_n8", async () => {
-    const out: OolongRecord[] = [];
-    for await (const row of hfRows("oolongbench/oolong-synth", "validation")) {
+/**
+ * Extended runs (`--oolong-max-cl` / `--oolong-limit`): rows stream in ascending context_len,
+ * so selection round-robins across context_len buckets — spread over lengths (and, via stream
+ * order, task_groups) instead of only the smallest bucket. Deterministic per cache key.
+ */
+async function buildOolongTasks(
+  maxContextLen: number = OOLONG_MAX_CONTEXT_LEN,
+  limit: number = OOLONG_LIMIT,
+): Promise<readonly BenchTask[]> {
+  const records = await cachedTasks<OolongRecord>(`oolong_synth_cl${maxContextLen}_n${limit}`, async () => {
+    const buckets = new Map<number, OolongRecord[]>();
+    let seen = 0;
+    for await (const row of hfRows("oolongbench/oolong-synth", "validation", OOLONG_PAGE_SIZE)) {
       const contextLen = typeof row.context_len === "number" ? row.context_len : Number(row.context_len ?? 0);
-      if (!(contextLen <= OOLONG_MAX_CONTEXT_LEN)) continue;
+      if (!(contextLen <= maxContextLen)) continue;
       const context = asStr(row.context_window_text);
       if (!context) continue;
-      out.push({
-        id: asStr(row.id) || `oolong_${out.length}`,
+      const bucket = buckets.get(contextLen) ?? [];
+      bucket.push({
+        id: asStr(row.id) || `oolong_${seen++}`,
         context,
         question: asStr(row.question),
         answer: row.answer,
@@ -329,7 +348,16 @@ async function buildOolongTasks(): Promise<readonly BenchTask[]> {
         taskGroup: asStr(row.task_group),
         contextLen,
       });
-      if (out.length >= OOLONG_LIMIT) break;
+      buckets.set(contextLen, bucket);
+    }
+    const lengths = [...buckets.keys()].sort((a, b) => a - b);
+    const out: OolongRecord[] = [];
+    while (out.length < limit && lengths.some((len) => (buckets.get(len)?.length ?? 0) > 0)) {
+      for (const len of lengths) {
+        const rec = buckets.get(len)?.shift();
+        if (rec !== undefined) out.push(rec);
+        if (out.length >= limit) break;
+      }
     }
     return out;
   });
