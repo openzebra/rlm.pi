@@ -17,7 +17,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { Grade } from "./grade.ts";
-import { asStr, cachedTasks, hfRows, type HfRow } from "./data.ts";
+import { asStr, cachedTasks, hfRows, readCachedTasks, type HfRow } from "./data.ts";
 import { extractMcLetter, scoreBrowsecomp, scoreOolong } from "./scorers.ts";
 
 export type SuiteName =
@@ -337,18 +337,26 @@ async function buildOolongTasks(
   coached = false,
 ): Promise<readonly BenchTask[]> {
   // Coached arm gets its own cache entry (different prompt) — never clobbers the bare cache
-  // `oolong_synth_cl2048_n8.json` (paper-suite comparability).
+  // `oolong_synth_cl${maxContextLen}_n${limit}.json` (paper-suite comparability).
+  const bareKey = `oolong_synth_cl${maxContextLen}_n${limit}`;
   const cacheKey = `oolong${coached ? "_coached" : ""}_synth_cl${maxContextLen}_n${limit}`;
   const records = await cachedTasks<OolongRecord>(cacheKey, async () => {
-    const buckets = new Map<number, OolongRecord[]>();
+    // The coached arm must serve the SAME rows as the bare arm (ids stay identical so rows
+    // join per-task in reports — plan §2.4). The bare cache is the source of truth for that
+    // selection; take-first-in-stream is the deterministic fallback that reproduces it.
+    // Round-robin is an ext-flags feature and would pick different ids on a fresh build.
+    if (coached) {
+      const bare = readCachedTasks<OolongRecord>(bareKey);
+      if (bare !== undefined && bare.length > 0) return bare.slice(0, limit);
+    }
+    const candidates: OolongRecord[] = [];
     let seen = 0;
     for await (const row of hfRows("oolongbench/oolong-synth", "validation", OOLONG_PAGE_SIZE)) {
       const contextLen = typeof row.context_len === "number" ? row.context_len : Number(row.context_len ?? 0);
       if (!(contextLen <= maxContextLen)) continue;
       const context = asStr(row.context_window_text);
       if (!context) continue;
-      const bucket = buckets.get(contextLen) ?? [];
-      bucket.push({
+      candidates.push({
         id: asStr(row.id) || `oolong_${seen++}`,
         context,
         question: asStr(row.question),
@@ -357,7 +365,13 @@ async function buildOolongTasks(
         taskGroup: asStr(row.task_group),
         contextLen,
       });
-      buckets.set(contextLen, bucket);
+    }
+    if (coached) return candidates.slice(0, limit);
+    const buckets = new Map<number, OolongRecord[]>();
+    for (const rec of candidates) {
+      const bucket = buckets.get(rec.contextLen) ?? [];
+      bucket.push(rec);
+      buckets.set(rec.contextLen, bucket);
     }
     const lengths = [...buckets.keys()].sort((a, b) => a - b);
     const out: OolongRecord[] = [];
