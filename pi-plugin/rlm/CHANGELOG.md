@@ -26,6 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sandbox trace carries payloads.** With `RLM_TRACE_FILE` set, `frame.out` now includes exec
   `code` (400-char prefix) and `frame.in` responses include `stdout` / `finalAnswer` / var count —
   matching what repl-tool already traced, so headless bench runs are dissectible too.
+- **Bench r3: single model, real cost, sampling knobs, repeat runs.** `bench/` now defaults to
+  `openrouter/qwen/qwen3.8-27b` (hybrid thinker, 1M ctx) as the one bench model. `fetchPricing()`
+  pulls real USD/token prices from OpenRouter's public catalog (fail-fast — silent $0 rows are
+  forbidden) and every run prints token in/out + `$` totals plus a per-task stability table.
+  New flags: `--runs N` (pooled repeats, 1-based `run` field in journal rows),
+  `--temperature` (default 0 — provider-default sampling produced a 40% flip rate between
+  identical runs), `--max-iterations` (default 12), `--reasoning <level>` (root/RLM agent only;
+  doubles the root token budget while thinking; `subSampling` never gets reasoning).
+  New aggregate tool `bench/report.ts <journals…>`: (suite, model) summary, per-task × journal
+  matrix with oolong cache join (group/answerType), ceiling-cluster flag, `--by-run` split.
+  New `oolong_coached` suite arm — identical tasks/ids to `oolong` (served from the bare cache
+  as source of truth) with a disciplining prompt, to quantify the coaching delta honestly.
+- **r3 results (qwen3.8-27b, temp 0, `--runs 3`, journals in `bench/runs/r3-*`):** bare 22/24,
+  ext cl≤8192 18/18, coached 24/24, thinking 22/24, thinking+`--max-iterations 16` 24/24 —
+  coaching and thinking+it16 both reach all-stable; total spend $1.74. For context, the old
+  qwen3-30b-instruct at provider-default temperature pooled 71% with a 40% flip rate, and the
+  old "ceiling cluster" (oolong_2/3/4, 17–33% pooled) is gone (92–100%).
 
 ### Fixed
 
@@ -34,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position 0 of a multi-line context and every line hit was silently dropped (observed live: a
   bench model burned a turn on `grep_context(r'^.*$') → 0 hits`). The regex now compiles with
   `re.MULTILINE` — grep-style line semantics; per-line scanning unchanged; phase-retrieval green.
+- **Bench cost was always $0.** pi-ai's `calculateCost` expects model rates in USD per **million**
+  tokens, but the bench fed OpenRouter's per-token prices straight in — a million-fold understating,
+  i.e. every historical `costUsd` was 0. Convert ×1e6 at the `model.cost` assembly; smoke: 32,214 in /
+  3,595 out → $0.0229 (was $0.0000).
 
 ## [0.3.15] — 2026-08-30
 
