@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.15] — 2026-08-30
+
 ### Added
 
 - **`bench/` — first-party e2e benchmark harness for THIS repo's engine** (task suites, fixtures,
@@ -16,21 +18,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `browsecomp` / `codeqa_lb` (LongBench-v2) with the lab's scorers ported 1:1. Paper-tier
   datasets auto-download from the public HF datasets-server on first use and cache in
   `bench/data/` (gitignored); **run journals live in `bench/runs/*.jsonl` and are committed —
-  they are the results history**, with the aggregate written to `bench/RESULTS.md` per run.
+  they are the results history** — journal only, no aggregate report is written.
   Run: `OPENROUTER_API_KEY=… bun run bench` (`--suite all|paper|…`, `--limit`, `--model`,
   `--journal`, `--list`). Runner retries tasks 4× / 15 s so a row means "model failed the
-  task", not "free-pool hiccuped". First results (see `bench/runs/`): lite 7/7 on
-  `cohere/north-mini-code:free`; paper OOLONG 0.625 on `google/gemma-3-27b-it` — matching the
-  lab's 0.62.
+  task", not "free-pool hiccuped". Latest lite-suite results (7 tasks × 2 passes):
+  `qwen/qwen3-30b-a3b-instruct-2507` **14/14 (100 %)**, `google/gemma-3-27b-it` 12/14,
+  `mistralai/mistral-small-3.2-24b-instruct` 12/14 — see the README Benchmarks section;
+  full per-task history in `bench/runs/`.
 - **Token in/out split across the whole tree UI.** `SubcallUpdatedEvent` / `RootUsageEvent`
   carry `tokensIn` / `tokensOut` deltas; `SubcallStore` accumulates them per node, in grand
   totals, and subtracts them in `takeSettledSubtrees`; `RlmDetails` / `RunSnapshot` / tree rows
   and groups thread them through; rows and card headers render `190.2k↑ 18.6k↓ tok`
   (`formatTokensSplit`, plain `N tok` fallback when output is zero). `Usage` always had the
   split — it was collapsed to `totalTokens` on the way to the display.
+- **Retrieval-discipline coach nudge.** After two retrieval-free turns the engine injects a
+  one-shot `[coach]` note through the turn-prompt gate: the context is not in the chat, call
+  `search()` / `grep_context()` now (`RETRIEVAL_NUDGE` in `prompts/user.ts`, firing policy in
+  `core/engine.ts`). gemma-3-27b passed `needle_1_short` for the first time after this.
 
 ### Fixed
 
+- **```python / untagged fences are accepted as a ```repl fallback.** Small instruct models
+  finalize inside ```python blocks; `findReplBlocks` returned `[]` and the engine burned to
+  the iteration cap discarding finished answers (mistral-small-3.2-24b: 29 % → 93 % on the
+  lite suite). ```repl-tagged blocks always take precedence; non-code tags (`text`, `json`,
+  `js`, …) are never executed.
+- **`search()` snippets center on the earliest matched term.** BM25 returned the chunk's
+  first 400 characters regardless of where the match sat, so hits deeper in a chunk surfaced
+  as visible padding (models answered `access_code=; backup_code=` with empty values). The
+  window is capped at `_SNIPPET_CHARS` with `...` markers on clipped edges; `grep_context`
+  already windowed around matches and is unchanged.
+- **`finalize()` executes its repl blocks; empty `ready` captures can no longer end a run.**
+  The finalize turn's fenced block was recorded verbatim as the run answer instead of being
+  executed; and flipping `answer["ready"] = True` with empty content fired the capture,
+  terminating runs mid-flight with `""`. finalize now extracts + executes blocks and prefers
+  the captured content; blank captures are deferred worker-side and ignored by
+  `finalAnswerOf()`.
+- **Jupyter-style auto-echo of the last bare expression.** Plain `exec()` discarded a
+  trailing bare expression's value — models universally write `search("...")` without
+  `print()`, saw empty stdout, and concluded the context had no match (qwen: 4 needle
+  failures; lite suite 71 % → **100 %** after the fix). The block's head statements are
+  exec'd, the trailing expression is eval'd and `repr()`-printed when not None, inside the
+  existing SIGALRM timeout; explicit prints, assignments and `None` results behave as before.
 - **OpenRouter upstream stream kills are now retried.** Free/cheap providers abort generations
   mid-stream with `finish_reason: "error"` (observed from Cohere's pool: no message, no code,
   partial usage; HTTP 200). pi-ai maps that to the generic `Provider finish_reason: error`
