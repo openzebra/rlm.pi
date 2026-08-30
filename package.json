@@ -18,5 +18,8 @@
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "undici": "^8.9.0"
   }
 }
