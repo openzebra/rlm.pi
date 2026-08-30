@@ -125,6 +125,8 @@ export class RunRegistry {
         rootPhase: entry.rootPhase(),
         rootModel: entry.rootModel(),
         rootTokens: entry.rootTokens(),
+        rootTokensIn: entry.rootTokensIn(),
+        rootTokensOut: entry.rootTokensOut(),
         subcalls: entry.subcalls(),
       });
     }
