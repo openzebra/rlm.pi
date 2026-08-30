@@ -157,6 +157,38 @@ rm -rf ~/.pi/agent/extensions/rlm
   连续错误上限。
 - **信任**：本地安装需要 Pi 项目信任。
 
+## 基准测试
+
+针对 OpenRouter 聊天模型对真实引擎进行端到端测试 —— 精简套件（`needle` 多针召回、
+`codeqa` 代码库问答、`coding` 修复任务；每个模型 7 个任务 × 2 轮）。确定性评分
+（召回率 / 标准答案包含 / 正则），无 LLM 评审。
+
+最新结果 —— 小型模型（≤32B 参数，付费额度）：
+
+| 模型 | 参数 | 得分 | 准确率 | 每任务延迟 |
+|------|------|------|--------|------------|
+| `qwen/qwen3-30b-a3b-instruct-2507` | MoE 30B / 3B 激活 | **14/14** | **100%** | ~15s |
+| `google/gemma-3-27b-it` | dense 27B | 12/14 | 86% | ~26s |
+| `mistralai/mistral-small-3.2-24b-instruct` | dense 24B | 12/14 | 86% | ~28s |
+
+逐任务原始数据（正确性、召回率、延迟、token、成本）位于 `bench/runs/bench-<ts>.jsonl`
+—— 每个任务一行 JSONL，作为历史记录提交。
+
+### 运行基准测试
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...        # 必需 —— 密钥仅通过环境变量传递
+
+bun run bench                              # 精简套件：needle + codeqa + coding
+bun run bench --suite needle --limit 1     # 单个套件，仅第一个任务
+bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
+bun run bench --list                       # 仅列出任务，无需引擎和密钥
+bun run bench --suite paper                # paper 套件：s_niah, oolong, browsecomp, codeqa_lb（需下载数据集）
+```
+
+套件：`all`（精简版，默认） · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
+`oolong` · `browsecomp` · `codeqa_lb`。
+
 ## 项目布局
 
 ```

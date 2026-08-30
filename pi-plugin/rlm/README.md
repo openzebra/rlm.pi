@@ -144,19 +144,35 @@ delegating only when their task genuinely decomposes further.
 
 ## Benchmarks
 
-Tested against `rlm-lab` prompt bake-off and full dual-mode RLM runtime benchmarks
-on `poolside/laguna-xs-2.1:free` (a free ~32B model):
+E2E runs of the real engine against OpenRouter chat models — the lite suite
+(`needle` multi-needle recall, `codeqa` repo-QA, `coding` fix task; 7 tasks × 2 passes
+per model). Deterministic graders (recall / gold containment / regex), no LLM-as-judge.
 
-| Benchmark | Mode | Result |
-|-----------|------|--------|
-| Main orchestrator (7 scenarios) | prompt bake-off | **0.958** mean score (v3 fewshot arm) |
-| RLM worker (4 scenarios) | prompt bake-off | **0.94** mean score (v2 contract arm) |
-| Needle-in-haystack (3 needles) | classic RLM | **recall 1.0** |
-| CodeQA timeout | classic RLM | **correct** (~3.7k tokens) |
-| Coding (retry fix) | orchestrator | **correct** (file edited) |
-| Live smoke needle | classic RLM | **hit** (~5k tokens) |
+Latest results — small models (≤32B parameters, paid tier):
 
-> On a *free* model. Frontier models do even better.
+| Model | Params | Score | Accuracy | Latency/task |
+|-------|--------|-------|----------|--------------|
+| `qwen/qwen3-30b-a3b-instruct-2507` | MoE 30B / 3B active | **14/14** | **100%** | ~15s |
+| `google/gemma-3-27b-it` | dense 27B | 12/14 | 86% | ~26s |
+| `mistralai/mistral-small-3.2-24b-instruct` | dense 24B | 12/14 | 86% | ~28s |
+
+Raw per-task rows (correct, recall, latency, tokens, cost) live in
+`bench/runs/bench-<ts>.jsonl` — one JSONL row per task, committed as history.
+
+### Run the benchmarks
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...        # required — env vars are the only key transport
+
+bun run bench                              # lite suite: needle + codeqa + coding
+bun run bench --suite needle --limit 1     # one suite, first task only
+bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
+bun run bench --list                       # print tasks, no engine / no key
+bun run bench --suite paper                # paper tier: s_niah, oolong, browsecomp, codeqa_lb (downloads datasets)
+```
+
+Suites: `all` (lite, default) · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
+`oolong` · `browsecomp` · `codeqa_lb`.
 
 ## Security
 

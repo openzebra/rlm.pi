@@ -135,6 +135,38 @@ rm -rf ~/.pi/agent/extensions/rlm
 ## Логи запусков
 
 
+## Бенчмарки
+
+E2E-прогоны реального движка против моделей OpenRouter — lite-сьют (`needle` поиск игл в
+куче, `codeqa` вопросы по коду, `coding` задача-фикс; 7 задач × 2 прохода на модель).
+Детерминированные грейдеры (recall / вхождение эталона / regex), без LLM-судьи.
+
+Актуальные результаты — маленькие модели (≤32B параметров, платный тариф):
+
+| Модель | Параметры | Счёт | Точность | Latency/задача |
+|--------|-----------|------|----------|----------------|
+| `qwen/qwen3-30b-a3b-instruct-2507` | MoE 30B / 3B активных | **14/14** | **100%** | ~15s |
+| `google/gemma-3-27b-it` | dense 27B | 12/14 | 86% | ~26s |
+| `mistralai/mistral-small-3.2-24b-instruct` | dense 24B | 12/14 | 86% | ~28s |
+
+Построчные результаты (correct, recall, latency, токены, цена) — в
+`bench/runs/bench-<ts>.jsonl`, одна JSONL-строка на задачу.
+
+### Как запустить
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...        # обязателен — ключи ходят только через env
+
+bun run bench                              # lite-сьют: needle + codeqa + coding
+bun run bench --suite needle --limit 1     # один сьют, первая задача
+bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
+bun run bench --list                       # показать задачи, без движка и ключа
+bun run bench --suite paper                # paper-сьют: s_niah, oolong, browsecomp, codeqa_lb (скачивает датасеты)
+```
+
+Сьюты: `all` (lite, по умолчанию) · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
+`oolong` · `browsecomp` · `codeqa_lb`.
+
 ## Безопасность
 
 - **Изоляция ключей**: ключи провайдеров хранятся только в TypeScript (`AuthStorage`); песочница получает промпты и возвращает текст, но никогда не получает ключи.

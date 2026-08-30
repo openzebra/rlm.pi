@@ -106,35 +106,35 @@ so it won't runaway. Come back to a finished answer — or `/rlm-stop` mid-run.
 
 ## Benchmarks
 
-Tested against `rlm-lab` prompt bake-off and full dual-mode RLM runtime benchmarks
-on a **free** model (`poolside/laguna-xs-2.1:free`, ~32B parameters):
+E2E runs of the real engine against OpenRouter chat models — the lite suite
+(`needle` multi-needle recall, `codeqa` repo-QA, `coding` fix task; 7 tasks × 2 passes
+per model). Deterministic graders (recall / gold containment / regex), no LLM-as-judge.
 
-### Prompt bake-off
+Latest results — small models (≤32B parameters, paid tier):
 
-| Arm | n | Mean score |
-|-----|---|-----------|
-| **main_v3_fewshot** (orchestrator) | 7 scenarios | **0.958** |
-| main_v2_xml_contract | 7 | 0.915 |
-| main_v1_split_abstractions | 7 | 0.902 |
-| main_v0_baseline | 7 | 0.874 |
+| Model | Params | Score | Accuracy | Latency/task |
+|-------|--------|-------|----------|--------------|
+| `qwen/qwen3-30b-a3b-instruct-2507` | MoE 30B / 3B active | **14/14** | **100%** | ~15s |
+| `google/gemma-3-27b-it` | dense 27B | 12/14 | 86% | ~26s |
+| `mistralai/mistral-small-3.2-24b-instruct` | dense 24B | 12/14 | 86% | ~28s |
 
-| Arm | n | Mean score |
-|-----|---|-----------|
-| **rlm_v2_completion_contract** (worker) | 4 scenarios | **~0.94** |
-| rlm_v1_doctrine | 4 | ~0.82 |
-| rlm_v0_baseline | 4 | noisy |
+Raw per-task rows (correct, recall, latency, tokens, cost) live in
+`bench/runs/bench-<ts>.jsonl` — one JSONL row per task, committed as history.
 
-### Full runtime (classic RLM + orchestrator)
+### Run the benchmarks
 
-| Benchmark | Mode | Result | Tokens |
-|-----------|------|--------|--------|
-| Needle-in-haystack (3 needles) | classic | **recall 1.0** | ~8.4k |
-| CodeQA timeout default | classic | **correct** | ~3.7k |
-| CodeQA max retries | classic | **correct** | ~2.6k |
-| Coding retry_fix (50→500) | orchestrator | **correct** | — |
-| Live smoke needle | classic | **hit** | ~5k |
+```bash
+export OPENROUTER_API_KEY=sk-or-...        # required — env vars are the only key transport
 
-> All results on a *free* model — frontier models perform even better.
+bun run bench                              # lite suite: needle + codeqa + coding
+bun run bench --suite needle --limit 1     # one suite, first task only
+bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
+bun run bench --list                       # print tasks, no engine / no key
+bun run bench --suite paper                # paper tier: s_niah, oolong, browsecomp, codeqa_lb (downloads datasets)
+```
+
+Suites: `all` (lite, default) · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
+`oolong` · `browsecomp` · `codeqa_lb`.
 
 ## Install
 
