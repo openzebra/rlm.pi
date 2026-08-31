@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.16] — 2026-08-31
+
 ### Added
 
 - **Extended `oolong` bench suite.** `bench/run.ts --suite oolong` now takes `--oolong-max-cl <n>`
