@@ -43,10 +43,6 @@ models, recursively. Same Pi session, same tools, same keys: `/rlm` and go. Read
 
 ## Benchmarks
 
-<p align="center">
-  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" width="100%" alt="OOLONG benchmark — latest results">
-</p>
-
 **OOLONG (oolong-synth)** — paper-tier long-context suite; latest journal per model,
 cost per task from real `costUsd` (older journals estimated at OpenRouter list prices):
 

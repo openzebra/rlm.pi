@@ -39,10 +39,6 @@ pi uninstall npm:@hicaru/pi-rlm
 
 ## 基准测试
 
-<p align="center">
-  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" width="100%" alt="OOLONG 基准测试 — 最新结果">
-</p>
-
 **OOLONG (oolong-synth)** —— paper 级长上下文套件；取每个模型最新的日志，每任务成本
 来自真实 `costUsd`（旧日志按 OpenRouter 牌价估算）：
 

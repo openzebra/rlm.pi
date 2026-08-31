@@ -36,10 +36,6 @@ pi uninstall npm:@hicaru/pi-rlm
 
 ## Бенчмарки
 
-<p align="center">
-  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" width="100%" alt="OOLONG — свежие результаты">
-</p>
-
 **OOLONG (oolong-synth)** — paper-tier сюит длинного контекста; последний журнал каждой модели, цена за задачу из реального `costUsd` (старые журналы оценены по прайс-листу OpenRouter):
 
 | Модель | Счёт | Цена/задача |
