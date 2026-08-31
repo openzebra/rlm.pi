@@ -22,6 +22,8 @@ const CHOICES = Object.freeze({
   rootSamplingMaxTokens: Object.freeze(["4096", "8192", "16384", "32768"]),
   rootSamplingTemperature: Object.freeze(["0", "0.3", "0.7", "1.0", "default"]),
   smartReasoning: Object.freeze(["default", ...Object.keys(THINKING_LEVELS)]),
+  subSamplingMaxTokens: Object.freeze(["1024", "2048", "4096", "8192"]),
+  subSamplingTemperature: Object.freeze(["0", "0.3", "0.7", "1.0", "default"]),
   sandboxInitTimeoutMs: Object.freeze(["10000", "30000", "60000", "120000"]),
   requestTimeoutMs: Object.freeze(["2", "5", "10", "15", "20"]),
   contextLoader: Object.freeze(["on", "off"]),
@@ -56,6 +58,10 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
       "Sampling temperature for RLM root turns, finalize included — 0 = deterministic (the r3 reproducibility setting); 'default' = provider default. Applies to RLM-mode runs, rlm() delegation and child recursion; the native Pi agent loop follows Pi's own session settings."),
     item("smartReasoning", "Root reasoning effort", config.smartReasoning ?? "default", CHOICES.smartReasoning,
       "Thinking effort for the root model ('default' = none). Only models whose registry entry supports reasoning will think; others silently run without it. Reasoning tokens share the output cap — raise the root output cap when thinking is on."),
+    item("subSamplingMaxTokens", "Worker output cap (tok)", String(config.subSampling?.maxTokens ?? 8192), CHOICES.subSamplingMaxTokens,
+      "Max output tokens per leaf sub-call (llm_query / llm_batch / map_files)."),
+    item("subSamplingTemperature", "Worker sampling temperature", config.subSampling?.temperature === undefined ? "default" : String(config.subSampling?.temperature), CHOICES.subSamplingTemperature,
+      "Sampling temperature for leaf sub-calls; 'default' = provider default. Deterministic extraction (temp 0) is what made the r3 bench stable."),
     item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
     item("requestTimeoutMs", "Sandbox request timeout (min)", String(Math.round(config.requestTimeoutMs / 60_000)), CHOICES.requestTimeoutMs, "Parent-side watchdog per sandbox request; on breach the Python worker is killed."),
     item("contextLoader", "Context loader", config.contextLoader ? "on" : "off", CHOICES.contextLoader,
@@ -131,6 +137,13 @@ export function applySetting(config: RlmConfig, id: string, value: string): RlmC
       return Object.hasOwn(THINKING_LEVELS, value)
         ? Object.freeze({ ...config, smartReasoning: value as ThinkingLevel })
         : config;
+    case "subSamplingMaxTokens":
+      return Object.freeze({ ...config, subSampling: Object.freeze({ ...config.subSampling, maxTokens: Number(value) }) });
+    case "subSamplingTemperature": {
+      const st = optionalTemperature(value);
+      if (st === undefined && value !== "default") return config;
+      return Object.freeze({ ...config, subSampling: Object.freeze({ ...config.subSampling, temperature: st }) });
+    }
     case "sandboxInitTimeoutMs": return Object.freeze({ ...config, sandboxInitTimeoutMs: Number(value) });
     case "requestTimeoutMs": return Object.freeze({ ...config, requestTimeoutMs: Number(value) * 60_000 });
     case "contextLoader": return Object.freeze({ ...config, contextLoader: value === "on" });

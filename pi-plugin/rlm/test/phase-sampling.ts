@@ -282,6 +282,11 @@ async function main(): Promise<void> {
     check("panel: reasoning effort applies", r.smartReasoning === "high");
     check("panel: reasoning 'default' clears", applySetting(r, "smartReasoning", "default").smartReasoning === undefined);
     check("panel: unknown reasoning level rejected", applySetting(base, "smartReasoning", "bogus") === base);
+    const sub = applySetting(base, "subSamplingTemperature", "0.3");
+    check("panel: worker temperature applies", sub.subSampling?.temperature === 0.3);
+    check("panel: worker maxTokens applies", applySetting(base, "subSamplingMaxTokens", "2048").subSampling?.maxTokens === 2048);
+    check("panel: worker 'default' clears temperature", applySetting(sub, "subSamplingTemperature", "default").subSampling?.temperature === undefined);
+    check("panel: worker invalid temperature rejected", applySetting(base, "subSamplingTemperature", "nope") === base);
 
     // The panel values must survive the exact validation seam a hand-edited rlm.json takes.
     const both = applySetting(t0, "smartReasoning", "high");
