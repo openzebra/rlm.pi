@@ -129,6 +129,44 @@ inside Pi — same session, same tools, same everything.
 | REPL timeout | `120`s | Bump for slow computations |
 | Max concurrent subs | `16` | More parallelism (costs RAM) |
 
+## Sampling & reproducibility
+
+The r3 bench showed the biggest capability lever is not the model — it is the sampling:
+temperature 0 took OOLONG from 71% pooled / 40% flips to 91.7–100% all-stable for $1.74
+total. Those knobs are first-class in `rlm.json` (`~/.pi/agent/rlm.json`) and on the
+`/rlm-config` panel:
+
+| Field | Where | Default | What it governs |
+|-------|-------|---------|-----------------|
+| `rootSampling.maxTokens` | rlm.json, panel | `16384` | Output cap per root-model turn (finalize included) |
+| `rootSampling.temperature` | rlm.json, panel | provider default | Root + finalize sampling temperature; `0` = deterministic |
+| `smartReasoning` | rlm.json, panel | none | Thinking effort for the root model |
+| `subSampling.maxTokens` | rlm.json, panel | `8192` | Output cap per leaf sub-call (`llm_query`, `llm_batch`, `map_files`) |
+| `subSampling.temperature` | rlm.json, panel | provider default | Leaf sampling temperature |
+| `enableVerificationNudge` | rlm.json | off | One coached redo when the root finalizes early with a bare number / short label |
+
+**Reproducibility recipe (validated by r3):**
+
+```json
+{
+  "config": {
+    "rootSampling": { "maxTokens": 8192, "temperature": 0, "reasoning": "high" }
+  }
+}
+```
+
+Reasoning tokens share the completion budget with the answer — with thinking on, keep
+`maxTokens` generous (the bench doubles it to 8192; the engine warns once on turn 0 when it
+is tight).
+
+**Scope boundary:** `rlm.json` sampling applies to RLM-mode runs, `rlm()` delegation, and
+child recursion at any depth (same engine function). The native Pi agent loop follows Pi's
+own session settings — rlm.json never touches it.
+
+**Model capability:** reasoning requires a model whose registry entry has `reasoning: true`.
+Anything else has the level dropped before it reaches the provider (pi-ai clamps unsupported
+levels to off); capability comes from the registry, never from config.
+
 ## Prompt Architecture
 
 The system prompt follows a **contract / routing / examples / rules** pattern

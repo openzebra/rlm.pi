@@ -43,6 +43,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coaching and thinking+it16 both reach all-stable; total spend $1.74. For context, the old
   qwen3-30b-instruct at provider-default temperature pooled 71% with a 40% flip rate, and the
   old "ceiling cluster" (oolong_2/3/4, 17–33% pooled) is gone (92–100%).
+- **Full sampling integration — the r3 knobs are first-class in the real engine.**
+  `rootSampling` / `subSampling` / `smartReasoning` now govern every model call: root turns,
+  finalize (see Fixed), `llm()` delegation and child recursion at any depth.
+  `bridge/model.ts` gains `effectiveReasoning()` — an explicit gate that drops the reasoning
+  level for models whose registry entry lacks reasoning support (pi-ai clamps to off anyway;
+  now it's engine policy, testable without a provider). The `/rlm-config` panel exposes
+  `rootSamplingTemperature` (`0 / 0.3 / 0.7 / 1.0 / default`), `smartReasoning`
+  (`default | minimal…max`, derived from the now-exported `THINKING_LEVELS`), and worker knobs
+  (`subSamplingMaxTokens`, `subSamplingTemperature`); `default` clears the key so untouched
+  configs keep provider-default behavior, invalid values are rejected. README gains a
+  "Sampling & reproducibility" section (recipe, scope boundary, model-capability note;
+  RU/ZH mirrors updated).
+- **One-shot reasoning budget hint.** With `rootSampling.reasoning` set and a root output cap
+  below 8192 tokens, the engine injects a single turn-0 note: thinking tokens share the
+  completion budget (the bench's doubling rule). Advisory, never fatal, never repeated.
+- **Verification-discipline nudge, opt-in.** `enableVerificationNudge` (default OFF): an early
+  finalize (before turn 4) whose answer is a bare number / short label gets ONE coached redo
+  ("recompute and sanity-check in Python") instead of being accepted. Evidence: 28/33 bench
+  failures were early confident wrong answers. Off-by-default behavior is byte-identical.
+- **New test suites: `phase-sampling.ts` and `phase-bench-parity.ts`.** phase-sampling proves
+  sampling reaches the model call with temperature 0 configured — main-loop turn, finalize,
+  `llm_query` leaf via a local stub endpoint (wire-level), depth-1 child inheritance, the
+  audit-R7 buildEngine seam, reasoning gating, panel round-trip through
+  `applySetting → validateConfig → saveSettings/loadSettings`, and the hint/nudge behavior.
+  `helpers.ts` gains `captureComplete()` — a `CompleteFn` mock that records the second
+  options argument (1-arg mocks drop it). phase-bench-parity drives `benchSampling()` (the
+  bench's extracted sampling assembly) through the REAL engine so the bench and interactive
+  wirings cannot drift.
 
 ### Fixed
 
@@ -55,6 +83,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokens, but the bench fed OpenRouter's per-token prices straight in — a million-fold understating,
   i.e. every historical `costUsd` was 0. Convert ×1e6 at the `model.cost` assembly; smoke: 32,214 in /
   3,595 out → $0.0229 (was $0.0000).
+- **Finalize ignored `rootSampling` entirely.** The finalize/fallback call passed only
+  `reasoning: smartReasoning` — no temperature, no maxTokens, not even `rootSampling.reasoning` —
+  so the last turn of every run ran at provider-default temperature even with temp 0 pinned
+  (r3's whole point). Finalize now applies the same merge as the main loop
+  (`{ reasoning: smartReasoning, ...rootSampling }`) and passes all three fields.
+  Regression-proven in `phase-sampling.ts` (fails without the fix).
 
 ## [0.3.15] — 2026-08-30
 

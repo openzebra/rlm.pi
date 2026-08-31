@@ -141,6 +141,40 @@ rm -rf ~/.pi/agent/extensions/rlm
 > 默认设置下 (深度 4, 并发 4)，极端情况下为 4³ = 64。预算和错误
 > 上限 (见上文) 无论扇出 (fan-out) 如何都会限制总支出。
 
+## 采样与可复现性
+
+r3 基准测试表明：最大的能力杠杆不是模型，而是采样。仅 temperature 0 就让 OOLONG 从
+71% (pooled) / 40% (flips) 提升到 91.7–100% all-stable，总计仅花费 $1.74。这些旋钮在
+`rlm.json` (`~/.pi/agent/rlm.json`) 和 `/rlm-config` 面板中都是一等公民：
+
+| 字段 | 位置 | 默认值 | 作用范围 |
+|---|---|---|---|
+| `rootSampling.maxTokens` | rlm.json, 面板 | `16384` | 根模型每轮的输出上限 (包括 finalize) |
+| `rootSampling.temperature` | rlm.json, 面板 | 提供商默认 | 根轮次与 finalize 的采样温度；`0` = 确定性 |
+| `smartReasoning` | rlm.json, 面板 | 无 | 根模型的思考强度 |
+| `subSampling.maxTokens` | rlm.json, 面板 | `8192` | 每个叶子子调用 (`llm_query`, `llm_batch`, `map_files`) 的输出上限 |
+| `subSampling.temperature` | rlm.json, 面板 | 提供商默认 | 叶子调用的采样温度 |
+| `enableVerificationNudge` | rlm.json | 关 | 当根节点过早以“裸数字”定稿时，给予一次带提示的重做 |
+
+**可复现性配方 (经 r3 验证)：**
+
+```json
+{
+  "config": {
+    "rootSampling": { "maxTokens": 8192, "temperature": 0, "reasoning": "high" }
+  }
+}
+```
+
+思考 token 与答案共享补全预算——开启 thinking 时请保持充裕的 `maxTokens`
+(基准测试将其翻倍至 8192；若过紧，引擎会在第 0 轮警告一次)。
+
+**作用边界：** `rlm.json` 的采样适用于 RLM 模式运行、`rlm()` 委托以及任意深度的子递归
+(同一个引擎函数)。Pi 原生代理循环遵循 Pi 自身的会话设置——rlm.json 不会触及它。
+
+**模型能力：** reasoning 要求模型的注册表条目为 `reasoning: true`。其他情况会在发送给
+提供商之前丢弃该级别 (pi-ai 会将不支持的级别钳制为 off)；能力来自注册表，而非配置。
+
 ## 运行日志
 
 - **密钥隔离**：供应商密钥仅存在于 TypeScript (`AuthStorage`) 中；沙箱

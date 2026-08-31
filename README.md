@@ -261,7 +261,7 @@ pi-plugin/rlm/src/
 │   └── handlers/  llm_query, rlm_query, task registry, emitting
 ├── sandbox/       Python subprocess (py/), JSONL protocol, interrupt dispatch
 ├── tool/          repl() and rlm() Pi tool registrations + event emitter
-├── config/        rlm.json persistence, defaults, model resolution
+├── config/        rlm.json persistence, defaults, sampling knobs, model resolution
 ├── prompts/       glossary (shared) → system (headless) + native
 ├── context/       walker + anydoc document conversion + add_context
 ├── ui/            Config panel, model picker, status line, theme
