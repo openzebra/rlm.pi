@@ -29,6 +29,8 @@ import { check, captureComplete, MOCK_REGISTRY, repl, failureCount } from "./hel
 import { type CompleteFn } from "../src/core/iteration.ts";
 import { createEngine } from "../src/core/engine.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
+import { applySetting } from "../src/ui/config-panel.ts";
+import { loadSettings, mergeConfig, saveSettings, validateConfig } from "../src/config/settings.ts";
 import { modelComplete, effectiveReasoning } from "../src/bridge/model.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { RlmController } from "../src/mode/rlm-mode.ts";
@@ -264,6 +266,38 @@ async function main(): Promise<void> {
     check("gate: wire carries reasoning effort for reasoning:true models", effort === "high", String(effort));
     check("gate: unset temperature is omitted, not zeroed", !("temperature" in (reasonerBody ?? {})));
     check("gate: unset maxTokens is omitted", !("max_tokens" in (reasonerBody ?? {})));
+  }
+
+  // ── 7. config-panel knobs: applySetting + validation + persistence round-trip ──
+  {
+    const base = cfg({});
+    const t0 = applySetting(base, "rootSamplingTemperature", "0");
+    check("panel: temperature 0 applies (0 is a value, not cleared)", t0.rootSampling?.temperature === 0 && t0 !== base);
+    const tClear = applySetting(t0, "rootSamplingTemperature", "default");
+    check("panel: 'default' clears temperature to provider default", tClear.rootSampling?.temperature === undefined);
+    check("panel: cleared temperature vanishes from persisted JSON", !("temperature" in (JSON.parse(JSON.stringify(tClear.rootSampling ?? {})) as Record<string, unknown>)));
+    const tBad = applySetting(base, "rootSamplingTemperature", "bananas");
+    check("panel: invalid temperature is rejected, current kept", tBad === base);
+    const r = applySetting(base, "smartReasoning", "high");
+    check("panel: reasoning effort applies", r.smartReasoning === "high");
+    check("panel: reasoning 'default' clears", applySetting(r, "smartReasoning", "default").smartReasoning === undefined);
+    check("panel: unknown reasoning level rejected", applySetting(base, "smartReasoning", "bogus") === base);
+
+    // The panel values must survive the exact validation seam a hand-edited rlm.json takes.
+    const both = applySetting(t0, "smartReasoning", "high");
+    const persisted = validateConfig(JSON.parse(JSON.stringify({ rootSampling: both.rootSampling, smartReasoning: both.smartReasoning })) as unknown);
+    check("panel: temperature survives validateConfig", persisted.rootSampling?.temperature === 0);
+    check("panel: reasoning survives validateConfig", persisted.smartReasoning === "high");
+
+    // Disk round-trip through saveSettings/loadSettings (same backup/restore dance as phase1).
+    const previous = await loadSettings();
+    const full = mergeConfig({ ...DEFAULT_CONFIG, rootSampling: both.rootSampling, smartReasoning: both.smartReasoning });
+    const saved = await saveSettings({ config: full });
+    const loaded = mergeConfig((await loadSettings()).config);
+    check("panel: saveSettings reports success", saved);
+    check("panel: temperature round-trips through rlm.json", loaded.rootSampling?.temperature === 0, String(loaded.rootSampling?.temperature));
+    check("panel: reasoning round-trips through rlm.json", loaded.smartReasoning === "high", String(loaded.smartReasoning));
+    await saveSettings(previous);
   }
 
   server.close();

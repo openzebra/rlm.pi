@@ -1,9 +1,11 @@
 /** Config panel TUI — toggle RLM run parameters with descriptions. */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
 import type { RlmConfig } from "../core/types.ts";
+import { THINKING_LEVELS } from "../config/settings.ts";
 
 const CHOICES = Object.freeze({
   maxDepth: Object.freeze(["1", "2", "3", "4"]),
@@ -18,6 +20,8 @@ const CHOICES = Object.freeze({
   compaction: Object.freeze(["on", "off"]),
   compactionThresholdPct: Object.freeze(["50", "65", "80", "90"]),
   rootSamplingMaxTokens: Object.freeze(["4096", "8192", "16384", "32768"]),
+  rootSamplingTemperature: Object.freeze(["0", "0.3", "0.7", "1.0", "default"]),
+  smartReasoning: Object.freeze(["default", ...Object.keys(THINKING_LEVELS)]),
   sandboxInitTimeoutMs: Object.freeze(["10000", "30000", "60000", "120000"]),
   requestTimeoutMs: Object.freeze(["2", "5", "10", "15", "20"]),
   contextLoader: Object.freeze(["on", "off"]),
@@ -48,6 +52,10 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("compaction", "Trajectory compaction", config.compaction ? "on" : "off", CHOICES.compaction, "Summarize old turns when history approaches the model context window."),
     item("compactionThresholdPct", "Compaction threshold (%)", String(Math.round(config.compactionThresholdPct * 100)), CHOICES.compactionThresholdPct, "Compact once estimated history tokens reach this share of the root model's context window."),
     item("rootSamplingMaxTokens", "Root model output cap (tok)", String(config.rootSampling?.maxTokens ?? 16384), CHOICES.rootSamplingMaxTokens, "Max output tokens per root-model turn. Lower values keep each turn lean."),
+    item("rootSamplingTemperature", "Root sampling temperature", config.rootSampling?.temperature === undefined ? "default" : String(config.rootSampling?.temperature), CHOICES.rootSamplingTemperature,
+      "Sampling temperature for RLM root turns, finalize included — 0 = deterministic (the r3 reproducibility setting); 'default' = provider default. Applies to RLM-mode runs, rlm() delegation and child recursion; the native Pi agent loop follows Pi's own session settings."),
+    item("smartReasoning", "Root reasoning effort", config.smartReasoning ?? "default", CHOICES.smartReasoning,
+      "Thinking effort for the root model ('default' = none). Only models whose registry entry supports reasoning will think; others silently run without it. Reasoning tokens share the output cap — raise the root output cap when thinking is on."),
     item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
     item("requestTimeoutMs", "Sandbox request timeout (min)", String(Math.round(config.requestTimeoutMs / 60_000)), CHOICES.requestTimeoutMs, "Parent-side watchdog per sandbox request; on breach the Python worker is killed."),
     item("contextLoader", "Context loader", config.contextLoader ? "on" : "off", CHOICES.contextLoader,
@@ -89,6 +97,13 @@ function optionalNumber(value: string, scale = 1): number | undefined {
   return value === "none" ? undefined : Number(value) * scale;
 }
 
+/** Optional temperature: the literal "default" clears it (provider default); else [0, 2]. */
+function optionalTemperature(value: string): number | undefined {
+  if (value === "default") return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 && n <= 2 ? n : undefined;
+}
+
 /** Pure: returns a new frozen config with `id` set to `value`; unknown ids pass through. */
 export function applySetting(config: RlmConfig, id: string, value: string): RlmConfig {
   switch (id) {
@@ -105,6 +120,17 @@ export function applySetting(config: RlmConfig, id: string, value: string): RlmC
     case "compactionThresholdPct": return Object.freeze({ ...config, compactionThresholdPct: Number(value) / 100 });
     case "rootSamplingMaxTokens":
       return Object.freeze({ ...config, rootSampling: Object.freeze({ ...config.rootSampling, maxTokens: Number(value) }) });
+    case "rootSamplingTemperature": {
+      const t = optionalTemperature(value);
+      // Reject invalid values (NaN / out of range) — keep the current setting.
+      if (t === undefined && value !== "default") return config;
+      return Object.freeze({ ...config, rootSampling: Object.freeze({ ...config.rootSampling, temperature: t }) });
+    }
+    case "smartReasoning":
+      if (value === "default") return Object.freeze({ ...config, smartReasoning: undefined });
+      return Object.hasOwn(THINKING_LEVELS, value)
+        ? Object.freeze({ ...config, smartReasoning: value as ThinkingLevel })
+        : config;
     case "sandboxInitTimeoutMs": return Object.freeze({ ...config, sandboxInitTimeoutMs: Number(value) });
     case "requestTimeoutMs": return Object.freeze({ ...config, requestTimeoutMs: Number(value) * 60_000 });
     case "contextLoader": return Object.freeze({ ...config, contextLoader: value === "on" });

@@ -38,9 +38,10 @@ function validateString(v: unknown): string | undefined {
 /**
  * Every value pi-ai accepts for `reasoning`. Keyed by the union so a new level added upstream
  * is a compile error here rather than a silently-rejected setting. Note `off` is NOT a
- * ThinkingLevel — a hand-edited rlm.json carrying one is dropped, not forwarded.
+ * ThinkingLevel — a hand-edited rlm.json carrying one is dropped, not forwarded. Exported so
+ * the config panel derives its choices from the same source of truth.
  */
-const THINKING_LEVELS: Readonly<Record<ThinkingLevel, true>> = Object.freeze({
+export const THINKING_LEVELS: Readonly<Record<ThinkingLevel, true>> = Object.freeze({
   minimal: true, low: true, medium: true, high: true, xhigh: true, max: true,
 });
 
