@@ -1,11 +1,5 @@
 <div align="center">
 
-<img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" alt="pi-rlm">
-
-</div>
-
-<div align="center">
-
 <sub>
 <a href="README.md">English</a> &nbsp;·&nbsp; <a href="README.zh-CN.md">中文</a> &nbsp;·&nbsp; **Русский**
 </sub>
@@ -14,33 +8,72 @@
 
 ---
 
-# pi-rlm — рекурсивные языковые модели для кодинг-агента [Pi](https://github.com/earendil-works)
+# rlm.pi PI plugin
 
-<div align="center">
+> pi-rlm — большие контексты на дешёвых моделях: рекурсивная языковая модель (RLM) для Pi
 
-**Рекурсивные языковые модели (RLMs)**, реализованные нативно как расширение Pi —
-ПОЛНОСТЬЮ ЛОКАЛЬНО.
+## Установка
 
-</div>
+```bash
+pi install npm:@hicaru/pi-rlm
+```
 
----
+Чтобы удалить позже:
 
-**Рекурсивная языковая модель (RLM)** — это универсальная (task-agnostic) парадигма инференса, в которой корневая языковая модель управляет почти бесконечным контекстом, *программно* исследуя, декомпозируя и **рекурсивно вызывая саму себя** для обработки входных данных. RLM заменяют канонический вызов `llm.completion(prompt, model)` на вызов `rlm.completion(prompt, model)`: промпт/контекст передается как переменная в среде REPL, с которой взаимодействует модель, а модель может запускать вызовы sub-LLM и sub-RLM как обычные функции в коде.
+```bash
+pi uninstall npm:@hicaru/pi-rlm
+```
 
-Это ставка на архитектуру в стиле [CodeAct](https://arxiv.org/abs/2402.01030): каждая языковая модель получает доступ к среде выполнения кода, вызовы sub-(R)LM являются функциями, а контекст/промпты — объектами в коде, что является уходом от стандарта вызова инструментов через JSON. Система, построенная таким образом, *сама по себе* является языковой моделью, которая полагается на рекурсивные вызовы sub-LLM, отсюда и название.
+Затем выполните `/reload` или перезапустите Pi — `/rlm`, `/rlm-config` и `/rlm-stop` появятся в разделе **[Extensions]**. Переключение — `Ctrl+Shift+R` или `/rlm`.
 
-`pi-rlm` переносит эту парадигму **нативно в Pi**:
+<p align="center">
+  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" width="100%" alt="rlm.pi — результаты OOLONG">
+</p>
 
-- **Модель-оркестратор** управляет постоянным Python REPL пошагово.
-- Работа с длинным контекстом **делегируется** дешевым worker-моделям через `llm_query` / `llm_query_batched`.
-- Сложные подзадачи **рекурсивно** передаются в дочерние RLM через `rlm_query` (с ограничением глубины).
-  Дочерний RLM наследует `context` родителя — репозиторий и все библиотеки, загруженные через
-  `add_context()`, — и работает с теми же путями. Наследование не стоит дополнительных токенов:
-  содержимое живёт в песочнице, модель видит только строку с размером.
-- Все работает **in-process** — единственным внешним процессом является локальный worker `python3`.
+## Что такое pi-rlm?
 
-> This is a Pi-plugin reimplementation of the RLM method (see the [RLM paper](https://arxiv.org/abs/2512.24601)).
-> It is **not** the Python library.
+Плагин, который превращает сессию Pi в **рекурсивную языковую модель (RLM)**: вместо того чтобы заталкивать огромный документ в промпт, контекст живёт в Python REPL, а ваша лучшая модель им управляет — ищет, декомпозирует и делегирует чтения дешёвым worker-моделям, рекурсивно. Та же сессия Pi, те же инструменты, те же ключи — включите `/rlm` и вперёд. По методу [RLM paper](https://arxiv.org/abs/2512.24601); подробности — в разделе **Как это работает**.
+
+## Бенчмарки
+
+<p align="center">
+  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" width="100%" alt="OOLONG — свежие результаты">
+</p>
+
+**OOLONG (oolong-synth)** — paper-tier сюит длинного контекста; последний журнал каждой модели, цена за задачу из реального `costUsd` (старые журналы оценены по прайс-листу OpenRouter):
+
+| Модель | Счёт | Цена/задача |
+|--------|------|-------------|
+| `qwen/qwen3.8-27b` | **100%** | $0.0127 |
+| `google/gemma-3-27b-it` | 83.3% | $0.0013 |
+| `qwen/qwen3-30b-a3b-instruct-2507` | 66.7% | $0.0009 |
+| `mistralai/mistral-small-3.2-24b-instruct` | 66.7% | $0.0025 |
+
+Lite-сьют — `needle` (поиск игл в куче), `codeqa` (вопросы по коду), `coding` (задача-фикс; 7 задач × 2 прохода на модель, детерминированные грейдеры, без LLM-судьи):
+
+| Модель | Счёт | Точность |
+|--------|------|----------|
+| `qwen/qwen3-30b-a3b-instruct-2507` | **14/14** | **100%** |
+| `google/gemma-3-27b-it` | 12/14 | 86% |
+| `mistralai/mistral-small-3.2-24b-instruct` | 12/14 | 86% |
+
+Построчные результаты (correct, recall, latency, токены, цена) — в
+`bench/runs/*.jsonl`, одна JSONL-строка на задачу.
+
+### Как запустить
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...        # обязателен — ключи ходят только через env
+
+bun run bench                              # lite-сьют: needle + codeqa + coding
+bun run bench --suite needle --limit 1     # один сьют, первая задача
+bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
+bun run bench --list                       # показать задачи, без движка и ключа
+bun run bench --suite paper                # paper-сьют: s_niah, oolong, browsecomp, codeqa_lb (скачивает датасеты)
+```
+
+Сьюты: `all` (lite, по умолчанию) · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
+`oolong` · `browsecomp` · `codeqa_lb`.
 
 ## Как это работает
 
@@ -60,24 +93,17 @@ pi process (TypeScript)
   `rlm_query_batched`, `SHOW_VARS()`, `ask_user_question()` и словарь `answer`.
   Модель отправляет окончательный результат, устанавливая `answer["ready"] = True`.
 
-## Установка
+## Установка из исходников (для разработки)
 
 `pi-rlm` — это пакет Pi. Pi предоставляет peer-зависимости `@earendil-works/pi-*` и `typebox`; **не** устанавливайте их отдельную копию в этот пакет. Требуется `python3` в `PATH` (только стандартная библиотека).
 
-Рекомендуемая локальная установка при разработке:
+Локальная установка при разработке:
 
 ```bash
 pi install /path/to/this-repo/pi-plugin/rlm
 ```
 
-Установка опубликованного npm-пакета:
-
-```bash
-npm publish                       # например, как @<you>/pi-rlm
-pi install npm:@<you>/pi-rlm
-```
-
-> **Установка через Git** требует, чтобы манифест пакета находился в корне устанавливаемого репозитория. Для поддиректорий монорепозитория, таких как эта, предпочтительнее использовать локальный путь или npm, как указано выше.
+> **Установка через Git** требует, чтобы манифест пакета находился в корне устанавливаемого репозитория. Для поддиректорий монорепозитория, таких как эта, предпочтительнее использовать локальный путь, как указано выше.
 
 Если вы ранее копировали папку расширения напрямую, удалите ее, чтобы она не перекрывала пакет:
 
@@ -171,38 +197,6 @@ rm -rf ~/.pi/agent/extensions/rlm
 
 ## Логи запусков
 
-
-## Бенчмарки
-
-E2E-прогоны реального движка против моделей OpenRouter — lite-сьют (`needle` поиск игл в
-куче, `codeqa` вопросы по коду, `coding` задача-фикс; 7 задач × 2 прохода на модель).
-Детерминированные грейдеры (recall / вхождение эталона / regex), без LLM-судьи.
-
-Актуальные результаты — маленькие модели (≤32B параметров, платный тариф):
-
-| Модель | Параметры | Счёт | Точность | Latency/задача |
-|--------|-----------|------|----------|----------------|
-| `qwen/qwen3-30b-a3b-instruct-2507` | MoE 30B / 3B активных | **14/14** | **100%** | ~15s |
-| `google/gemma-3-27b-it` | dense 27B | 12/14 | 86% | ~26s |
-| `mistralai/mistral-small-3.2-24b-instruct` | dense 24B | 12/14 | 86% | ~28s |
-
-Построчные результаты (correct, recall, latency, токены, цена) — в
-`bench/runs/bench-<ts>.jsonl`, одна JSONL-строка на задачу.
-
-### Как запустить
-
-```bash
-export OPENROUTER_API_KEY=sk-or-...        # обязателен — ключи ходят только через env
-
-bun run bench                              # lite-сьют: needle + codeqa + coding
-bun run bench --suite needle --limit 1     # один сьют, первая задача
-bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
-bun run bench --list                       # показать задачи, без движка и ключа
-bun run bench --suite paper                # paper-сьют: s_niah, oolong, browsecomp, codeqa_lb (скачивает датасеты)
-```
-
-Сьюты: `all` (lite, по умолчанию) · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
-`oolong` · `browsecomp` · `codeqa_lb`.
 
 ## Безопасность
 

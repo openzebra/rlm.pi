@@ -1,24 +1,6 @@
-# pi-rlm — Large contexts on cheap models: Recursive Language Model (RLM) for Pi
+# rlm.pi PI plugin
 
-<div align="center">
-
-<video src="https://github.com/openzebra/rlm.pi/raw/refs/heads/master/animation/rlm_pi_explainer.mp4" controls width="854" poster="https://raw.githubusercontent.com/openzebra/rlm.pi/master/assets/hero.png"></video>
-
-</div>
-
-<div align="center">
-
-**Recursive Language Models (RLMs)**, implemented natively as a Pi extension.
-
-</div>
-
-<div align="center">
-
-<a href="https://arxiv.org/abs/2512.24601"><img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" alt="pi-rlm"></a>
-
-<sub>Modeled on the method in the RLM paper, reimplemented natively for Pi.</sub>
-
-</div>
+> pi-rlm — Large contexts on cheap models: Recursive Language Model (RLM) for Pi
 
 <div align="center">
 
@@ -30,34 +12,80 @@
 
 ---
 
+## Install
+
+```bash
+pi install npm:@hicaru/pi-rlm
+```
+
+To remove it later:
+
+```bash
+pi uninstall npm:@hicaru/pi-rlm
+```
+
+Then run `/reload` or restart Pi. Verify with `pi list` that the package appears in
+`settings.packages`, and check that `/rlm`, `/rlm-config`, and `/rlm-stop` appear under
+**[Extensions]**.
+
+Toggle with `Ctrl+Shift+R` or `/rlm` — plain prompts now route through the RLM engine.
+
+<p align="center">
+  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" width="100%" alt="rlm.pi — OOLONG benchmark results">
+</p>
+
 ## What is pi-rlm?
 
-A **Recursive Language Model (RLM)** is a task-agnostic inference paradigm where a
-root language model orchestrates over near-infinite context by *programmatically*
-examining, decomposing, and **recursively calling itself** over its input. RLMs
-replace the canonical `llm.completion(prompt, model)` call with an
-`rlm.completion(prompt, model)` call: the prompt/context is offloaded as a variable
-in a REPL environment that the model interacts with, and the model can launch
-sub-LLM and sub-RLM calls as ordinary functions in code.
+`pi-rlm` brings the **Recursive Language Model (RLM)** paradigm natively into Pi: instead of
+stuffing a huge document into the prompt, the context lives in a Python REPL and your best
+model orchestrates it — searching, decomposing, and delegating leaf reads to cheap worker
+models, recursively. Same Pi session, same tools, same keys — toggle `/rlm` and go.
+Modeled on the method in the [RLM paper](https://arxiv.org/abs/2512.24601); details in
+**How it works** below.
 
-This is a bet on a [CodeAct](https://arxiv.org/abs/2402.01030)-style harness — every
-language model gets access to a code environment, sub-(R)LM calls are functions, and
-context/prompts are objects in code — moving away from the JSON tool-calling standard.
-A system built this way is *itself* a language model that relies on recursive
-sub-LLM calls, hence the name.
+## Benchmarks
 
-`pi-rlm` brings that paradigm **natively into Pi** — not as a separate agent you must
-switch to, but as a plugin you toggle **inside your existing Pi session**:
+<p align="center">
+  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" width="100%" alt="OOLONG benchmark — latest results">
+</p>
 
-- A **root orchestrator** model drives a **persistent Python REPL** turn-by-turn.
-- Long-context work is **delegated** to cheap worker models via `llm_query` / `llm_batch`.
-- Hard sub-problems **recurse** into child RLMs via `rlm_query` (depth-capped). A child
-  inherits its parent's `context` — every file loaded so far — at **zero token cost**:
-  the content lives in the sandbox; only a size line reaches the model.
-- Everything runs **in-process** — the only external process is one local `python3` worker.
+**OOLONG (oolong-synth)** — paper-tier long-context suite; latest journal per model,
+cost per task from real `costUsd` (older journals estimated at OpenRouter list prices):
 
-> This is a Pi-plugin reimplementation of the RLM method (see the [RLM paper](https://arxiv.org/abs/2512.24601)).
-> It is **not** the Python library.
+| Model | Score | Avg. cost/task |
+|-------|-------|----------------|
+| `qwen/qwen3.8-27b` | **100%** | $0.0127 |
+| `google/gemma-3-27b-it` | 83.3% | $0.0013 |
+| `qwen/qwen3-30b-a3b-instruct-2507` | 66.7% | $0.0009 |
+| `mistralai/mistral-small-3.2-24b-instruct` | 66.7% | $0.0025 |
+
+Lite suite — `needle` multi-needle recall, `codeqa` repo-QA, `coding` fix task
+(7 tasks × 2 passes per model, deterministic graders, no LLM-as-judge):
+
+| Model | Score | Accuracy |
+|-------|-------|----------|
+| `qwen/qwen3-30b-a3b-instruct-2507` | **14/14** | **100%** |
+| `google/gemma-3-27b-it` | 12/14 | 86% |
+| `mistralai/mistral-small-3.2-24b-instruct` | 12/14 | 86% |
+
+Raw per-task rows (correct, recall, latency, tokens, cost) live in
+`bench/runs/*.jsonl` — one JSONL row per task, committed as history.
+
+### Run the benchmarks
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...        # required — env vars are the only key transport
+
+bun run bench                              # lite suite: needle + codeqa + coding
+bun run bench --suite needle --limit 1     # one suite, first task only
+bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
+bun run bench --list                       # print tasks, no engine / no key
+bun run bench --suite paper                # paper tier: s_niah, oolong, browsecomp, codeqa_lb (downloads datasets)
+```
+
+Suites: `all` (lite, default) · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
+`oolong` · `browsecomp` · `codeqa_lb`. Regenerate the hero chart:
+`python3 bench/hero.py` (needs `matplotlib`).
 
 ## Why pi-rlm?
 
@@ -103,56 +131,6 @@ only sees a size line. **Recursive delegation → cheap workers pay for the read
 Toggle `/rlm` on, set a goal, let it loop. Runs persist across chat turns. The engine
 respects depth caps, wall-clock ceilings, token budgets, and consecutive-error limits
 so it won't runaway. Come back to a finished answer — or `/rlm-stop` mid-run.
-
-## Benchmarks
-
-E2E runs of the real engine against OpenRouter chat models — the lite suite
-(`needle` multi-needle recall, `codeqa` repo-QA, `coding` fix task; 7 tasks × 2 passes
-per model). Deterministic graders (recall / gold containment / regex), no LLM-as-judge.
-
-Latest results — small models (≤32B parameters, paid tier):
-
-| Model | Params | Score | Accuracy | Latency/task |
-|-------|--------|-------|----------|--------------|
-| `qwen/qwen3-30b-a3b-instruct-2507` | MoE 30B / 3B active | **14/14** | **100%** | ~15s |
-| `google/gemma-3-27b-it` | dense 27B | 12/14 | 86% | ~26s |
-| `mistralai/mistral-small-3.2-24b-instruct` | dense 24B | 12/14 | 86% | ~28s |
-
-Raw per-task rows (correct, recall, latency, tokens, cost) live in
-`bench/runs/bench-<ts>.jsonl` — one JSONL row per task, committed as history.
-
-### Run the benchmarks
-
-```bash
-export OPENROUTER_API_KEY=sk-or-...        # required — env vars are the only key transport
-
-bun run bench                              # lite suite: needle + codeqa + coding
-bun run bench --suite needle --limit 1     # one suite, first task only
-bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
-bun run bench --list                       # print tasks, no engine / no key
-bun run bench --suite paper                # paper tier: s_niah, oolong, browsecomp, codeqa_lb (downloads datasets)
-```
-
-Suites: `all` (lite, default) · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
-`oolong` · `browsecomp` · `codeqa_lb`.
-
-## Install
-
-```bash
-pi install npm:@hicaru/pi-rlm
-```
-
-To remove it later:
-
-```bash
-pi uninstall npm:@hicaru/pi-rlm
-```
-
-Then run `/reload` or restart Pi. Verify with `pi list` that the package appears in
-`settings.packages`, and check that `/rlm`, `/rlm-config`, and `/rlm-stop` appear under
-**[Extensions]**.
-
-Toggle with `Ctrl+Shift+R` or `/rlm` — plain prompts now route through the RLM engine.
 
 ## How it works
 

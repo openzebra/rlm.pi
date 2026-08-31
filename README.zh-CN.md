@@ -1,11 +1,5 @@
 <div align="center">
 
-<img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" alt="pi-rlm">
-
-</div>
-
-<div align="center">
-
 <sub>
 <a href="README.md">English</a> &nbsp;·&nbsp; <b>中文</b> &nbsp;·&nbsp; <a href="README.ru.md">Русский</a>
 </sub>
@@ -14,32 +8,77 @@
 
 ---
 
-# pi-rlm — 为 [Pi](https://github.com/earendil-works) 编程代理提供的递归语言模型 (Recursive Language Models)
+# rlm.pi PI plugin
 
-<div align="center">
+> pi-rlm — 大上下文，廉价模型：为 Pi 提供的递归语言模型 (RLM)
 
-**递归语言模型 (RLMs)** 作为 Pi 扩展原生实现 ——
-完全本地。
+## 安装
 
-</div>
+```bash
+pi install npm:@hicaru/pi-rlm
+```
 
----
+以后要移除：
 
-**递归语言模型 (RLM)** 是一种与任务无关的推理范式，其中根语言模型通过对输入进行*编程式*的检查、分解并**递归调用自身**，从而在近乎无限的上下文中进行编排。RLM 将典型的 `llm.completion(prompt, model)` 调用替换为 `rlm.completion(prompt, model)` 调用：提示词/上下文作为 REPL 环境中的一个变量进行卸载，模型与其进行交互，并且模型可以将子 LLM 和子 RLM 调用作为代码中的普通函数启动。
+```bash
+pi uninstall npm:@hicaru/pi-rlm
+```
 
-这是对 [CodeAct](https://arxiv.org/abs/2402.01030) 风格框架的一种尝试 —— 每个语言模型都能访问代码环境，子 (R)LM 调用是函数，而上下文/提示词是代码中的对象 —— 从而脱离了 JSON 工具调用 (tool-calling) 标准。以此方式构建的系统*本身*就是一个依赖于递归子 LLM 调用的语言模型，因此得名。
+然后在 Pi 中运行 `/reload` —— `/rlm`、`/rlm-config` 和 `/rlm-stop` 会出现在 **[Extensions]** 下。使用 `Ctrl+Shift+R` 或 `/rlm` 切换。
 
-`pi-rlm` 将该范式**原生引入 Pi**：
+<p align="center">
+  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" width="100%" alt="rlm.pi — OOLONG 基准测试结果">
+</p>
 
-- **根编排器**模型逐轮驱动一个**持久化的 Python REPL**。
-- 长上下文工作通过 `llm_query` / `llm_query_batched` **委派**给廉价的工作模型。
-- 困难的子问题通过 `rlm_query` **递归**到子 RLM 中（设有深度限制）。子 RLM 继承父级的 `context`
-  ——已加载的文件以及通过 `add_context()` 追加的来源——因此可以在相同的路径上使用相同的检索原语。
-  继承不消耗额外的 token：内容存放在沙箱中，模型只看到一行大小信息。
-- 所有内容均**在进程内**运行 —— 唯一的外部进程是一个本地的 `python3` worker。
+## 什么是 pi-rlm？
 
-> 这是 RLM 方法的 Pi 插件重新实现（参见 [RLM 论文](https://arxiv.org/abs/2512.24601)）。
-> 它**不是**那个 Python 库。
+一个把 Pi 会话变成**递归语言模型 (RLM)** 的插件：不必把庞大的文档塞进提示词，上下文
+驻留在 Python REPL 中，由你最好的模型编排 —— 检索、分解，并把叶子读取递归地委派给
+廉价的工作模型。同一个 Pi 会话、同样的工具、同样的密钥 —— 打开 `/rlm` 即可。
+方法基于 [RLM 论文](https://arxiv.org/abs/2512.24601)；详见下方的**工作原理**。
+
+## 基准测试
+
+<p align="center">
+  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" width="100%" alt="OOLONG 基准测试 — 最新结果">
+</p>
+
+**OOLONG (oolong-synth)** —— paper 级长上下文套件；取每个模型最新的日志，每任务成本
+来自真实 `costUsd`（旧日志按 OpenRouter 牌价估算）：
+
+| 模型 | 得分 | 每任务成本 |
+|------|------|------------|
+| `qwen/qwen3.8-27b` | **100%** | $0.0127 |
+| `google/gemma-3-27b-it` | 83.3% | $0.0013 |
+| `qwen/qwen3-30b-a3b-instruct-2507` | 66.7% | $0.0009 |
+| `mistralai/mistral-small-3.2-24b-instruct` | 66.7% | $0.0025 |
+
+精简套件 —— `needle`（多针召回）、`codeqa`（代码库问答）、`coding`（修复任务；
+每模型 7 个任务 × 2 轮，确定性评分，无 LLM 评审）：
+
+| 模型 | 得分 | 准确率 |
+|------|------|--------|
+| `qwen/qwen3-30b-a3b-instruct-2507` | **14/14** | **100%** |
+| `google/gemma-3-27b-it` | 12/14 | 86% |
+| `mistralai/mistral-small-3.2-24b-instruct` | 12/14 | 86% |
+
+逐任务原始数据（正确性、召回率、延迟、token、成本）位于 `bench/runs/*.jsonl`
+—— 每个任务一行 JSONL，作为历史记录提交。
+
+### 运行基准测试
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...        # 必需 —— 密钥仅通过环境变量传递
+
+bun run bench                              # 精简套件：needle + codeqa + coding
+bun run bench --suite needle --limit 1     # 单个套件，仅第一个任务
+bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
+bun run bench --list                       # 仅列出任务，无需引擎和密钥
+bun run bench --suite paper                # paper 套件：s_niah, oolong, browsecomp, codeqa_lb（需下载数据集）
+```
+
+套件：`all`（精简版，默认） · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
+`oolong` · `browsecomp` · `codeqa_lb`。
 
 ## 工作原理
 
@@ -61,26 +100,19 @@ pi 进程 (TypeScript)
   `rlm_query_batched`, `SHOW_VARS()`, `ask_user_question()` 以及一个 `answer` 字典。
   模型通过设置 `answer["ready"] = True` 来提交最终结果。
 
-## 安装
+## 从源码安装（开发）
 
 `pi-rlm` 是一个 Pi 包。Pi 提供了 `@earendil-works/pi-*` 和 `typebox` peer
 依赖；请**不要**在该包中安装它们的独立副本。要求 `PATH` 中有 `python3` (仅限标准库)。
 
-开发时的推荐本地安装方式：
+开发时的本地安装方式：
 
 ```bash
 pi install /path/to/this-repo/pi-plugin/rlm
 ```
 
-已发布的 npm 包安装方式：
-
-```bash
-npm publish                       # 例如 as @<you>/pi-rlm
-pi install npm:@<you>/pi-rlm
-```
-
 > **Git 安装**要求包清单位于安装的仓库根目录下。
-> 对于像这样一个 monorepo 子目录，请优先使用上述的本地路径或 npm 流程。
+> 对于像这样一个 monorepo 子目录，请优先使用上述的本地路径流程。
 
 如果您之前直接复制了扩展文件夹，请将其删除，以免遮蔽 (shadow) 该包：
 
@@ -146,38 +178,6 @@ rm -rf ~/.pi/agent/extensions/rlm
   `/rlm-config` 中配置 `trackingUri` / `experimentId`。根运行被标记为 MLflow span
   以便在恢复时进行追踪关联。Bearer 令牌来自 `MLFLOW_TRACKING_TOKEN`
   环境变量，且**绝不会**持久化到 `rlm.json`。
-
-## 基准测试
-
-针对 OpenRouter 聊天模型对真实引擎进行端到端测试 —— 精简套件（`needle` 多针召回、
-`codeqa` 代码库问答、`coding` 修复任务；每个模型 7 个任务 × 2 轮）。确定性评分
-（召回率 / 标准答案包含 / 正则），无 LLM 评审。
-
-最新结果 —— 小型模型（≤32B 参数，付费额度）：
-
-| 模型 | 参数 | 得分 | 准确率 | 每任务延迟 |
-|------|------|------|--------|------------|
-| `qwen/qwen3-30b-a3b-instruct-2507` | MoE 30B / 3B 激活 | **14/14** | **100%** | ~15s |
-| `google/gemma-3-27b-it` | dense 27B | 12/14 | 86% | ~26s |
-| `mistralai/mistral-small-3.2-24b-instruct` | dense 24B | 12/14 | 86% | ~28s |
-
-逐任务原始数据（正确性、召回率、延迟、token、成本）位于 `bench/runs/bench-<ts>.jsonl`
-—— 每个任务一行 JSONL，作为历史记录提交。
-
-### 运行基准测试
-
-```bash
-export OPENROUTER_API_KEY=sk-or-...        # 必需 —— 密钥仅通过环境变量传递
-
-bun run bench                              # 精简套件：needle + codeqa + coding
-bun run bench --suite needle --limit 1     # 单个套件，仅第一个任务
-bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
-bun run bench --list                       # 仅列出任务，无需引擎和密钥
-bun run bench --suite paper                # paper 套件：s_niah, oolong, browsecomp, codeqa_lb（需下载数据集）
-```
-
-套件：`all`（精简版，默认） · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
-`oolong` · `browsecomp` · `codeqa_lb`。
 
 ## 安全性
 
