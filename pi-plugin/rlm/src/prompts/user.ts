@@ -42,3 +42,12 @@ export const REASONING_BUDGET_HINT =
   "[budget] Reasoning is on while the root output cap is below 8192 tokens: thinking shares " +
   "the completion budget with the answer, so long thought may be cut off mid-reasoning. " +
   "Keep thought concise, or raise rootSampling.maxTokens.";
+
+/** One-shot verification-discipline nudge (default OFF — enableVerificationNudge): fired when
+ *  the root finalizes suspiciously early with a bare number / short label. The model gets ONE
+ *  coached redo instead of having the answer accepted. */
+export const VERIFICATION_NUDGE =
+  "[coach] That answer was submitted suspiciously early and looks under-verified. Before " +
+  "finalizing: recompute the key quantity inside a ```repl block (show the actual computation, " +
+  "not a restatement), sanity-check it against the source material, and only then set " +
+  "answer[\"content\"] again.";

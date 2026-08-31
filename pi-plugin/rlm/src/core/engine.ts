@@ -20,7 +20,7 @@ import { TaskLedger, contextSig, taskKey } from "./ledger.ts";
 import { type MemoryStore, rootContextPaths } from "./memory.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
-import { buildTurnPrompt, FINALIZE_PROMPT, RETRIEVAL_NUDGE, REASONING_BUDGET_HINT } from "../prompts/user.ts";
+import { buildTurnPrompt, FINALIZE_PROMPT, RETRIEVAL_NUDGE, REASONING_BUDGET_HINT, VERIFICATION_NUDGE } from "../prompts/user.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
 import type { SubcallPhase } from "../tool/rlm-details.ts";
 import { PythonSandbox, SANDBOX_WATCHDOG_HEARTBEAT_MS } from "../sandbox/sandbox.ts";
@@ -46,6 +46,9 @@ import { createSubcallGates, type SubcallGates } from "../util/concurrency.ts";
  * hold a finished run open on work whose result nobody can receive.
  */
 const DETACHED_SETTLE_MS = 5_000;
+/** Verification nudge (enableVerificationNudge): only an EARLY finalize is suspicious — from
+ *  turn 4 on, a bare answer is just... an answer. "Before iteration ~4", per the bench data. */
+const VERIFICATION_NUDGE_TURN_CAP = 4;
 /** H6 (audit): root episodes snapshot at most this many real files — replay invalidation for
  *  the disk-backed slice of the context without hashing an unbounded repository. */
 const ROOT_HASH_MAX = 64;
@@ -253,6 +256,10 @@ export function createEngine(deps: EngineDeps): RunRlm {
     // H3: retrieval-discipline coach — one-shot per run; children inherit it via the same loop.
     let sawRetrieval = false;
     let retrievalNudged = false;
+    // Verification-discipline coach (enableVerificationNudge, default OFF): one coached redo
+    // when an early finalize looks like the confident-wrong bench shape.
+    let verificationNudged = false;
+    let verificationNudgePending = false;
 
     try {
       const meta = {
@@ -376,6 +383,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
             ledgerBlock === "" ? undefined : ledgerBlock,
             memoryBlock === "" ? undefined : memoryBlock,
             nudgeNow ? RETRIEVAL_NUDGE : undefined,
+            verificationNudgePending ? VERIFICATION_NUDGE : undefined,
             // One-shot (turn 0 only): thinking tokens share the completion budget — mirror of
             // the bench's doubling rule. Advisory; never fatal, never repeated.
             i === 0 && rootSampling.reasoning !== undefined && (rootSampling.maxTokens ?? 16_384) < 8_192
@@ -384,6 +392,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           ]
             .filter((s): s is string => s !== undefined)
             .join("\n\n") || undefined;
+        verificationNudgePending = false;
         appendUserMessage(history, buildTurnPrompt(i, deps.config.maxIterations, notes));
 
         const turn = await runTurn(history, sandbox, {
@@ -421,10 +430,19 @@ export function createEngine(deps: EngineDeps): RunRlm {
         completedTurns = i + 1;
         const final = finalAnswerOf(turn.results);
         if (final != null) {
-          const done = result(final, i + 1, limits);
-          persistRoot(done.answer);
-          lastAnswer = done.answer;
-          return done;
+          // Verification-discipline nudge (enableVerificationNudge, default OFF): an early
+          // finalize whose answer is a bare number / short label is the confident-wrong shape
+          // that dominated bench failures. ONE coached redo, then the answer is accepted.
+          if (deps.config.enableVerificationNudge === true && !verificationNudged
+            && completedTurns < VERIFICATION_NUDGE_TURN_CAP && isBareAnswer(final)) {
+            verificationNudged = true;
+            verificationNudgePending = true;
+          } else {
+            const done = result(final, i + 1, limits);
+            persistRoot(done.answer);
+            lastAnswer = done.answer;
+            return done;
+          }
         }
 
         limits.observe(turnHadError(turn.results));
@@ -540,6 +558,13 @@ function contextWindowOrFallback(model: Model<Api>, registry: ModelContextRegist
     return model.contextWindow;
   }
   return registry.limitFor(`${model.provider}/${model.id}`);
+}
+
+/** Bare number / short label — the early-confident answer shape the verification nudge
+ *  targets (28/33 bench failures were early confident wrong answers). */
+function isBareAnswer(answer: string): boolean {
+  const t = answer.trim();
+  return t.length <= 12 || /^[-+$(€£¥]?\d+(?:[.,]\d+)*\s*%?$/.test(t);
 }
 
 /** Out of turns: ask the model for its best final answer. FINALIZE_PROMPT asks for a fenced

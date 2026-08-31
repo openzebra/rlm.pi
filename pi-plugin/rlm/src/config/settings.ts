@@ -150,6 +150,9 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   }
   // v5 child surface doctrine
   if (r.childSurface === "delegation" || r.childSurface === "legacy") out.childSurface = r.childSurface;
+  // Verification-discipline nudge (default OFF).
+  const enableVerificationNudge = validateBoolean(r.enableVerificationNudge);
+  if (enableVerificationNudge !== undefined) out.enableVerificationNudge = enableVerificationNudge;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
     const ss = r.subSampling as Record<string, unknown>;
     const sampling: { maxTokens?: number; temperature?: number; reasoning?: ThinkingLevel } = {};

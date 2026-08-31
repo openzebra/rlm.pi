@@ -110,6 +110,11 @@ export interface RlmConfig {
   /** v5 doctrine: "delegation" = child engines get llm/memory/ledger only (no repo retrieval);
    *  "legacy" keeps today's full child surface as a one-flip rollback. */
   readonly childSurface: "delegation" | "legacy";
+  /** Verification-discipline nudge (default OFF — it changes interactive behavior): when the
+   *  root finalizes before turn 4 with a bare number / short label, it gets ONE coached redo
+   *  ("recompute and sanity-check in Python") instead of accepting the answer. Opt-in via
+   *  rlm.json; evidence: 28/33 bench failures were early confident wrong answers. */
+  readonly enableVerificationNudge?: boolean;
 }
 
 /** Input to a (headless) RLM run. */

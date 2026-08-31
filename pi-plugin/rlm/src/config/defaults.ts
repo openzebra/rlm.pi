@@ -58,4 +58,7 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   memoryDir: null,
   // v5 role separation: children delegate (llm + memory/ledger); "legacy" = full child surface.
   childSurface: "delegation",
+  // Verification-discipline nudge — deliberately OFF (plan guardrail): when on, an early
+  // bare-number finalize gets one coached redo instead of being accepted. Opt-in via rlm.json.
+  enableVerificationNudge: false,
 });

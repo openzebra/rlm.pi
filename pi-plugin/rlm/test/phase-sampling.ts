@@ -329,6 +329,47 @@ async function main(): Promise<void> {
     );
   }
 
+  // ── 9. verification-discipline nudge (enableVerificationNudge, default OFF) ──
+  {
+    const ready = (a: string): string => repl(`answer["content"] = ${JSON.stringify(a)}\nanswer["ready"] = True`);
+    const nudgeCfg = (mi: number): RlmConfig => cfg({ maxIterations: mi, enableMemory: false, enableLedger: false, enableVerificationNudge: true });
+
+    // Default OFF: an early bare answer is accepted exactly as before (guardrail).
+    {
+      const { complete, calls } = captureComplete([ready("7")]);
+      const engine = createEngine({ model: wireModel(false), llmModel: wireModel(false), registry: MOCK_REGISTRY, config: cfg({ maxIterations: 6, enableMemory: false, enableLedger: false }), emitter: new RlmEmitter(), complete });
+      const out = await engine({ rootPrompt: "nudge-off-9411", context: "ctx", depth: 0 });
+      check("nudge: default OFF accepts the early bare answer", out.answer === "7" && calls.length === 1);
+    }
+    // ON: bare "7" at turn 1 → coached redo → the verified answer is accepted instead.
+    {
+      const { complete, calls } = captureComplete([ready("7"), ready("The vault code is MARTINI-7, verified by recomputation")]);
+      const engine = createEngine({ model: wireModel(false), llmModel: wireModel(false), registry: MOCK_REGISTRY, config: nudgeCfg(6), emitter: new RlmEmitter(), complete });
+      const out = await engine({ rootPrompt: "nudge-on-9412", context: "ctx", depth: 0 });
+      check("nudge: ON redoes an early bare answer once", out.answer.startsWith("The vault code") && calls.length === 2, `answer=${out.answer.slice(0, 24)} calls=${calls.length}`);
+      const turn2User = calls[1]?.messages.findLast((m) => m.role === "user");
+      check("nudge: the coached note reached the redo turn", turn2User?.content.includes("[coach] That answer was submitted suspiciously early") === true);
+      const turn1User = calls[0]?.messages.at(-1);
+      check("nudge: turn 1 was clean (note fires after, not before)", turn1User?.content.includes("suspiciously early") === false);
+    }
+    // ON, one-shot: a SECOND bare final is accepted — never nudged twice.
+    {
+      const { complete, calls } = captureComplete([ready("7"), ready("8")]);
+      const engine = createEngine({ model: wireModel(false), llmModel: wireModel(false), registry: MOCK_REGISTRY, config: nudgeCfg(6), emitter: new RlmEmitter(), complete });
+      const out = await engine({ rootPrompt: "nudge-once-9413", context: "ctx", depth: 0 });
+      check("nudge: fires at most once per run", out.answer === "8" && calls.length === 2);
+    }
+    // ON but LATE: a bare final from turn 4 on is just an answer.
+    {
+      const { complete, calls } = captureComplete([repl(`print("1")`), repl(`print("2")`), repl(`print("3")`), ready("42")]);
+      const engine = createEngine({ model: wireModel(false), llmModel: wireModel(false), registry: MOCK_REGISTRY, config: nudgeCfg(4), emitter: new RlmEmitter(), complete });
+      const out = await engine({ rootPrompt: "nudge-late-9414", context: "ctx", depth: 0 });
+      check("nudge: late bare finalize (turn >= 4) is accepted", out.answer === "42" && calls.length === 4, `calls=${calls.length}`);
+    }
+    // The flag survives the rlm.json validation seam.
+    check("nudge: enableVerificationNudge survives validateConfig", validateConfig({ enableVerificationNudge: true }).enableVerificationNudge === true);
+  }
+
   server.close();
 }
 
