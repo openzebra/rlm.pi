@@ -13,7 +13,7 @@
 import { createEngine, type EngineDeps } from "../pi-plugin/rlm/src/core/engine.ts";
 import { DEFAULT_CONFIG } from "../pi-plugin/rlm/src/config/defaults.ts";
 import { RlmEmitter } from "../pi-plugin/rlm/src/tool/rlm-events.ts";
-import type { RlmConfig, RunRlm } from "../pi-plugin/rlm/src/core/types.ts";
+import type { RlmConfig, RunRlm, Sampling } from "../pi-plugin/rlm/src/core/types.ts";
 
 type BenchModel = EngineDeps["model"];
 type BenchRegistry = EngineDeps["registry"];
@@ -102,6 +102,27 @@ export interface BenchRunOpts {
   readonly pricing?: BenchPricing;
 }
 
+/**
+ * The bench's sampling assembly, pure and exported for the bench↔engine parity test
+ * (test/phase-bench-parity.ts). makeRun freezes these straight into RlmConfig — reasoning
+ * rides INSIDE rootSampling on purpose: the engine's merge rule ({ reasoning: smartReasoning,
+ * ...rootSampling }) makes rootSampling.reasoning win, so the bench's thinking flag survives
+ * the engine hop instead of being overridden by an interactive default.
+ */
+export function benchSampling(opts?: BenchRunOpts): { readonly root: Sampling; readonly sub: Sampling } {
+  const temperature = opts?.temperature ?? 0;
+  return {
+    root: Object.freeze({
+      // Reasoning tokens share the completion budget, so the root budget doubles when
+      // thinking is on. Sub-sampling NEVER carries reasoning (worker model has none).
+      maxTokens: opts?.reasoning !== undefined ? 8192 : 4096,
+      temperature,
+      ...(opts?.reasoning !== undefined ? { reasoning: opts.reasoning } : {}),
+    }),
+    sub: Object.freeze({ maxTokens: 2048, temperature }),
+  };
+}
+
 export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts): RunRlm {
   const model = {
     id: target.id,
@@ -149,14 +170,10 @@ export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts
     // unit tests (test/budget.ts); the bench measures capability, so it runs without it.
     // Runs stay bounded by maxIterations + maxErrors.
     enableTokenBudget: false,
-    // Reasoning tokens share the completion budget, so the root budget doubles when thinking
-    // is on. Sub-sampling NEVER carries reasoning (worker model has none).
-    rootSampling: Object.freeze({
-      maxTokens: opts?.reasoning !== undefined ? 8192 : 4096,
-      temperature: opts?.temperature ?? 0,
-      ...(opts?.reasoning !== undefined ? { reasoning: opts.reasoning } : {}),
-    }),
-    subSampling: Object.freeze({ maxTokens: 2048, temperature: opts?.temperature ?? 0 }),
+    // Sampling comes from the ONE bench assembly (benchSampling) — the parity test drives it
+    // through the real engine so the two wirings cannot drift.
+    rootSampling: benchSampling(opts).root,
+    subSampling: benchSampling(opts).sub,
   };
 
   return createEngine({
