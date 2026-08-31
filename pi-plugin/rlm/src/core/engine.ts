@@ -548,10 +548,19 @@ async function finalize(
   const finalHistory = [...history];
   appendUserMessage(finalHistory, FINALIZE_PROMPT);
   const complete = deps.complete ?? modelComplete;
+  // Same merge rule as the main loop (the `rootSampling` construction in run()): rootSampling
+  // wins, smartReasoning is the reasoning default. Finalize is a root turn — it must obey the
+  // user's sampling too, or the last turn of every run silently reverts to provider defaults.
+  const rootSampling: Sampling = {
+    reasoning: deps.config.smartReasoning,
+    ...deps.config.rootSampling,
+  };
   const { text, usage } = await complete(finalHistory, {
     model,
     registry: deps.registry,
-    reasoning: deps.config.smartReasoning,
+    maxTokens: rootSampling.maxTokens,
+    temperature: rootSampling.temperature,
+    reasoning: rootSampling.reasoning,
     signal: deps.signal,
   });
   limits.addUsage(usage);

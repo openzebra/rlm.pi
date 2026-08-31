@@ -9,6 +9,7 @@
  * RLM root (full history).
  */
 
+import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import { type Api, completeSimple, type Message, type Model, type ThinkingLevel, type Usage } from "@earendil-works/pi-ai/compat";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { completeWithRetry, DEFAULT_RETRY_POLICY, type RetryPolicy } from "../util/retry.ts";
@@ -68,6 +69,19 @@ function toPiMessages(messages: readonly ChatMsg[], model: Model<Api>): { readon
   return { systemPrompt, messages: out };
 }
 
+/**
+ * Explicit reasoning gate. pi-ai clamps unsupported levels too (a model with `reasoning:
+ * false` supports only "off", so any requested level clamps to it and nothing goes out on
+ * the wire) — owning the gate here makes the behavior engine policy, testable without a
+ * provider, and drops the option outright instead of forwarding a level the model cannot
+ * honor. Capability comes from the registry entry, never from config.
+ */
+export function effectiveReasoning(model: Model<Api>, level: ThinkingLevel | undefined): ThinkingLevel | undefined {
+  if (level === undefined) return undefined;
+  const clamped = clampThinkingLevel(model, level);
+  return clamped === "off" ? undefined : clamped;
+}
+
 /** Extract the assistant's plain text from a completion. */
 function extractText(content: readonly { readonly type: string; readonly text?: string }[]): string {
   return content
@@ -97,7 +111,7 @@ export async function modelComplete(messages: readonly ChatMsg[], opts: Complete
           headers: auth.headers,
           maxTokens: opts.maxTokens,
           temperature: opts.temperature,
-          reasoning: opts.reasoning,
+          reasoning: effectiveReasoning(opts.model, opts.reasoning),
           signal: opts.signal,
           onResponse: (res) => { note(res.status, res.headers); },
         },
