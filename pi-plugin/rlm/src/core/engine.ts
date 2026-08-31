@@ -20,7 +20,7 @@ import { TaskLedger, contextSig, taskKey } from "./ledger.ts";
 import { type MemoryStore, rootContextPaths } from "./memory.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
-import { buildTurnPrompt, FINALIZE_PROMPT, RETRIEVAL_NUDGE } from "../prompts/user.ts";
+import { buildTurnPrompt, FINALIZE_PROMPT, RETRIEVAL_NUDGE, REASONING_BUDGET_HINT } from "../prompts/user.ts";
 import type { RlmEmitter } from "../tool/rlm-events.ts";
 import type { SubcallPhase } from "../tool/rlm-details.ts";
 import { PythonSandbox, SANDBOX_WATCHDOG_HEARTBEAT_MS } from "../sandbox/sandbox.ts";
@@ -320,6 +320,13 @@ export function createEngine(deps: EngineDeps): RunRlm {
       liveContext = input.context ?? [];
       contextPin = await pinContext(liveContext);
       await sandbox.loadContextPinned(contextPin);
+
+      // rootSampling fields win; smartReasoning is the default reasoning when not overridden.
+      // Loop-invariant — built once here; finalize() applies the same merge to its own turn.
+      const rootSampling: Sampling = {
+        reasoning: deps.config.smartReasoning,
+        ...deps.config.rootSampling,
+      };
       for (let i = 0; i < deps.config.maxIterations; i++) {
         limits.checkTimeout();
         if (selfReportId) emitter.emitSubcallUpdated({ id: selfReportId, detail: `turn ${i + 1}/${deps.config.maxIterations}` });
@@ -369,16 +376,16 @@ export function createEngine(deps: EngineDeps): RunRlm {
             ledgerBlock === "" ? undefined : ledgerBlock,
             memoryBlock === "" ? undefined : memoryBlock,
             nudgeNow ? RETRIEVAL_NUDGE : undefined,
+            // One-shot (turn 0 only): thinking tokens share the completion budget — mirror of
+            // the bench's doubling rule. Advisory; never fatal, never repeated.
+            i === 0 && rootSampling.reasoning !== undefined && (rootSampling.maxTokens ?? 16_384) < 8_192
+              ? REASONING_BUDGET_HINT
+              : undefined,
           ]
             .filter((s): s is string => s !== undefined)
             .join("\n\n") || undefined;
         appendUserMessage(history, buildTurnPrompt(i, deps.config.maxIterations, notes));
 
-        // rootSampling fields win; smartReasoning is the default reasoning when not overridden.
-        const rootSampling: Sampling = {
-          reasoning: deps.config.smartReasoning,
-          ...deps.config.rootSampling,
-        };
         const turn = await runTurn(history, sandbox, {
           model: model,
           registry: deps.registry,

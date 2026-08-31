@@ -305,6 +305,30 @@ async function main(): Promise<void> {
     await saveSettings(previous);
   }
 
+  // ── 8. one-shot reasoning budget hint (thinking shares the completion budget) ──
+  {
+    const { complete, calls } = captureComplete([DONE]);
+    await runEngine(cfg({ rootSampling: Object.freeze({ maxTokens: 1024, temperature: 0, reasoning: "high" }) }), complete);
+    const firstUser = calls[0]?.messages.find((m) => m.role === "user");
+    check("hint: reasoning + small cap → turn-0 note", firstUser?.content.includes("thinking shares") === true);
+  }
+  {
+    const { complete, calls } = captureComplete([DONE]);
+    await runEngine(cfg({ rootSampling: Object.freeze({ maxTokens: 16384, temperature: 0, reasoning: "high" }) }), complete);
+    const firstUser = calls[0]?.messages.find((m) => m.role === "user");
+    check("hint: generous cap → no note", firstUser?.content.includes("thinking shares") === false);
+  }
+  {
+    const { complete, calls } = captureComplete([repl(`print("working")`), DONE]);
+    await runEngine(cfg({ maxIterations: 3, rootSampling: Object.freeze({ maxTokens: 1024, temperature: 0, reasoning: "high" }) }), complete);
+    const secondTurnUser = calls[1]?.messages.findLast((m) => m.role === "user");
+    check(
+      "hint: one-shot — the next turn's fresh note omits it (old note only replays as history)",
+      calls.length === 2 && secondTurnUser !== undefined && !secondTurnUser.content.includes("thinking shares"),
+      `calls=${calls.length}`,
+    );
+  }
+
   server.close();
 }
 

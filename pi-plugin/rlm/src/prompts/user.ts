@@ -34,3 +34,11 @@ export const RETRIEVAL_NUDGE =
   "[coach] You have not inspected the external context yet — it is NOT included in this " +
   "chat, and guessing is useless: the text is padding. On THIS turn, call search(\"...\") " +
   "or grep_context(\"...\") inside a ```repl block before answering.";
+
+/** One-shot budget hint (engine-owned, turn 0 only): reasoning tokens share the completion
+ *  budget with the answer, mirroring the bench's doubling rule — a reasoning root with a
+ *  small output cap risks truncated thought. Advisory only; never fatal. */
+export const REASONING_BUDGET_HINT =
+  "[budget] Reasoning is on while the root output cap is below 8192 tokens: thinking shares " +
+  "the completion budget with the answer, so long thought may be cut off mid-reasoning. " +
+  "Keep thought concise, or raise rootSampling.maxTokens.";
