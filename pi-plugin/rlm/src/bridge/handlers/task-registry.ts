@@ -24,6 +24,22 @@ export interface AwaitDeps {
   unawaitedIds(): readonly string[];
 }
 
+/** DRY: the ONE TaskEntry → AwaitResult mapping — shared by the await handler and the registry. */
+export function entryToAwaitResult(entry: TaskEntry): AwaitResult {
+  const status = entry.status === "pending" ? "error" : entry.status;
+  return {
+    ok: entry.status === "done",
+    task_id: entry.taskId,
+    kind: entry.kind,
+    status,
+    result: entry.result,
+    results: entry.results,
+    error:
+      entry.error ??
+      (entry.status === "pending" ? "Task still pending" : undefined),
+  };
+}
+
 export interface TaskRegistry {
   readonly spawnDeps: SpawnDeps;
   readonly awaitDeps: AwaitDeps;
@@ -32,8 +48,8 @@ export interface TaskRegistry {
 }
 
 interface Waiter {
-  resolve: (entry: TaskEntry) => void;
-  reject: (err: Error) => void;
+  readonly resolve: (entry: TaskEntry) => void;
+  readonly reject: (err: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -146,19 +162,7 @@ export function createTaskRegistry(): TaskRegistry {
           error: `Task ${taskId} not found`,
         };
       }
-      const status =
-        entry.status === "pending" ? "error" : entry.status;
-      return {
-        ok: entry.status === "done",
-        task_id: entry.taskId,
-        kind: entry.kind,
-        status,
-        result: entry.result,
-        results: entry.results,
-        error:
-          entry.error ??
-          (entry.status === "pending" ? "Task still pending" : undefined),
-      };
+      return entryToAwaitResult(entry);
     },
   };
 }

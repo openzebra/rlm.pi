@@ -14,7 +14,7 @@ import { checkResourceLimits } from "../../core/resource-limits.ts";
 import { errorMessage, formatError } from "../../util/errors.ts";
 import { retryPolicy } from "../../util/retry.ts";
 import type { Semaphore } from "../../util/concurrency.ts";
-import type { Invocation, SubcallConfig } from "./types.ts";
+import type { Invocation, SubcallConfig, SubcallHandlerDeps } from "./types.ts";
 
 export interface Complete1Deps {
   readonly leafGate: Semaphore;
@@ -23,6 +23,21 @@ export interface Complete1Deps {
   readonly getConfig: () => SubcallConfig;
   readonly signal?: AbortSignal;
   readonly onUsage?: (usage: Usage, role: "sub") => void;
+}
+
+/**
+ * AGENTS.md DRY: the ONE projection of SubcallHandlerDeps for complete1 — shared verbatim by
+ * the llm-query and rlm-query handlers. Never inline a second copy.
+ */
+export function completeDeps(deps: SubcallHandlerDeps): Complete1Deps {
+  return {
+    leafGate: deps.gates.leaf,
+    registry: deps.registry,
+    getLlmModel: deps.getLlmModel,
+    getConfig: deps.getConfig,
+    signal: deps.signal,
+    onUsage: deps.onUsage,
+  };
 }
 
 /**

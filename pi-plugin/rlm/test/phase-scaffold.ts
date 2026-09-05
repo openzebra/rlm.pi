@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import type { SubcallOpts } from "../src/sandbox/interrupts.ts";
-import { check, failureCount } from "./helpers.ts";
+import { check, failureCount, runSuite } from "./helpers.ts";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -22,7 +22,7 @@ const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 interface CallRecord {
   readonly kind: "rlm_query" | "rlm_batch";
   readonly payload: string;
-  readonly paths: readonly string[] | undefined;
+  readonly paths?: readonly string[];
 }
 
 const calls: CallRecord[] = [];
@@ -148,7 +148,4 @@ function testDocDrift(): void {
   }
 }
 
-main().catch((e: unknown) => {
-  console.error("FATAL", e);
-  process.exit(1);
-});
+runSuite(main);

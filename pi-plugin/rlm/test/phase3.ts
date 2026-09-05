@@ -5,7 +5,7 @@
  *   RLM_TEST_LIVE=1 bun run pi-plugin/rlm/test/phase3.ts # real end-to-end /rlm run
  */
 
-import { check, failureCount } from "./helpers.ts";
+import { check, finish, runSuite } from "./helpers.ts";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -127,12 +127,5 @@ async function main() {
   finish();
 }
 
-function finish() {
-  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
-  process.exit(failureCount() === 0 ? 0 : 1);
-}
 
-main().catch((e) => {
-  console.error("FATAL", e);
-  process.exit(1);
-});
+runSuite(main);

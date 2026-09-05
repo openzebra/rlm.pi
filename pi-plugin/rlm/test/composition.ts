@@ -14,12 +14,8 @@ import { buildSessionGates, createSubcallGates } from "../src/util/concurrency.t
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import type { EngineDeps } from "../src/core/engine.ts";
 import type { RunRlm } from "../src/core/types.ts";
-import { MOCK_MODEL, MOCK_REGISTRY, check, failureCount } from "./helpers.ts";
+import { check, finish, MOCK_MODEL, MOCK_REGISTRY } from "./helpers.ts";
 
-function finish(): void {
-  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)}`);
-  process.exit(failureCount() === 0 ? 0 : 1);
-}
 
 class ProbeController extends RlmController {
   captured: EngineDeps | undefined;

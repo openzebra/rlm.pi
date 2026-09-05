@@ -24,18 +24,17 @@ export interface TokenBudgetOptions {
 export type BudgetState = "" | "soft" | "hard";
 
 /** v5 verbatim: the soft wrap-up note prepended to the single turn after crossing soft. */
-export const WRAP_UP_BUDGET: string = Object.freeze(
+export const WRAP_UP_BUDGET: string =
   "[budget] ~80% of your token cap — ONE turn left. If the task is answerable NOW, finalize " +
     '(set answer["ready"] = True). Otherwise print a compact findings dump: what is confirmed, ' +
     "current file/line or search position, and the exact next step — a fresh continuation picks " +
-    "it up. Do not start new exploration.",
-);
+    "it up. Do not start new exploration.";
 
 export const DEFAULT_NEXT_STEP: string =
-  Object.freeze("continue the probing that was in flight, then finalize");
+  "continue the probing that was in flight, then finalize";
 
 /** v5 verbatim template (adapting the finalize spelling to this plugin's REPL). */
-const HANDOFF_TEMPLATE: string = Object.freeze(
+const HANDOFF_TEMPLATE: string =
   "A prior RLM run hit its token cap mid-task.\n" +
     "You are its continuation — pick up EXACTLY where it stopped.\n\n" +
     "ORIGINAL TASK:\n{query}\n\n" +
@@ -43,8 +42,7 @@ const HANDOFF_TEMPLATE: string = Object.freeze(
     "CURRENT STATE / LAST ACTIONS:\n{state}\n\n" +
     "NEXT STEP: {next}\n" +
     "Do not re-do confirmed work; continue from the NEXT STEP and finalize as\n" +
-    'soon as the task is answerable (answer["ready"] = True).',
-);
+    'soon as the task is answerable (answer["ready"] = True).';
 
 /** v5's elision marker, used whenever a handoff section is trimmed. */
 const ELISION_MARK = "\n…(+N chars elided [v5 handoff])…\n";

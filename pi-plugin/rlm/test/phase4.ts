@@ -8,7 +8,7 @@
  */
 
 import { type ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { MOCK_REGISTRY } from "./helpers.ts";
+import { MOCK_REGISTRY, runSuite } from "./helpers.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { createEngine } from "../src/core/engine.ts";
@@ -542,7 +542,4 @@ async function main() {
   process.exit(ok ? 0 : 1);
 }
 
-main().catch((e) => {
-  console.error("FATAL", e);
-  process.exit(1);
-});
+runSuite(main);

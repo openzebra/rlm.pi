@@ -9,7 +9,7 @@
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 /** $/Mtok, input-weighted 3:1 — a sub-call sends a file body and gets back a sentence. */
 function priceOf(model: Model<Api>): number {
@@ -51,4 +51,13 @@ export function cheapestModel(registry: ModelRegistry): Model<Api> | undefined {
     if (best === undefined || compareLlm(model, best) < 0) best = model;
   }
   return best;
+}
+
+/** Newer Pi hosts expose session-scoped models; 0.79 peers do not — duck-type safely.
+ *  DRY: the ONE reflection probe — shared by /rlm-llm and /rlm-rlm. */
+export function sessionScopedModels(
+  ctx: ExtensionContext,
+): readonly { readonly model: Model<Api> }[] | undefined {
+  const scoped: unknown = Reflect.get(ctx, "scopedModels");
+  return Array.isArray(scoped) ? scoped as readonly { readonly model: Model<Api> }[] : undefined;
 }

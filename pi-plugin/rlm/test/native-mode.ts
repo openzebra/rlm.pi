@@ -220,8 +220,13 @@ async function testSandboxManager() {
   check("SandboxManager — not alive after dispose", !mgr.isAlive);
   check("SandboxManager — discard callback fires on dispose",
     discardedCount === discardsBeforeDispose + 1, String(discardedCount));
-  await mgr.dispose(); // second dispose should not throw
-  check("SandboxManager — double dispose safe", true);
+  let doubleDisposeOk = true;
+  try {
+    await mgr.dispose(); // second dispose should not throw
+  } catch {
+    doubleDisposeOk = false;
+  }
+  check("SandboxManager — double dispose safe", doubleDisposeOk);
   check("SandboxManager — double dispose does not double discard",
     discardedCount === discardsBeforeDispose + 1, String(discardedCount));
 }

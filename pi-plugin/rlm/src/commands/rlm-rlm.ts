@@ -4,20 +4,13 @@
  * the pre-pin behavior, now an explicit picker row.
  */
 
-import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { modelRef } from "../config/settings.ts";
+import { sessionScopedModels } from "../mode/llm-model.ts";
 import type { RlmController } from "../mode/rlm-mode.ts";
 import { pickableModels, selectModel } from "../ui/model-picker.ts";
 import { setRlmModeStatus } from "../ui/status.ts";
 import { applyRlmSelection } from "./pins.ts";
-
-function sessionScopedModels(
-  ctx: ExtensionContext,
-): readonly { readonly model: Model<Api> }[] | undefined {
-  const scoped: unknown = Reflect.get(ctx, "scopedModels");
-  return Array.isArray(scoped) ? scoped as readonly { readonly model: Model<Api> }[] : undefined;
-}
 
 async function runRlmRlm(controller: RlmController, ctx: ExtensionContext): Promise<void> {
   try {

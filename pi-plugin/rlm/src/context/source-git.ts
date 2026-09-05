@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { errorMessage, type Result } from "../util/errors.ts";
 import { contextSourceId, pathPrefixFor } from "./namespace.ts";
-import { packDirectory } from "./source-dir.ts";
+import { packDirectory, packToSourceResult } from "./source-dir.ts";
 import type { ResolveOpts, SourceResult } from "./types.ts";
 
 const execFileP = promisify(execFile);
@@ -32,16 +32,7 @@ export async function sourceGit(
     const packed = await packDirectory(dir, pathPrefix, opts.signal);
     return {
       ok: true,
-      value: Object.freeze({
-        payload: packed.files,
-        files: packed.files.length,
-        chars: packed.chars,
-        sourceId,
-        pathPrefix,
-        documents: packed.documents,
-        converted: packed.converted,
-        skipped: packed.skipped,
-      }),
+      value: packToSourceResult(packed, sourceId, pathPrefix),
     };
   } catch (err: unknown) {
     return { ok: false, error: `git clone failed for ${url} — ${errorMessage(err)}` };

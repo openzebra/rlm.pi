@@ -72,7 +72,7 @@ export function limitsFromRemaining(
 
 export interface Invocation {
   readonly emitter: RlmEmitter;
-  readonly parentId: string | undefined;
+  readonly parentId?: string;
   readonly depth: number;
   readonly limits: InvocationLimits;
 }

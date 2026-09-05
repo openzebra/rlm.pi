@@ -59,7 +59,7 @@ export function commitSubagentForceActivation(maxDepth: number = DEFAULT_CONFIG.
  */
 export function shouldEnforceNativeReaderBlock(opts: {
   readonly enabled: boolean;
-  readonly activeToolNames: readonly string[] | undefined;
+  readonly activeToolNames?: readonly string[];
 }): boolean {
   if (!opts.enabled) return false;
   const names = opts.activeToolNames;

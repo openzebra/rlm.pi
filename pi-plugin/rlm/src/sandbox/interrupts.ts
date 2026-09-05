@@ -86,19 +86,19 @@ export const REJECT: SubLlmHandlers = Object.freeze({
 });
 
 export interface ReplyBody {
-  response?: string;
-  responses?: string[];
-  path?: string;
-  json?: boolean;
-  files?: number;
-  chars?: number;
-  source_id?: string;
-  path_prefix?: string;
-  already_loaded?: boolean;
-  documents?: number;
-  converted?: number;
-  skipped?: readonly { readonly path: string; readonly reason: string }[];
-  error?: string;
+  readonly response?: string;
+  readonly responses?: readonly string[];
+  readonly path?: string;
+  readonly json?: boolean;
+  readonly files?: number;
+  readonly chars?: number;
+  readonly source_id?: string;
+  readonly path_prefix?: string;
+  readonly already_loaded?: boolean;
+  readonly documents?: number;
+  readonly converted?: number;
+  readonly skipped?: readonly { readonly path: string; readonly reason: string }[];
+  readonly error?: string;
 }
 
 const RLM_PATH_TYPES = new Set(["rlm_query", "rlm_batch"]);

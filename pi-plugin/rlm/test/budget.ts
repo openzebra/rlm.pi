@@ -23,12 +23,8 @@ import type { RlmConfig } from "../src/core/types.ts";
 import { ModelContextRegistry, modelsCachePath, UNKNOWN_CONTEXT } from "../src/core/model-registry.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
-import { check, failureCount, MOCK_MODEL, MOCK_REGISTRY, ZERO_USAGE } from "./helpers.ts";
+import { check, finish, MOCK_MODEL, MOCK_REGISTRY, ZERO_USAGE } from "./helpers.ts";
 
-function finish(): void {
-  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
-  process.exit(failureCount() === 0 ? 0 : 1);
-}
 
 function cfg(over: Partial<RlmConfig> = {}): RlmConfig {
   return { ...DEFAULT_CONFIG, ...over };

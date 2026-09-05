@@ -24,12 +24,8 @@ import { createSubcallGates } from "../src/util/concurrency.ts";
 import type { ChatMsg, CompleteResult } from "../src/bridge/model.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { runClaimedLeaf } from "../src/bridge/handlers/llm-query.ts";
-import { check, failureCount, MOCK_MODEL, MOCK_REGISTRY, ZERO_USAGE } from "./helpers.ts";
+import { check, finish, MOCK_MODEL, MOCK_REGISTRY, ZERO_USAGE } from "./helpers.ts";
 
-function finish(): void {
-  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
-  process.exit(failureCount() === 0 ? 0 : 1);
-}
 
 // ── pure helpers ────────────────────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@
  * Run: bun run pi-plugin/rlm/test/phase-guards.ts
  */
 
-import { check, failureCount } from "./helpers.ts";
+import { check, failureCount, runSuite } from "./helpers.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { NATIVE_PROMPT_STATIC, NATIVE_PROMPT_BUDGET } from "../src/prompts/native.ts";
 import { formatContextListing } from "../src/context/listing.ts";
@@ -201,7 +201,4 @@ async function main() {
   process.exit(failureCount() === 0 ? 0 : 1);
 }
 
-main().catch((e) => {
-  console.error("FATAL", e);
-  process.exit(1);
-});
+runSuite(main);

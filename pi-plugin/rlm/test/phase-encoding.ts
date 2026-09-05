@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { check, failureCount } from "./helpers.ts";
+import { check, failureCount, runSuite } from "./helpers.ts";
 import { buildAddContextHandler } from "../src/bridge/add-context.ts";
 import { PythonSandbox, type SandboxOptions } from "../src/sandbox/sandbox.ts";
 import type { ReplResult } from "../src/sandbox/protocol.ts";
@@ -294,7 +294,4 @@ async function main(): Promise<void> {
   console.log("\nAll phase-encoding checks passed.");
 }
 
-main().catch((e: unknown) => {
-  console.error(e);
-  process.exit(1);
-});
+runSuite(main);

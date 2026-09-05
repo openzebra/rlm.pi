@@ -4,7 +4,7 @@
  * explore the repo themselves; retrieval belongs to the root. "legacy" is the one-flip rollback.
  */
 
-import { check, failureCount, MOCK_MODEL, MOCK_REGISTRY, ZERO_USAGE } from "./helpers.ts";
+import { check, finish, MOCK_MODEL, MOCK_REGISTRY, ZERO_USAGE } from "./helpers.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { createEngine } from "../src/core/engine.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
@@ -35,10 +35,6 @@ function parseFlags(stdout: string): Record<string, boolean> {
   return out;
 }
 
-function finish(): void {
-  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
-  process.exit(failureCount() === 0 ? 0 : 1);
-}
 
 // ── worker level: the two surfaces ──────────────────────────────────────────────
 

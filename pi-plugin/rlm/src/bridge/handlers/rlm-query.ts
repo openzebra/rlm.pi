@@ -14,9 +14,9 @@ import { contextSig, ECHO_STUB, taskKey } from "../../core/ledger.ts";
 import type { Invocation, SpawnResult, SubcallHandlerDeps } from "./types.ts";
 import type { SubcallOpts } from "../../sandbox/interrupts.ts";
 import { SPAWN_HINT, spawnAndRun, type SpawnDeps } from "./task-registry.ts";
-import { complete1, type Complete1Deps } from "./completion.ts";
+import { complete1, completeDeps } from "./completion.ts";
 import { emitting, summarizeLeaf, throttleHooks } from "./emitting.ts";
-import { leafClaimKey, runClaimedLeaf } from "./llm-query.ts";
+import { activeLedger, leafClaimKey, runClaimedLeaf } from "./llm-query.ts";
 
 const UNWIRED = formatError("RLM bridge not wired for this invocation");
 const NO_UNMATCHED: readonly string[] = Object.freeze([]);
@@ -54,22 +54,6 @@ function childContextFor(
     context: filtered.files.length > 0 ? filtered.files : inherited,
     unmatched: filtered.unmatched,
   });
-}
-
-function completeDeps(deps: SubcallHandlerDeps): Complete1Deps {
-  return {
-    leafGate: deps.gates.leaf,
-    registry: deps.registry,
-    getLlmModel: deps.getLlmModel,
-    getConfig: deps.getConfig,
-    signal: deps.signal,
-    onUsage: deps.onUsage,
-  };
-}
-
-/** Ledger active for this call — undefined when disabled by config or not threaded in. */
-function activeLedger(deps: SubcallHandlerDeps) {
-  return deps.getConfig().enableLedger ? deps.ledger : undefined;
 }
 
 function claimKeyFor(deps: SubcallHandlerDeps, kind: "llm" | "rlm", prompt: string, paths: readonly string[], ctx: string): string {

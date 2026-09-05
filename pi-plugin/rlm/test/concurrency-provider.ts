@@ -4,7 +4,7 @@
  * under a { zai: 4 } style cap.
  */
 
-import { check, failureCount } from "./helpers.ts";
+import { check, finish } from "./helpers.ts";
 import {
   DepthGates,
   effectiveChildLimit,
@@ -14,10 +14,6 @@ import {
 import { validateConfig } from "../src/config/settings.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 
-function finish(): void {
-  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
-  process.exit(failureCount() === 0 ? 0 : 1);
-}
 
 // ── gate math ───────────────────────────────────────────────────────────────────
 
