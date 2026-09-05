@@ -14,7 +14,7 @@ import {
 } from "./namespace.ts";
 import type { ContextFile } from "./types.ts";
 
-export interface FilteredContext {
+interface FilteredContext {
   readonly files: readonly ContextFile[];
   /** Prefixes that selected zero files — the caller decides whether that is fatal. */
   readonly unmatched: readonly string[];

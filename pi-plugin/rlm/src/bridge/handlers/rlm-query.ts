@@ -4,7 +4,7 @@
  * AGENTS.md DRY #2: childRun exists once, here.
  */
 
-import { modelRef } from "../../config/settings.ts";
+import { modelLabelOf } from "../../config/settings.ts";
 import { errorMessage, formatError } from "../../util/errors.ts";
 import { filterContextByPaths } from "../../context/merge.ts";
 import { previewText } from "../../text/preview.ts";
@@ -13,12 +13,11 @@ import { checkResourceLimits } from "../../core/resource-limits.ts";
 import { contextSig, ECHO_STUB, taskKey } from "../../core/ledger.ts";
 import type { Invocation, SpawnResult, SubcallHandlerDeps } from "./types.ts";
 import type { SubcallOpts } from "../../sandbox/interrupts.ts";
-import { SPAWN_HINT, spawnAndRun, type SpawnDeps } from "./task-registry.ts";
+import { spawnAndRun, type SpawnDeps } from "./task-registry.ts";
 import { complete1, completeDeps } from "./completion.ts";
 import { emitting, summarizeLeaf, throttleHooks } from "./emitting.ts";
-import { activeLedger, leafClaimKey, runClaimedLeaf } from "./llm-query.ts";
+import { activeLedger, leafClaimKey, runClaimedLeaf, unwiredSpawn } from "./llm-query.ts";
 
-const UNWIRED = formatError("RLM bridge not wired for this invocation");
 const NO_UNMATCHED: readonly string[] = Object.freeze([]);
 
 function emptyResult(answer: string): RlmResult {
@@ -58,7 +57,7 @@ function childContextFor(
 
 function claimKeyFor(deps: SubcallHandlerDeps, kind: "llm" | "rlm", prompt: string, paths: readonly string[], ctx: string): string {
   const rootModel = deps.getModel?.();
-  const modelId = rootModel === undefined ? "" : (modelRef(rootModel) ?? rootModel.id);
+  const modelId = rootModel === undefined ? "" : modelLabelOf(rootModel);
   return taskKey(kind, prompt, paths, modelId, ctx);
 }
 
@@ -109,8 +108,7 @@ async function childRun(
   // ONE subcall node per childRun (audit C2 / DRY #5): the decision branch reuses it, the
   // run branch reports the engine's turns/cost on it. Never a second emit below.
   const rootModel = deps.getModel?.();
-  const modelLabel =
-    rootModel === undefined ? undefined : (modelRef(rootModel) ?? rootModel.id);
+  const modelLabel = rootModel === undefined ? undefined : modelLabelOf(rootModel);
   const subId = inv.emitter.emitSubcallCreated({
     kind: "rlm",
     parentId: inv.parentId,
@@ -129,8 +127,8 @@ async function childRun(
     const twin = await ledger
       .waitFor(decision.key)
       .catch((err: unknown) => errorMessage(err));
-    inv.emitter.emitSubcallUpdated({ id: subId, status: "done", resultPreview: previewText(String(twin).slice(0, 80)) });
-    return emptyResult(String(twin));
+    inv.emitter.emitSubcallUpdated({ id: subId, status: "done", resultPreview: previewText(twin.slice(0, 80)) });
+    return emptyResult(twin);
   }
   if (ledger !== undefined && claimKey !== undefined) {
     ledger.markRunning(claimKey);
@@ -173,17 +171,7 @@ export function createRlmQueryHandler(deps: SubcallHandlerDeps, sd: SpawnDeps) {
     opts: SubcallOpts,
   ): Promise<SpawnResult> => {
     const inv = deps.resolve(opts, depth);
-    if (inv === null) {
-      return {
-        ok: false,
-        task_id: null,
-        kind: "rlm",
-        n: 1,
-        status: "pending",
-        hint: SPAWN_HINT,
-        error: UNWIRED,
-      };
-    }
+    if (inv === null) return unwiredSpawn("rlm", 1);
 
     const pathArg = opts.paths;
 
@@ -245,17 +233,7 @@ export function createRlmBatchHandler(deps: SubcallHandlerDeps, sd: SpawnDeps) {
     opts: SubcallOpts,
   ): Promise<SpawnResult> => {
     const inv = deps.resolve(opts, depth);
-    if (inv === null) {
-      return {
-        ok: false,
-        task_id: null,
-        kind: "rlm_batch",
-        n: tasks.length,
-        status: "pending",
-        hint: SPAWN_HINT,
-        error: UNWIRED,
-      };
-    }
+    if (inv === null) return unwiredSpawn("rlm_batch", tasks.length);
 
     const pathArg = opts.paths;
     // No wrapper "rlm_batch ×N" node: every task already gets its own rlm_query node from

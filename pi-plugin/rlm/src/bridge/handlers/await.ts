@@ -99,12 +99,18 @@ export function createAwaitHandler(_deps: SubcallHandlerDeps, ad: AwaitDeps) {
     const kind = first?.kind ?? "unknown";
 
     if (hasResults) {
-      const allResults: string[] = [];
+      // Pre-allocated (rule: no .push() growth when the size is computable) — count, then fill.
+      const total = awaited.reduce(
+        (n, a) => n + (a.results !== undefined ? a.results.length : a.result !== undefined ? 1 : 0),
+        0,
+      );
+      const allResults = new Array<string>(total);
+      let n = 0;
       for (const a of awaited) {
         if (a.results !== undefined) {
-          for (const r of a.results) allResults.push(r);
+          for (const r of a.results) allResults[n++] = r;
         } else if (a.result !== undefined) {
-          allResults.push(a.result);
+          allResults[n++] = a.result;
         }
       }
       return {

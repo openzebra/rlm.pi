@@ -4,6 +4,9 @@ import type { ReplResult } from "../sandbox/protocol.ts";
 
 const DEFAULT_PREVIEW_CHARS = 200;
 
+/** Chars of a task/prompt shown on the collapsed tool-call line (repl + rlm tools share it). */
+export const CALL_PREVIEW_CHARS = 80;
+
 export function previewText(text: string, maxChars = DEFAULT_PREVIEW_CHARS): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   return normalized.length > maxChars ? `${normalized.slice(0, Math.max(0, maxChars - 1))}…` : normalized;

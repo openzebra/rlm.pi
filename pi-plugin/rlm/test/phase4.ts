@@ -8,7 +8,7 @@
  */
 
 import { type ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { MOCK_REGISTRY, runSuite } from "./helpers.ts";
+import { runSuite } from "./helpers.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { createEngine } from "../src/core/engine.ts";
@@ -177,7 +177,7 @@ async function testContextInheritance(): Promise<boolean> {
   log("#4: unmatched paths fall back to the full context", seen[0]?.context === files);
   log(
     "#4: unmatched paths are reported in the child's prompt",
-    seen[0]?.rootPrompt.includes("matched no files") === true,
+    seen[0]?.rootPrompt.includes("matched no files"),
   );
 
   // Batched children share one prefix set.
@@ -428,9 +428,9 @@ async function testRetrievalNudge(): Promise<boolean> {
     complete,
   })({ rootPrompt: "find it", context: "ctx", depth: 0 });
   log("H3: turns 1-2 carry no nudge",
-    turnPrompts[0]?.includes("[coach]") === false && turnPrompts[1]?.includes("[coach]") === false);
+    !(turnPrompts[0]?.includes("[coach]")) && !(turnPrompts[1]?.includes("[coach]")));
   log("H3: turn 3 injects the [coach] nudge via the gate-message seam",
-    turnPrompts[2]?.includes("[coach]") === true, JSON.stringify(turnPrompts[2]?.slice(0, 100)));
+    turnPrompts[2]?.includes("[coach]"), JSON.stringify(turnPrompts[2]?.slice(0, 100)));
   log("H3: no nudge after a search( block ran, run still completes",
     turnPrompts.slice(3).every((p) => !p.includes("[coach]")) && res.answer === "done",
     `answer=${JSON.stringify(res.answer.slice(0, 40))}`);

@@ -10,7 +10,7 @@ import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import { Container, SelectList, Text } from "@earendil-works/pi-tui";
 
-const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const);
 export type SelectableThinkingLevel = (typeof LEVELS)[number];
 
 /** Levels the model actually supports, in canonical order. */

@@ -7,7 +7,7 @@ import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { RlmConfig } from "../core/types.ts";
 import { DEFAULT_CONFIG } from "./defaults.ts";
 
-export interface PersistedSettings {
+interface PersistedSettings {
   readonly config: Partial<RlmConfig>;
   /** "provider/id" of the pinned sub-LLM, or undefined for "cheapest (auto)".
    *  `null` = explicit "cheapest" clear (omit key on disk). */
@@ -230,16 +230,8 @@ export function modelRef(model: Model<Api> | undefined): string | undefined {
   return model ? `${model.provider}/${model.id}` : undefined;
 }
 
-/**
- * Human-readable "provider/id" for a sub-call node: the resolved override when one was
- * supplied and resolves, otherwise the fallback model. Shared by the llm and rlm bridges
- * so sub-call trees label their nodes identically.
- */
-export function displayModelRef(
-  registry: ModelRegistry,
-  override: string | null,
-  fallback: Model<Api>,
-): string {
-  const resolved = override ? (resolveModelId(registry, override) ?? fallback) : fallback;
-  return modelRef(resolved) ?? fallback.id;
+/** Single "provider/id" projection for sub-call node labels — shared by the llm and rlm
+ *  bridges so sub-call trees label their nodes identically. */
+export function modelLabelOf(model: Model<Api>): string {
+  return modelRef(model) ?? model.id;
 }

@@ -27,7 +27,7 @@ async function main() {
   const blocks = findReplBlocks("think\n```repl\nprint(1)\n```\nmore\n```repl\nx=2\n```");
   check("findReplBlocks extracts 2 blocks", blocks.length === 2, JSON.stringify(blocks));
   const nestedFenceBlocks = findReplBlocks("````repl\nprint('``` inner fence')\n````");
-  check("M6: length-matched repl fence allows inner triple backticks", nestedFenceBlocks[0]?.includes("inner fence") === true, JSON.stringify(nestedFenceBlocks));
+  check("M6: length-matched repl fence allows inner triple backticks", nestedFenceBlocks[0]?.includes("inner fence"), JSON.stringify(nestedFenceBlocks));
   const pythonFallback = findReplBlocks("think\n```python\nprint(1)\n```");
   check("fallback: python fence used when no repl block", pythonFallback.length === 1 && pythonFallback[0] === "print(1)", JSON.stringify(pythonFallback));
   const untaggedFallback = findReplBlocks("```\nx = 2\n```");
@@ -40,7 +40,7 @@ async function main() {
   const twoPython = findReplBlocks("```python\na=1\n```\nmid\n```python\nb=2\n```");
   check("fallback: multiple python blocks in document order", twoPython.length === 2 && twoPython[0] === "a=1" && twoPython[1] === "b=2", JSON.stringify(twoPython));
   const nestedPython = findReplBlocks("````python\nprint('``` inner fence')\n````");
-  check("M6: length-matched python fence allows inner triple backticks", nestedPython[0]?.includes("inner fence") === true, JSON.stringify(nestedPython));
+  check("M6: length-matched python fence allows inner triple backticks", nestedPython[0]?.includes("inner fence"), JSON.stringify(nestedPython));
   const whitespacePython = findReplBlocks("```python\n   \n```");
   check("fallback skips whitespace-only python body", whitespacePython.length === 0, JSON.stringify(whitespacePython));
   check("truncateOutput elides", truncateOutput("a".repeat(100), 40).includes("elided"));
@@ -181,10 +181,10 @@ async function main() {
   check("H4: infinite tail expression still hits exec timeout", r.stderr.includes("timeout"), r.stderr.trim().slice(0, 80));
 
   // F3: context is an ordinary variable — rebinds persist, deletion re-injects the original.
-  r = await sandbox.exec("context = 'changed'");
+  await sandbox.exec("context = 'changed'");
   r = await sandbox.exec("print(context)");
   check("F3: context rebind persists across exec calls", r.stdout.trim() === "changed", r.stdout.trim());
-  r = await sandbox.exec("del context");
+  await sandbox.exec("del context");
   r = await sandbox.exec("print(type(context).__name__, len(context))");
   check("F3: deleted context is restored from pristine payload", r.stdout.trim() === "list 3", r.stdout.trim());
 
@@ -325,9 +325,9 @@ async function main() {
     Object.defineProperty(ctrl, "active", { value: fakeAbort, writable: true });
     check("controller is busy after inject", ctrl.isBusy());
     const result = ctrl.toggle();        // toggles OFF → should abort
-    check("toggle() returns false (OFF)", result === false);
+    check("toggle() returns false (OFF)", !result);
     check("toggle() OFF aborted the run", fakeAbort.signal.aborted);
-    check("controller disabled after toggle()", ctrl.enabled === false);
+    check("controller disabled after toggle()", !ctrl.enabled);
   }
 
   await sandbox.dispose();

@@ -16,7 +16,7 @@ import { retryPolicy } from "../../util/retry.ts";
 import type { Semaphore } from "../../util/concurrency.ts";
 import type { Invocation, SubcallConfig, SubcallHandlerDeps } from "./types.ts";
 
-export interface Complete1Deps {
+interface Complete1Deps {
   readonly leafGate: Semaphore;
   readonly registry: ModelRegistry;
   readonly getLlmModel: () => Model<Api>;

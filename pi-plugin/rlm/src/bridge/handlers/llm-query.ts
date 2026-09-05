@@ -13,9 +13,11 @@ import type { SubcallOpts } from "../../sandbox/interrupts.ts";
 import { SPAWN_HINT, spawnAndRun, type SpawnDeps } from "./task-registry.ts";
 import { ECHO_STUB, taskKey, type TaskLedger } from "../../core/ledger.ts";
 
-const UNWIRED = formatError("RLM bridge not wired for this invocation");
+/** Shared with rlm-query.ts — the unwired rejection sentinel (AGENTS DRY). */
+export const UNWIRED = formatError("RLM bridge not wired for this invocation");
 
-function displayModel(deps: SubcallHandlerDeps): string | undefined {
+/** Shared with rlm-query.ts — one display-model resolution (AGENTS DRY #3). */
+export function displayModel(deps: SubcallHandlerDeps): string | undefined {
   try {
     const m = deps.getLlmModel();
     return modelRef(m) ?? m.id;
@@ -29,8 +31,9 @@ export function activeLedger(deps: SubcallHandlerDeps): TaskLedger | undefined {
   return deps.getConfig().enableLedger ? deps.ledger : undefined;
 }
 
-/** DRY: one unwired-spawn shape — kind/n vary, everything else is the same rejection. */
-function unwiredSpawn(kind: SpawnResult["kind"], n: number): SpawnResult {
+/** DRY: one unwired-spawn shape — kind/n vary, everything else is the same rejection.
+ *  Shared with rlm-query.ts. */
+export function unwiredSpawn(kind: SpawnResult["kind"], n: number): SpawnResult {
   return { ok: false, task_id: null, kind, n, status: "pending", hint: SPAWN_HINT, error: UNWIRED };
 }
 

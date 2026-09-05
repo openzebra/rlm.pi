@@ -28,7 +28,7 @@ const KEYS = Object.freeze({
 } as const);
 
 /** What the panel should do after a keypress. Discriminated — never a boolean soup. */
-export type KeyAction =
+type KeyAction =
   | { readonly type: "swallowed" }
   | { readonly type: "unfocus" }
   | { readonly type: "open"; readonly runId: string; readonly nodeId: string };

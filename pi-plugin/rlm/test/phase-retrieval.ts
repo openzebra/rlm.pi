@@ -31,6 +31,12 @@ const FIXTURE = [
 ];
 
 /** Reads a JSON value the sandbox printed on its own line. */
+/** parsePrinted result as display text - JSON-parsed strings pass through, never "[object Object]". */
+function strPrint(stdout: string): string {
+  const v = parsePrinted(stdout);
+  return typeof v === "string" ? v : "";
+}
+
 function parsePrinted(stdout: string): unknown {
   const line = stdout.trim().split("\n").filter((l) => l.trim()).at(-1) ?? "";
   try {
@@ -105,7 +111,7 @@ async function main(): Promise<void> {
 
     r = await sandbox.exec('print(json.dumps(grep_context("[unclosed").get("error", "")))');
     check("grep_context returns an error string for a bad regex",
-      String(parsePrinted(r.stdout) ?? "").startsWith("bad regex"), r.stdout.trim());
+      strPrint(r.stdout).startsWith("bad regex"), r.stdout.trim());
 
     r = await sandbox.exec('print(json.dumps(len(grep_context(r"^## ", k=10, path_glob="docs/*")["hits"])))');
     check("grep_context honours path_glob", parsePrinted(r.stdout) === 2, r.stdout.trim());
@@ -128,15 +134,17 @@ async function main(): Promise<void> {
 
     // ── outline ──────────────────────────────────────────────────────────────────────────
     r = await sandbox.exec('print(json.dumps(outline("engine.ts")))');
-    const outline = String(parsePrinted(r.stdout) ?? "");
+    const outlineRaw = parsePrinted(r.stdout);
+    const outline = typeof outlineRaw === "string" ? outlineRaw : "";
     check("outline resolves a path by suffix", outline.startsWith("# src/core/engine.ts"), outline.slice(0, 60));
     check("outline finds a definition buried past 120 filler lines",
       outline.includes("121: export function createEngine"), outline.slice(0, 200));
     check("outline stays small (orientation, not a dump)", outline.length < 500, `${outline.length} chars`);
 
     r = await sandbox.exec('print(json.dumps(outline("does-not-exist.ts")))');
+    const missRaw = parsePrinted(r.stdout);
     check("outline reports a miss instead of raising",
-      String(parsePrinted(r.stdout) ?? "").startsWith("Error: no context file"), r.stdout.trim());
+      typeof missRaw === "string" && missRaw.startsWith("Error: no context file"), r.stdout.trim());
 
     // ── index invalidation ───────────────────────────────────────────────────────────────
     r = await sandbox.exec(
@@ -200,12 +208,14 @@ async function main(): Promise<void> {
     check("llm_map_reduce maps in one batch then reduces once",
       batchCalls === 1 && batchSizes[0] === 3 && singleCalls === 1,
       `batch=${batchCalls}/${JSON.stringify(batchSizes)} single=${singleCalls}`);
+    const reduced = parsePrinted(r.stdout);
     check("llm_map_reduce returns the reduce answer",
-      String(parsePrinted(r.stdout) ?? "").startsWith("ONE:"), r.stdout.trim());
+      typeof reduced === "string" && reduced.startsWith("ONE:"), r.stdout.trim());
 
     r = await sandbox.exec('print(json.dumps(llm_map_reduce([], "m", "r")))');
+    const emptyErr = parsePrinted(r.stdout);
     check("llm_map_reduce reports empty input instead of raising",
-      String(parsePrinted(r.stdout) ?? "").startsWith("Error:"), r.stdout.trim());
+      typeof emptyErr === "string" && emptyErr.startsWith("Error:"), r.stdout.trim());
 
     // ── answers/plan memo (paper App. C.3) ───────────────────────────────────────────────
     await sandbox.exec('answers["node_0"] = "42"\nplan["nodes"] = ["node_0"]');

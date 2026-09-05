@@ -21,7 +21,7 @@ export type WorkerRequest =
   | { readonly id: string; readonly type: "shutdown" };
 
 /** Reply the parent sends to satisfy a sub-LLM interrupt. */
-export interface LlmReply {
+interface LlmReply {
   readonly type: "llm_reply";
   readonly rid: string;
   readonly response?: string;
@@ -45,7 +45,7 @@ export interface LlmReply {
 }
 
 /** Keep-alive while the host is working and has nothing else to write. */
-export interface Heartbeat {
+interface Heartbeat {
   readonly type: "heartbeat";
 }
 
@@ -72,7 +72,7 @@ export interface WorkerResponse {
 }
 
 /** Canonical interrupt kinds (api_v5 + v5 ledger). */
-export type InterruptKind =
+type InterruptKind =
   | "llm_query"
   | "rlm_query"
   | "llm_batch"
@@ -117,13 +117,13 @@ interface FinishInterrupt extends InterruptBase {
   readonly summary?: string;
 }
 
-export interface AddContextInterrupt extends InterruptBase {
+interface AddContextInterrupt extends InterruptBase {
   readonly type: "add_context";
   readonly source?: string;
 }
 
 /** v5: sandbox asks the host for the TaskLedger claims table (`list_claims()`). */
-export interface LedgerClaimsInterrupt extends InterruptBase {
+interface LedgerClaimsInterrupt extends InterruptBase {
   readonly type: "ledger_claims";
 }
 
@@ -138,7 +138,7 @@ export type WorkerInterrupt =
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
 
-export const INTERRUPT_KINDS = Object.freeze(
+const INTERRUPT_KINDS = Object.freeze(
   new Set<InterruptKind>([
     "llm_query",
     "rlm_query",
@@ -151,9 +151,7 @@ export const INTERRUPT_KINDS = Object.freeze(
   ]),
 );
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
+import { isRecord } from "../util/type-guards.ts";
 
 function isWorkerResponse(value: unknown): value is WorkerResponse {
   return isRecord(value) && typeof value.id === "string" && typeof value.ok === "boolean";

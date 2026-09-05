@@ -27,7 +27,7 @@ export function promptCapTokensK(maxPromptChars: number): number {
  * well, small ones guess keywords badly, and the first decomposition disproportionately decides
  * the outcome (§5, Fig. 4a). These cost no tokens and no sub-calls.
  */
-export const RETRIEVAL_GLOSSARY_LINES: readonly string[] = Object.freeze([
+const RETRIEVAL_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "- `search(query: str, k=10, path_glob=None)`: BM25 ranking over `context`. Returns",
   "  [{path, line, score, snippet, text}] — POINTERS, not bodies (`text` aliases `snippet`).",
   "  **Start here.** Free: no sub-LLM call. Use before guessing filenames.",
@@ -42,7 +42,7 @@ export const RETRIEVAL_GLOSSARY_LINES: readonly string[] = Object.freeze([
 /** v5 delegation doctrine (audit C5): children have NO retrieval tools — their world is the
  *  sliced `context` they were handed. This REPLACES the retrieval lines in child prompts so
  *  the prompt and the runtime sandbox agree (a child taught to `search` burns turns on NameError). */
-export const DELEGATION_SURFACE_LINES: readonly string[] = Object.freeze([
+const DELEGATION_SURFACE_LINES: readonly string[] = Object.freeze([
   "- **No `search` / `grep_context` / `outline` / `add_context` in this REPL** (delegation",
   "  surface, v5 doctrine): your task arrived WITH its world in `context`. Explore it with",
   "  Python (list comprehensions, string matching, slicing) and delegate slices to sub-LLMs —",
@@ -50,7 +50,7 @@ export const DELEGATION_SURFACE_LINES: readonly string[] = Object.freeze([
 ]);
 
 /** One-line delegation helpers — orchestrating must be cheaper than solving. */
-export const DELEGATION_GLOSSARY_LINES: readonly string[] = Object.freeze([
+const DELEGATION_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "- `map_files(files, prompt) -> Task`: always spawn. `await_task(t)` → dict[path, answer].",
   "  Accepts context entries or paths; packs into cap-sized batches; splits oversized files.",
   "  **Default way to read many files** — fire independent `map_files` Tasks, free work, then await.",
@@ -59,14 +59,14 @@ export const DELEGATION_GLOSSARY_LINES: readonly string[] = Object.freeze([
 ]);
 
 /** Shared glossary entry for the chunked-query helper (headless + native). */
-export const CHUNKED_GLOSSARY_LINES: readonly string[] = Object.freeze([
+const CHUNKED_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "- `llm_query_chunked(text: str, prompt: str) -> Task`: always spawn. `await_task(t)` → list[str]",
   "  (one answer per chunk, order preserved). Auto-splits text to the sub-LLM prompt cap.",
   "  Use for ANY text too large for a single `llm_query` — open()ed files, oversized sub-results.",
 ]);
 
 /** Non-blocking fan-out: spawn now, collect later (headless glossary). */
-export const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
+const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "- **ALWAYS SPAWN (Task + ↗bg):** `llm_query` / `llm_batch` / `rlm_query` / `rlm_batch` /",
   "  `map_files` / `llm_query_chunked`. Never treat the return as the answer.",
   "  Collect with `await_task(t)`, `await_task([t1,t2,…])`, or `await_task()` (every still-running Task).",
@@ -81,7 +81,7 @@ export const SPAWN_GLOSSARY_LINES: readonly string[] = Object.freeze([
 ]);
 
 /** v5 (audit C5): the spawn worked example, retrieval flavor — root surface only. */
-export const SPAWN_EXAMPLE_RETRIEVAL: readonly string[] = Object.freeze([
+const SPAWN_EXAMPLE_RETRIEVAL: readonly string[] = Object.freeze([
   "",
   "  ```python",
   "  # Multi-area study: one rlm_batch (parallel workers), free locate, then await",
@@ -96,7 +96,7 @@ export const SPAWN_EXAMPLE_RETRIEVAL: readonly string[] = Object.freeze([
 ]);
 
 /** v5 (audit C5): the spawn worked example, delegation flavor — no retrieval, slice instead. */
-export const SPAWN_EXAMPLE_DELEGATION: readonly string[] = Object.freeze([
+const SPAWN_EXAMPLE_DELEGATION: readonly string[] = Object.freeze([
   "",
   "  ```python",
   "  # Multi-area study: one rlm_batch (parallel workers), slice your world while they run",
@@ -109,7 +109,7 @@ export const SPAWN_EXAMPLE_DELEGATION: readonly string[] = Object.freeze([
   "  # One-shot extracts: map_files / llm_batch also return Task → await_task",
   "  ```",
 ]);
-export const RECURSION_CONTEXT_LINES: readonly string[] = Object.freeze([
+const RECURSION_CONTEXT_LINES: readonly string[] = Object.freeze([
   "",
   "  **What a child sees:** it inherits YOUR `context` — every file you have loaded, including",
   "  sources under `ctx/<id>/…` — and runs `search` / `grep_context` / `outline` / `map_files`",
@@ -125,7 +125,7 @@ export const RECURSION_CONTEXT_LINES: readonly string[] = Object.freeze([
 
 /** v5 recursion section, delegation variant (audit C5): describes what a delegation child
  *  receives — the narrowed pack as text, no retrieval of its own. */
-export const RECURSION_DELEGATION_LINES: readonly string[] = Object.freeze([
+const RECURSION_DELEGATION_LINES: readonly string[] = Object.freeze([
   "",
   "  **What a child sees:** it inherits YOUR `context` (narrowed by `paths=` when given) and works",
   "  on it as text — it has NO retrieval tools, so put what matters in your prompt and `paths`,",
@@ -140,14 +140,14 @@ export const RECURSION_DELEGATION_LINES: readonly string[] = Object.freeze([
  * Sub-RLM orientation. Emitted only at depth > 0, where `context` is the parent's world rather
  * than a repository the run packed for itself.
  */
-export const CHILD_CONTEXT_LINES: readonly string[] = Object.freeze([
+const CHILD_CONTEXT_LINES: readonly string[] = Object.freeze([
   "  You are a sub-RLM. This `context` is your parent's world — every file it has loaded (cwd",
   "  paths un-prefixed; external sources under `ctx/<id>/…`). Answer only the question above;",
   "  your REPL and anything you load die with you, and only your final answer string returns.",
 ]);
 
 /** Why a file the user mentioned may be missing from `context`. */
-export const CONTEXT_EXCLUSION_NOTE = [
+const CONTEXT_EXCLUSION_NOTE = [
   "  NOTE: `context` holds only the files you have loaded (starts empty; cwd seeds on first use).",
   "  Gitignored files and files larger than 1MB of plain text are skipped. Binary documents",
   "  (PDF, DOCX, XLSX, PPTX, CSV, …) ARE included — converted to Markdown on the way in.",

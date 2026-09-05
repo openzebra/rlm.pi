@@ -31,7 +31,7 @@ const mk = (provider: string, id: string, reasoning = false): Model<Api> => ({
   ]);
   check("catalog: providers alphabetical", catalog.map((g) => g.provider).join(",") === "openrouter,zai");
   check("catalog: provider groups its models", catalog[0]?.models.length === 3);
-  check("catalog: model ref format", catalog[0]?.models.some((m) => modelRefOf(m) === "openrouter/nvidia/nemotron-3.5-lightning:free") === true);
+  check("catalog: model ref format", catalog[0]?.models.some((m) => modelRefOf(m) === "openrouter/nvidia/nemotron-3.5-lightning:free"));
   check("levels: reasoning model lists its levels", supportedThinkingLevels(mk("p", "m", true)).join(",") === "low,high");
   check("levels: plain model has none", supportedThinkingLevels(mk("p", "m")).length === 0);
   check("pickableModels still exported from grouping", Array.isArray(pickableModels({ getAvailable: () => [], getAll: () => [] } as never)));
@@ -44,18 +44,18 @@ const mk = (provider: string, id: string, reasoning = false): Model<Api> => ({
   check("status: OFF is a single line", formatRlmStatusLines(controller).length === 1 && formatRlmStatusLines(controller)[0] === "○ RLM OFF");
 
   controller.setEnabled(true);
-  const lines = formatRlmStatusLines(controller, { tokens: 81_900, contextWindow: 200_000, percent: 41 } as never);
+  const lines = formatRlmStatusLines(controller, { tokens: 81_900, contextWindow: 200_000, percent: 41 });
   check("status: ON is three lines", lines.length === 3);
   check("status: headline", lines[0] === "● RLM ON");
-  check("status: llm lane defaults cheapest", lines[1]?.includes("llm=cheapest") === true);
-  check("status: rlm lane defaults session", lines[2]?.includes("rlm=session") === true);
-  check("status: tokens on both lanes", lines[1]?.includes("81.9k tok") === true && lines[2]?.includes("81.9k tok") === true);
+  check("status: llm lane defaults cheapest", lines[1]?.includes("llm=cheapest"));
+  check("status: rlm lane defaults session", lines[2]?.includes("rlm=session"));
+  check("status: tokens on both lanes", (lines[1]?.includes("81.9k tok")) && (lines[2]?.includes("81.9k tok")));
 
   controller.llmModel = mk("openrouter", "nvidia/nemotron-3.5-lightning:free");
   controller.rlmModel = mk("zai", "glm-5.2");
-  const pinned = formatRlmStatusLines(controller, { tokens: null, contextWindow: 1, percent: null } as never);
-  check("status: pinned llm shown", pinned[1]?.includes("llm=openrouter/nvidia/nemotron-3.5-lightning:free") === true);
-  check("status: pinned rlm shown", pinned[2]?.includes("rlm=zai/glm-5.2") === true);
+  const pinned = formatRlmStatusLines(controller, { tokens: null, contextWindow: 1, percent: null });
+  check("status: pinned llm shown", pinned[1]?.includes("llm=openrouter/nvidia/nemotron-3.5-lightning:free"));
+  check("status: pinned rlm shown", pinned[2]?.includes("rlm=zai/glm-5.2"));
   check("status: null tokens hide suffix", !pinned[1]?.includes("tok"));
 }
 
@@ -67,12 +67,12 @@ const mk = (provider: string, id: string, reasoning = false): Model<Api> => ({
   applyLlmSelection(controller, { model: mk("openrouter", "gemma-4"), thinkingLevel: "high" });
   check("pins: llm model + subSampling reasoning", controller.savedLlmRef === "openrouter/gemma-4" && controller.config.subSampling.reasoning === "high");
   applyLlmSelection(controller, null);
-  check("pins: cheapest clears pin", controller.llmModel === undefined && controller.explicitClearPin === true);
+  check("pins: cheapest clears pin", controller.llmModel === undefined && controller.explicitClearPin);
 
   applyRlmSelection(controller, { model: mk("zai", "glm-5.2", true), thinkingLevel: "low" });
   check("pins: rlm model + rootSampling reasoning", controller.rlmModel !== undefined && controller.savedRlmRef === "zai/glm-5.2" && controller.config.rootSampling?.reasoning === "low");
   applyRlmSelection(controller, null);
-  check("pins: session clears rlm pin", controller.rlmModel === undefined && controller.explicitClearRlmPin === true);
+  check("pins: session clears rlm pin", controller.rlmModel === undefined && controller.explicitClearRlmPin);
 }
 
 // ── resolveModels: the rlm pin overrides the session model ──

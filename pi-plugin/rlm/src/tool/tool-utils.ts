@@ -4,7 +4,7 @@ import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { err, ok, type Result } from "../util/errors.ts";
 
-export interface TextToolResponse<Details> {
+interface TextToolResponse<Details> {
   readonly content: { readonly type: "text"; readonly text: string }[];
   readonly details: Details;
 }
@@ -15,7 +15,7 @@ export function validateToolParams<Schema extends TSchema, Details>(
   toolName: string,
   createErrorDetails: (errors: string) => Details,
 ): Result<Static<Schema>, TextToolResponse<Details>> {
-  if (Value.Check(schema, rawParams)) return ok(rawParams as Static<Schema>);
+  if (Value.Check(schema, rawParams)) return ok(rawParams);
   const errors = [...Value.Errors(schema, rawParams)]
     .map((error) => `${error.instancePath}: ${error.message}`)
     .join("; ");
@@ -25,9 +25,9 @@ export function validateToolParams<Schema extends TSchema, Details>(
   });
 }
 
-export type TextUpdateCallback<Details> = (update: TextToolResponse<Details>) => void;
+type TextUpdateCallback<Details> = (update: TextToolResponse<Details>) => void;
 
-export interface ProgressNotifierOptions<Details> {
+interface ProgressNotifierOptions<Details> {
   readonly onUpdate?: TextUpdateCallback<Details>;
   readonly getDetails: () => Details;
   readonly isRunning: (details: Details) => boolean;
@@ -35,7 +35,7 @@ export interface ProgressNotifierOptions<Details> {
   readonly intervalMs?: number;
 }
 
-export interface ProgressNotifier {
+interface ProgressNotifier {
   readonly notify: () => void;
   readonly start: () => void;
   readonly stop: () => void;

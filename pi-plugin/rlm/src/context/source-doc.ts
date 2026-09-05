@@ -16,7 +16,7 @@ import {
   type SkippedFile,
 } from "./types.ts";
 
-export type DocFileResult =
+type DocFileResult =
   | { readonly ok: true; readonly value: ContextFile; /** true only for a real anydoc conversion */ readonly converted: boolean }
   | { readonly ok: false; readonly skipped: SkippedFile };
 

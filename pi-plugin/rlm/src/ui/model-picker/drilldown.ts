@@ -58,7 +58,7 @@ async function pickFromList(
     });
     if (initialIndex > 0) list.setSelectedIndex(initialIndex);
     const isFilterText = (s: string): boolean =>
-      s.length > 0 && [...s].every((char) => char >= " " && char !== "\x7f");
+      s.length > 0 && Array.from(s).every((char) => char >= " " && char !== "\x7f");
     const isBackspace = (s: string): boolean => s === "\x7f" || s === "\b";
     list.onSelect = (item) => done(item.value);
     list.onCancel = () => done(null);

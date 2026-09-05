@@ -19,7 +19,7 @@ const SUMMARY_REQUEST =
   "(2) any concrete intermediate results — numbers, values, variable names — preserved exactly; " +
   "(3) your next action. Be concise (1–3 paragraphs) but preserve all key results.";
 
-export interface CompactionDeps {
+interface CompactionDeps {
   readonly model: Model<Api>;
   readonly registry: ModelRegistry;
   readonly contextWindow?: number;

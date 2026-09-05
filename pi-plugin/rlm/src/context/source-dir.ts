@@ -29,7 +29,7 @@ import { applyPathPrefix, contextSourceId, pathPrefixFor } from "./namespace.ts"
 /** Conversions are libuv-threadpool bound (default pool 4); 8 keeps the pool busy without thrash. */
 const CONVERT_CONCURRENCY = 8;
 
-export interface PackDirResult {
+interface PackDirResult {
   readonly files: readonly ContextFile[];
   readonly chars: number;
   readonly documents: number;

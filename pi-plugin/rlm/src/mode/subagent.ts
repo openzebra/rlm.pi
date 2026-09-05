@@ -11,9 +11,9 @@
  */
 import { DEFAULT_CONFIG } from "../config/defaults.ts";
 
-export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
-export const RLM_FORCE_IN_SUBAGENT_ENV = "PI_RLM_FORCE_IN_SUBAGENT";
-export const RLM_DEPTH_ENV = "PI_RLM_DEPTH";
+const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
+const RLM_FORCE_IN_SUBAGENT_ENV = "PI_RLM_FORCE_IN_SUBAGENT";
+const RLM_DEPTH_ENV = "PI_RLM_DEPTH";
 
 /** Cross-process depth from env. Missing / invalid → 0. */
 export function processRlmDepth(): number {
@@ -48,7 +48,7 @@ export function commitSubagentForceActivation(maxDepth: number = DEFAULT_CONFIG.
   if (process.env[RLM_FORCE_IN_SUBAGENT_ENV] !== "1") return;
   if (processRlmDepth() >= maxDepth) return;
   const next = processRlmDepth() + 1;
-  delete process.env[RLM_FORCE_IN_SUBAGENT_ENV];
+  Reflect.deleteProperty(process.env, RLM_FORCE_IN_SUBAGENT_ENV);
   process.env[RLM_DEPTH_ENV] = String(next);
 }
 

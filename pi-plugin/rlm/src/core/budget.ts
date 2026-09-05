@@ -15,13 +15,13 @@
 import type { ChatMsg } from "../bridge/model.ts";
 import type { RlmConfig } from "./types.ts";
 
-export interface TokenBudgetOptions {
+interface TokenBudgetOptions {
   readonly softFrac?: number;
   readonly continuations?: number;
   readonly maxContinuations?: number;
 }
 
-export type BudgetState = "" | "soft" | "hard";
+type BudgetState = "" | "soft" | "hard";
 
 /** v5 verbatim: the soft wrap-up note prepended to the single turn after crossing soft. */
 export const WRAP_UP_BUDGET: string =
@@ -117,13 +117,18 @@ export class TokenBudget {
  */
 export const BUDGET_WINDOW_FLOOR = 250_000;
 
-/** An effective budget that can never trigger — the cascade "switched off" without changing
- *  any call-site types (budget: TokenBudget | undefined). */
-function unboundedBudget(config: RlmConfig): TokenBudget {
-  return new TokenBudget(Number.MAX_SAFE_INTEGER, {
+/** One TokenBudget construction shape — the cap varies, the policy knobs never do (DRY). */
+function makeBudget(config: RlmConfig, cap: number): TokenBudget {
+  return new TokenBudget(cap, {
     softFrac: config.budgetSoftFrac,
     maxContinuations: config.budgetMaxContinuations,
   });
+}
+
+/** An effective budget that can never trigger — the cascade "switched off" without changing
+ *  any call-site types (budget: TokenBudget | undefined). */
+function unboundedBudget(config: RlmConfig): TokenBudget {
+  return makeBudget(config, Number.MAX_SAFE_INTEGER);
 }
 
 export function resolveBudget(contextWindow: number | undefined, config: RlmConfig): TokenBudget {
@@ -131,10 +136,7 @@ export function resolveBudget(contextWindow: number | undefined, config: RlmConf
   if (ctx < BUDGET_WINDOW_FLOOR) return unboundedBudget(config);
   const shareCap = Math.floor(ctx * config.budgetShare);
   const cap = config.budgetTaskCap > 0 ? Math.min(shareCap, config.budgetTaskCap) : shareCap;
-  return new TokenBudget(Math.max(cap, 1), {
-    softFrac: config.budgetSoftFrac,
-    maxContinuations: config.budgetMaxContinuations,
-  });
+  return makeBudget(config, Math.max(cap, 1));
 }
 
 /**

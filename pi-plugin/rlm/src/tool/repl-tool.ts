@@ -39,15 +39,12 @@ import type { RlmSubcall } from "./rlm-details.ts";
 import { createEngine } from "../core/engine.ts";
 import { modelRef } from "../config/settings.ts";
 import { spinnerFrame } from "../ui/theme.ts";
-import { previewText } from "../text/preview.ts";
+import { CALL_PREVIEW_CHARS, previewText } from "../text/preview.ts";
 import { errorMessage } from "../util/errors.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 import { buildReplResultText, collectReplWarnings } from "./repl-result.ts";
 import { renderReplCollapsed, renderReplExpanded } from "./repl-render.ts";
 import { attachTracer, trace, traceEnabled } from "../util/trace.ts";
-
-/** Chars of code shown on the tool call line. */
-const CALL_PREVIEW_CHARS = 80;
 
 /** Last non-empty line of a Python traceback — the `TypeError: …` line, not the frames. */
 function lastLine(text: string): string {
@@ -61,7 +58,7 @@ function lastLine(text: string): string {
 
 // ── Parameter schema ──
 
-export const ReplToolParams = Object.freeze(Type.Object({
+const ReplToolParams = Object.freeze(Type.Object({
   code: Type.String({ description: "Python code to execute in the persistent REPL sandbox" }),
 }));
 
@@ -102,7 +99,7 @@ class NativeBridgeState {
 
 // ── Tool factory ──
 
-export interface ReplToolDeps {
+interface ReplToolDeps {
   readonly sandboxManager: SandboxManager;
   readonly model: Model<Api>;
   readonly llmModel: Model<Api>;

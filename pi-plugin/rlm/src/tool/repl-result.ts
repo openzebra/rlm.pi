@@ -10,7 +10,7 @@ import { capReplResultText, replDelegationNudge } from "../mode/native-guards.ts
 import { formatReplStderr } from "../text/repl-output.ts";
 
 /** Model-visible text assembled from a repl() result. */
-export interface ReplResultText {
+interface ReplResultText {
   readonly text: string;
 }
 

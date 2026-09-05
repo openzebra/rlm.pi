@@ -164,10 +164,10 @@ async function resolveSingle(
       }
       return { response: collected.result ?? "" };
     }
-    return { response: String(collected ?? "") };
+    return { response: typeof collected === "string" ? collected : "" };
   }
   // Unexpected shape — surface as text rather than crash the worker.
-  return { response: String(raw ?? "") };
+  return { response: typeof raw === "string" ? raw : "" };
 }
 
 /**
@@ -297,7 +297,7 @@ export async function serviceInterrupt(
           });
           return;
         }
-        reply(msg.rid, { response: String(result ?? "") });
+        reply(msg.rid, { response: typeof result === "string" ? result : "" });
         return;
       }
       case "finish": {
@@ -353,6 +353,6 @@ export async function serviceInterrupt(
       }
     }
   } catch (err: unknown) {
-    reply(msg.rid, { error: errorMessage(err) });
+    reply(msg.rid, { error: formatError(errorMessage(err)) });
   }
 }

@@ -196,7 +196,7 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
     registry: MOCK_REGISTRY,
     config,
     emitter: new RlmEmitter(),
-    complete: script as unknown as import("../src/core/iteration.ts").CompleteFn,
+    complete: script,
   });
   const res = engine({ rootPrompt: "engine budget test", context: "some context", depth: 0 });
   const out = await res;
@@ -221,7 +221,7 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
     registry: MOCK_REGISTRY,
     config,
     emitter: new RlmEmitter(),
-    complete: script as unknown as import("../src/core/iteration.ts").CompleteFn,
+    complete: script,
   });
   const out = await engine({ rootPrompt: "chain-cap test", context: "ctx", depth: 0 });
   check("engine: chain cap 0 finalizes (no throw, no runaway)", out.answer.length > 0, out.answer.slice(0, 60));

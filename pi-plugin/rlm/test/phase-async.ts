@@ -15,15 +15,8 @@ import { BackgroundTasks } from "../src/tool/background-tasks.ts";
 import { buildReplResultText } from "../src/tool/repl-result.ts";
 import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
 import { NATIVE_PROMPT_BUDGET, NATIVE_PROMPT_STATIC } from "../src/prompts/native.ts";
-import type { Theme } from "@earendil-works/pi-coding-agent";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, Math.max(0, ms)));
-
-/** Minimal Theme stand-in — the tree renderer only needs fg/bold to return strings. */
-const PLAIN_THEME = {
-  fg: (_role: string, text: string) => text,
-  bold: (text: string) => text,
-} as unknown as Theme;
 
 // ── 1–2. Overlap and ordering ────────────────────────────────────────────────────────────
 

@@ -12,7 +12,7 @@ export function err<T = never, E = string>(error: E): Result<T, E> {
   return { ok: false, error };
 }
 
-export const ERROR_PREFIX = "Error:";
+const ERROR_PREFIX = "Error:";
 
 export function formatError(message: string): string {
   return `${ERROR_PREFIX} ${message}`;

@@ -7,6 +7,7 @@
  */
 
 import type { AwaitResult, SpawnResult, TaskEntry } from "./types.ts";
+import { formatError, isErrorText } from "../../util/errors.ts";
 
 export const SPAWN_HINT =
   "Call await_task(task_id=...) to get the result — this is NOT the answer.";
@@ -189,14 +190,14 @@ export function spawnAndRun(
       sd.resolve(taskId, result);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      sd.reject(taskId, message.startsWith("Error:") ? message : `Error: ${message}`);
+      sd.reject(taskId, isErrorText(message) ? message : formatError(message));
     }
   };
 
   if (trackDetached !== undefined && detached) {
     void trackDetached(run).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      sd.reject(taskId, message.startsWith("Error:") ? message : `Error: ${message}`);
+      sd.reject(taskId, isErrorText(message) ? message : formatError(message));
     });
   } else {
     void run();

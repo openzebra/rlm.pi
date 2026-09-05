@@ -66,7 +66,6 @@ const server: Server = createServer((req, res) => {
       + "data: [DONE]\n\n",
     );
   });
-  void req;
 });
 
 await new Promise<void>((resolve) => { server.listen(0, "127.0.0.1", resolve); });
@@ -219,9 +218,19 @@ async function main(): Promise<void> {
         seen[seen.length] = deps;
         return createEngine(deps);
       }
+
+      /** Public test seam over the protected buildEngine (audit-R7). */
+      exposeBuildEngine(args: {
+        readonly ctx: ExtensionContext;
+        readonly models: { readonly model: Model<Api>; readonly llm: Model<Api> };
+        readonly signal: AbortSignal;
+        readonly emitter: RlmEmitter;
+      }): RunRlm {
+        return this.buildEngine(args);
+      }
     }
     const ctrl = new ProbeController(config);
-    ctrl.buildEngine({
+    ctrl.exposeBuildEngine({
       ctx: { modelRegistry: MOCK_REGISTRY } as unknown as ExtensionContext,
       models: { model: wireModel(false), llm: wireModel(false) },
       signal: new AbortController().signal,
@@ -239,7 +248,6 @@ async function main(): Promise<void> {
     check("gate: reasoning:true model keeps the level (unit)", effectiveReasoning(reasoner, "high") === "high");
     check("gate: absent level stays absent (unit)", effectiveReasoning(reasoner, undefined) === undefined);
 
-    const bodiesBefore = bodies.length;
     await modelComplete([{ role: "user", content: "gate probe" }], {
       model: plain,
       registry: MOCK_REGISTRY,

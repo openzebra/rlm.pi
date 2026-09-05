@@ -141,10 +141,10 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
   // ── row formatting: tokens + short model, never "$" ──
   const lines = formatRows(rows, agentId, 72, theme);
   check("rows: one line per row", lines.length === rows.length);
-  check("rows: agent line shows own tokens", lines[1]?.includes("100 tok") === true);
-  check("rows: model shortened to last segment", lines[1]?.includes("gpt-5") === true);
+  check("rows: agent line shows own tokens", lines[1]?.includes("100 tok"));
+  check("rows: model shortened to last segment", lines[1]?.includes("gpt-5"));
   check("rows: no cost anywhere", lines.every((l) => !l.includes("$")));
-  check("rows: selection cursor rendered", lines[1]?.includes("❯") === true);
+  check("rows: selection cursor rendered", lines[1]?.includes("❯"));
   check("rows: modelShort caps length", modelShort("provider/a-very-long-model-name-here").length <= 15);
 
   emitter.emitSubcallUpdated({ id: agentId, tokensIn: 190_200, tokensOut: 18_600 });
@@ -153,7 +153,7 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
   if (splitSnap !== undefined) {
     const splitLines = formatRows(buildRows(splitSnap, new Set()), agentId, 72, theme);
     check("rows: in/out split shown when tokensOut > 0",
-      splitLines[1]?.includes("190.2k↑") === true && splitLines[1]?.includes("18.6k↓") === true);
+      (splitLines[1]?.includes("190.2k↑")) && (splitLines[1]?.includes("18.6k↓")));
   }
 
   // ── modal view: header + timeline, stable height, no "$" ──
@@ -170,7 +170,7 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
         model: node.model, tokens: node.tokens, detail: node.detail, timeline,
       };
       const modal = buildModalLines(data, 0, 64, theme);
-      check("modal: title in top border", modal[0]?.includes(node.label) === true);
+      check("modal: title in top border", modal[0]?.includes(node.label));
       check("modal: tokens shown", modal.some((l) => l.includes("tokens 100")));
       check("modal: timeline entry shown", modal.some((l) => l.includes("waiting")));
       check("modal: no cost", modal.every((l) => !l.includes("$")));

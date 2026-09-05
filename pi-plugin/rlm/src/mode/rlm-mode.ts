@@ -19,7 +19,7 @@ import { cheapestModel } from "./llm-model.ts";
 import type { RunRlm } from "../core/types.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
 
-export interface RunHandle {
+interface RunHandle {
   readonly abort: () => void;
   readonly done: Promise<RlmResult>;
 }
@@ -31,12 +31,12 @@ export interface StartInput {
 
 export class RlmController {
   llmModel: Model<Api> | undefined;
-  savedLlmRef: string | undefined;
+  savedLlmRef?: string;
   /** Set by applyLlmSelection when the user explicitly picks "cheapest (auto)". */
   explicitClearPin = false;
   /** Pinned rlm root/worker model — when unset, child engines follow pi's session model. */
   rlmModel: Model<Api> | undefined;
-  savedRlmRef: string | undefined;
+  savedRlmRef?: string;
   /** Set by applyRlmSelection when the user explicitly picks "(follow session model)". */
   explicitClearRlmPin = false;
   private active: AbortController | null = null;
@@ -96,9 +96,12 @@ export class RlmController {
     if (!this.llmModel && this.savedLlmRef) this.llmModel = resolveModelId(ctx.modelRegistry, this.savedLlmRef);
     if (!this.rlmModel && this.savedRlmRef) this.rlmModel = resolveModelId(ctx.modelRegistry, this.savedRlmRef);
     // The rlm pin wins over the session model; unset → follow pi's active model.
+    // pi's ctx.model is typed Model<any>; runtime models conform to Model<Api> — the two
+    // directives below mark exactly where that external-boundary any enters and leaves.
     const model = this.rlmModel ?? ctx.model ?? cheapestModel(ctx.modelRegistry);
     if (!model) return undefined;
     const llm = this.llmModel ?? cheapestModel(ctx.modelRegistry) ?? model;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     return { model, llm };
   }
 

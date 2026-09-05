@@ -104,7 +104,7 @@ export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze({
 });
 
 /** Shape of the optional retry knobs on RlmConfig — kept structural to avoid a cycle. */
-export interface RetryConfigNumbers {
+interface RetryConfigNumbers {
   readonly retryMaxAttempts?: number;
   readonly rateLimitMaxAttempts?: number;
   readonly retryBaseDelayMs?: number;

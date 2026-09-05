@@ -17,14 +17,14 @@ import {
 
 export { contextKindOf, type ContextKind } from "./glossary.ts";
 
-export interface PromptMeta {
+interface PromptMeta {
   readonly contextType: string;
   readonly contextChars: number;
   readonly contextStats?: ContextSizeStats;
   readonly rootPrompt?: string;
 }
 
-export interface SystemPromptOptions {
+interface SystemPromptOptions {
   readonly orchestrator?: boolean;
   readonly recursion?: boolean;
   readonly maxPromptChars?: number;

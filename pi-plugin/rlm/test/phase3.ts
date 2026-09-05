@@ -19,7 +19,7 @@ import { createEngine } from "../src/core/engine.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { loadSettings, mergeConfig } from "../src/config/settings.ts";
 import { cheapestModel } from "../src/mode/llm-model.ts";
-import rlmExtension from "../src/index.ts";
+import { isRecord } from "../src/util/type-guards.ts";
 
 function capableModel(reg: ModelRegistryType) {
   const a = reg.getAvailable();
@@ -63,8 +63,8 @@ async function main() {
   // Only fail on errors from *this* package — other agent-dir extensions (zebra-catch, etc.)
   // may be broken on the host and are not this suite's concern.
   const rlmErrors = errors.filter((err) => {
-    const path = String((err as { readonly path?: unknown }).path ?? "");
-    const msg = String((err as { readonly error?: unknown }).error ?? "");
+    const path = isRecord(err) && typeof err.path === "string" ? err.path : "";
+    const msg = isRecord(err) && typeof err.error === "string" ? err.error : "";
     return path.includes("pi-plugin/rlm") || path.includes("@hicaru/pi-rlm")
       || msg.includes("pi-plugin/rlm") || msg.includes("@hicaru/pi-rlm");
   });

@@ -72,7 +72,7 @@ function loadJournal(name: string): Journal {
   try {
     text = readFileSync(name, "utf8");
   } catch (err) {
-    throw new Error(`cannot read journal ${name}: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`cannot read journal ${name}: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
   }
   for (const line of text.split("\n")) {
     const trimmed = line.trim();

@@ -59,7 +59,7 @@ function formatGroup(row: GroupRow, selected: boolean, width: number, theme: The
   return assembleLine(left, row.tokens, row.tokensIn, row.tokensOut, row.model, selected, width, theme);
 }
 
-export function formatRow(row: TreeRow, selected: boolean, width: number, theme: Theme): string {
+function formatRow(row: TreeRow, selected: boolean, width: number, theme: Theme): string {
   return row.type === "group" ? formatGroup(row, selected, width, theme) : formatNode(row, selected, width, theme);
 }
 

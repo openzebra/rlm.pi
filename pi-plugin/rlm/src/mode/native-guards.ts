@@ -40,12 +40,6 @@ export function isFileReadingCommand(command: string): boolean {
   return statementHeads(command).some((h) => READER_COMMANDS.has(h));
 }
 
-export const BASH_BLOCK_REASON =
-  "RLM mode: reading files via bash is blocked — that dumps file content into the root model's " +
-  "context. All files are pre-loaded in the REPL `context` variable: use repl({code}) with Python " +
-  "string/regex search, and delegate bulk analysis to llm_query / llm_batch / " +
-  "llm_query_chunked. bash is for RUNNING things (tests, builds, git).";
-
 /** Max chars of tool output forwarded to the root model (≈1K tokens). */
 export const TOOL_RESULT_CAP = 4_000;
 

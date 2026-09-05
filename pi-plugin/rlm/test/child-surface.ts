@@ -152,7 +152,7 @@ async function engineChildProbe(config: RlmConfig): Promise<{ readonly answer: s
     config,
     emitter: new RlmEmitter(),
     gates: createSubcallGates(4, 2),
-    complete: script as unknown as import("../src/core/iteration.ts").CompleteFn,
+    complete: script,
   });
   const out = await engine({ rootPrompt: "audit delegation behavior across engine runs", context: "ctx", depth: 0 });
   const childLine =

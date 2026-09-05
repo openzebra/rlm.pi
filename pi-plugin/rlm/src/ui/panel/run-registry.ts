@@ -14,7 +14,7 @@ import type { RlmRunStatus, RlmSubcall, SubcallPhase } from "../../tool/rlm-deta
 import type { RunSnapshot } from "../tree/tree-model.ts";
 import { TimelineStore } from "../modal/timeline-store.ts";
 
-export interface RunRegistration {
+interface RunRegistration {
   readonly runId: string;
   /** Root row label — prompt or code preview. */
   readonly label: string;

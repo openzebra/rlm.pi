@@ -10,6 +10,7 @@ import type { RlmConfig } from "./core/types.ts";
 import { createRlmTool } from "./tool/rlm-tool.ts";
 import { createReplTool } from "./tool/repl-tool.ts";
 import { loadSettings, mergeConfig, resolveModelId } from "./config/settings.ts";
+import { isRecord } from "./util/type-guards.ts";
 import { RlmController } from "./mode/rlm-mode.ts";
 import { cheapestModel } from "./mode/llm-model.ts";
 import { postRlmGuide } from "./ui/intro.ts";
@@ -143,14 +144,28 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // ── Message renderers ──
   // Markdown themes are derived from the injected `theme`, never pi's module-global
   // `getMarkdownTheme()` — under jiti that global can be undefined inside a plugin.
-  pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
-    new Markdown(String(message.content ?? ""), 1, 0, markdownTheme(theme)),
+  
+/** Text payload of a pi message: string content as-is, text blocks joined - never "[object Object]". */
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts = new Array<string>(content.length);
+  let n = 0;
+  for (const block of content) {
+    if (isRecord(block) && typeof block.text === "string") parts[n++] = block.text;
+  }
+  parts.length = n;
+  return parts.join("");
+}
+
+pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
+    new Markdown(messageText(message.content), 1, 0, markdownTheme(theme)),
   );
   pi.registerMessageRenderer("rlm-question", (message, _options, theme) =>
-    new Markdown(`**RLM question**\n\n${String(message.content ?? "")}`, 1, 0, markdownTheme(theme)),
+    new Markdown(`**RLM question**\n\n${messageText(message.content)}`, 1, 0, markdownTheme(theme)),
   );
   pi.registerMessageRenderer("rlm-intro", (message, _options, theme) =>
-    new Markdown(String(message.content ?? ""), 1, 0, markdownTheme(theme)),
+    new Markdown(messageText(message.content), 1, 0, markdownTheme(theme)),
   );
 
   // ── CLI flag: `pi --rlm` / `pi --rlm=false` overrides the persisted mode for this run ──
@@ -266,7 +281,9 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       try {
         pi.registerTool(createReplTool({
           sandboxManager,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- pi-ai registry types Model<any>; runtime models conform to Model<Api>
           model,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- see above
           llmModel,
           getModel: () => controller.resolveModels(ctx)?.model,
           getLlmModel: () => controller.resolveModels(ctx)?.llm,
@@ -373,7 +390,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     if (
       nativeTradeHolds()
       && MUTATING_FILE_TOOLS.has(event.toolName)
-      && event.isError !== true
+      && !event.isError
     ) {
       const cwd = resolve(ctx?.cwd ?? process.cwd());
       const paths = extractEditPaths(event.input);

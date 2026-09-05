@@ -143,7 +143,7 @@ export class PythonSandbox {
       // windowsHide: without it each sandbox flashes a console window on Windows (pi sets
       // this on every spawn — bash.ts / shell.ts). Same Windows surface as issue #7.
       { stdio: ["pipe", "pipe", "pipe"], env: sanitizedEnv(), windowsHide: true },
-    ) as ChildProcessWithoutNullStreams;
+    );
 
     this.proc.stdout.setEncoding("utf8");
     this.proc.stdout.on("data", (chunk: string) => this.onData(chunk));
@@ -266,7 +266,8 @@ export class PythonSandbox {
       this.pending.set("_init", {
         resolve: (res) => {
           clearTimeout(timer);
-          res.ok ? resolve() : reject(new Error(res.error ?? "worker init failed"));
+          if (res.ok) resolve();
+          else reject(new Error(res.error ?? "worker init failed"));
         },
         reject,
         timer,
@@ -303,7 +304,7 @@ export class PythonSandbox {
         settle(value);
       };
       this.pending.set(id, { resolve: once(resolve), reject: once(reject), timer, requestType: payload.type });
-      this.send({ id, ...payload } as ParentMessage);
+      this.send({ id, ...payload });
     });
   }
 

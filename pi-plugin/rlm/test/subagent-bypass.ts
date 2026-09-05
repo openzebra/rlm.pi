@@ -69,27 +69,27 @@ function fakePi(activeTools: readonly string[] = PARENT_ACTIVE_TOOLS) {
 // ── Pure helpers ──
 
 setEnv({ PI_SUBAGENT_CHILD: "1" });
-check("env: child (PI_SUBAGENT_CHILD=1) -> bypass true", isSubagentChildBypass() === true);
+check("env: child (PI_SUBAGENT_CHILD=1) -> bypass true", isSubagentChildBypass());
 
 setEnv({ PI_SUBAGENT_CHILD: "1", PI_RLM_FORCE_IN_SUBAGENT: "1" });
-check("env: child + force -> bypass false (opt-in honored)", isSubagentChildBypass() === false);
+check("env: child + force -> bypass false (opt-in honored)", !isSubagentChildBypass());
 
 setEnv({});
-check("env: parent (no env) -> bypass false", isSubagentChildBypass() === false);
+check("env: parent (no env) -> bypass false", !isSubagentChildBypass());
 
 setEnv({ PI_SUBAGENT_CHILD: "0" });
-check("env: PI_SUBAGENT_CHILD='0' -> bypass false", isSubagentChildBypass() === false);
+check("env: PI_SUBAGENT_CHILD='0' -> bypass false", !isSubagentChildBypass());
 
 setEnv({ PI_SUBAGENT_CHILD: "1", PI_RLM_FORCE_IN_SUBAGENT: "1", PI_RLM_DEPTH: String(DEFAULT_CONFIG.maxDepth) });
 check(
   "env: force at depth==maxDepth -> bypass true (refuse force)",
-  isSubagentChildBypass() === true,
+  isSubagentChildBypass(),
 );
 
 setEnv({ PI_SUBAGENT_CHILD: "1", PI_RLM_FORCE_IN_SUBAGENT: "1", PI_RLM_DEPTH: String(DEFAULT_CONFIG.maxDepth + 1) });
 check(
   "env: force at depth>maxDepth -> bypass true",
-  isSubagentChildBypass() === true,
+  isSubagentChildBypass(),
 );
 
 setEnv({ PI_RLM_DEPTH: "2" });
@@ -101,19 +101,19 @@ check("processRlmDepth: missing -> 0", processRlmDepth() === 0);
 
 check(
   "enforce: enabled + repl active -> true",
-  shouldEnforceNativeReaderBlock({ enabled: true, activeToolNames: ["read", "repl"] }) === true,
+  shouldEnforceNativeReaderBlock({ enabled: true, activeToolNames: ["read", "repl"] }),
 );
 check(
   "enforce: enabled + no repl -> false (fail-open)",
-  shouldEnforceNativeReaderBlock({ enabled: true, activeToolNames: ["read", "write"] }) === false,
+  !shouldEnforceNativeReaderBlock({ enabled: true, activeToolNames: ["read", "write"] }),
 );
 check(
   "enforce: disabled -> false",
-  shouldEnforceNativeReaderBlock({ enabled: false, activeToolNames: ["repl"] }) === false,
+  !shouldEnforceNativeReaderBlock({ enabled: false, activeToolNames: ["repl"] }),
 );
 check(
   "enforce: enabled + unknown tools -> false (fail-open)",
-  shouldEnforceNativeReaderBlock({ enabled: true, activeToolNames: undefined }) === false,
+  !shouldEnforceNativeReaderBlock({ enabled: true, activeToolNames: undefined }),
 );
 
 // ── commitSubagentForceActivation mutates env ──

@@ -152,7 +152,7 @@ async function runTaskWithRetries(run: RunRlm, task: BenchTask): Promise<Partial
       return await runTask(run, task);
     } catch (err) {
       if (attempt >= TASK_ATTEMPTS) throw err;
-      console.log(`  ↻ ${task.suite}/${task.id} attempt ${attempt} failed (${err instanceof Error ? err.message.slice(0, 80) : err}); retrying in ${TASK_RETRY_SLEEP_MS / 1000}s`);
+      console.log(`  ↻ ${task.suite}/${task.id} attempt ${attempt} failed (${err instanceof Error ? err.message.slice(0, 80) : String(err)}); retrying in ${TASK_RETRY_SLEEP_MS / 1000}s`);
       await new Promise((resolve) => setTimeout(resolve, TASK_RETRY_SLEEP_MS));
     }
   }

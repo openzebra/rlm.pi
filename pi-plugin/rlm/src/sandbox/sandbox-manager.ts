@@ -13,7 +13,7 @@ import {
 } from "../context/refresh.ts";
 
 /** Static configuration for sandbox creation — set once, reused across getOrCreate calls. */
-export interface SandboxManagerConfig {
+interface SandboxManagerConfig {
   readonly execTimeoutS: number;
   readonly requestTimeoutMs: number;
   readonly python: string;
@@ -127,7 +127,7 @@ export class SandboxManager {
       this.sandbox = s;
       this.initPromise = null;
       return s;
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       this.contextLoaded = false;
       this.initPromise = null;
       throw err;

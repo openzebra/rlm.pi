@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { RlmController } from "../mode/rlm-mode.ts";
 import { modelLabel } from "./status.ts";
 
-export const RLM_GUIDE = `# RLM mode
+const RLM_GUIDE = `# RLM mode
 
 {state}
 

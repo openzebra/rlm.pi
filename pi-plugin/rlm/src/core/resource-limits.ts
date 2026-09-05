@@ -2,7 +2,7 @@
 
 import { formatError } from "../util/errors.ts";
 
-export interface RemainingResources {
+interface RemainingResources {
   readonly timeoutMs?: number;
 }
 

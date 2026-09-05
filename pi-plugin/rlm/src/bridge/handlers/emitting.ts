@@ -11,14 +11,14 @@ import { previewText } from "../../text/preview.ts";
 import type { SubcallPhase } from "../../tool/rlm-details.ts";
 import type { Invocation } from "./types.ts";
 
-export interface EmitOpts {
+interface EmitOpts {
   readonly kind: "llm" | "batch";
   readonly label: string;
   readonly args: string;
   readonly model?: string;
 }
 
-export interface EmitSummary {
+interface EmitSummary {
   readonly preview: string;
   readonly error?: string;
   readonly failed?: number;

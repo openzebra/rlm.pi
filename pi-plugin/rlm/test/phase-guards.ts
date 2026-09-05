@@ -160,7 +160,7 @@ async function main() {
 
   // ── repl result assembly (exercises the real production function, not a hand-built concatenation) ──
   const bigStdout = "z".repeat(10_000);
-  const llmSubcall = { id: "s1", depth: 0, kind: "llm" as const, label: "q", status: "done" as const, startedAt: 0, costUsd: 0, tokens: 0 };
+  const llmSubcall = { id: "s1", depth: 0, kind: "llm" as const, label: "q", status: "done" as const, startedAt: 0, costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0 };
   // Big stdout + no subcalls → stdout is capped and the zero-subcall nudge fires.
   const solo = buildReplResultText(bigStdout, undefined, []);
   check(

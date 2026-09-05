@@ -368,7 +368,7 @@ function handlePiEvent(raw: string): void {
   }
 
   if (type === "auto_retry_start") {
-    emit("pi", `↻ retry   attempt ${ev.attempt}/${ev.maxAttempts}: ${asString(ev.errorMessage).slice(0, 120)}`);
+    emit("pi", `↻ retry   attempt ${String(ev.attempt)}/${String(ev.maxAttempts)}: ${asString(ev.errorMessage).slice(0, 120)}`);
   }
 }
 
@@ -383,9 +383,16 @@ function handleTraceLine(raw: string): void {
   const kind = ev.kind;
   lastActivity = Date.now();
 
+/** Render an unknown event field: strings/numbers/booleans as-is, anything else as "?". */
+function show(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return "?";
+}
+
   if (kind === "repl.exec.start") {
     stats.execs += 1;
-    emit("rlm", `  ↳ repl.exec.start  chars=${ev.chars ?? "?"}`);
+    emit("rlm", `  ↳ repl.exec.start  chars=${show(ev.chars)}`);
     return;
   }
   if (kind === "repl.exec.end") {
@@ -393,7 +400,7 @@ function handleTraceLine(raw: string): void {
     if (ev.raised === true) stats.execsRaised += 1;
     emit(
       "rlm",
-      `  ↳ repl.exec.end    ${ev.ms ?? "?"}ms  raised=${ev.raised}  pending=${ev.pending ?? 0}`
+      `  ↳ repl.exec.end    ${show(ev.ms)}ms  raised=${ev.raised === true}  pending=${show(ev.pending)}`
         + (err ? `\n            ✗ ${err}` : ""),
     );
     return;
@@ -449,17 +456,17 @@ function handleTraceLine(raw: string): void {
     return;
   }
   if (kind === "bg.start") {
-    emit("rlm", `  ↳ bg.start   pending=${ev.pending}`);
+    emit("rlm", `  ↳ bg.start   pending=${show(ev.pending)}`);
     return;
   }
   if (kind === "bg.settle") {
-    emit("rlm", `  ↳ bg.settle  pending=${ev.pending}  ${ev.durationMs ?? "?"}ms`);
+    emit("rlm", `  ↳ bg.settle  pending=${show(ev.pending)}  ${show(ev.durationMs)}ms`);
     return;
   }
   if (kind === "frame.in" && ev.detached === true) {
     emit(
       "rlm",
-      `  ↳ frame.in  ${ev.frame}  detached  prompts=${ev.prompts ?? 1}  rid=${ev.rid}`,
+      `  ↳ frame.in  ${asString(ev.frame)}  detached  prompts=${show(ev.prompts)}  rid=${asString(ev.rid)}`,
     );
   }
 }

@@ -36,7 +36,7 @@ async function main(): Promise<void> {
     initTimeoutMs: 30_000,
     maxPromptChars: 400_000,
     handlers: {
-      llmQuery: async (prompt: string) => `leaf:${String(prompt)}`,
+      llmQuery: async (prompt: string) => `leaf:${prompt}`,
       llmBatch: async (prompts: readonly string[]) => prompts.map((p) => `leaf:${p}`),
       rlmQuery: async (task: string, _depth: number, opts: SubcallOpts) => {
         calls.push({ kind: "rlm_query", payload: task, paths: opts.paths });

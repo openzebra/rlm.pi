@@ -13,7 +13,7 @@ This is a **Recursive Language Model (RLM) plugin** for the Pi coding agent. The
 ```
 pi-plugin/rlm/src/
 ├── core/          Headless RLM loop, limits, compaction, history
-├── bridge/        Sub-LLM/rlm/interactive handlers (bridge/handlers/ is the single impl)
+├── bridge/        Sub-LLM/rlm handlers (bridge/handlers/ is the single impl)
 ├── sandbox/       Python subprocess (py/), JSONL protocol, interrupt dispatch, sandbox manager
 ├── tool/          repl() and rlm() Pi tool registrations + event emitter
 ├── config/        rlm.json persistence, defaults, model resolution
@@ -61,7 +61,7 @@ implementation of `llm_query` / `llm_batch` / `rlm_query` / `rlm_batch`, and
 4. **Leaf answer summary** — `summarizeLeaf()`, exported from `bridge/handlers/`. Batch
    handlers emit ONE node per item (`llm_query`/`rlm_query` rows — nothing collapsed, no `×N`).
 
-5. **The subcall emit pattern** (create → execute → update status/cost/tokens) — the `emitting()` helper in `bridge/handlers/` for leaf sub-calls; `childRun` emits its own node for recursive ones (never wrap it, or the node is reported twice). `interactive.ts` follows the same shape by hand. Adding a new subcall handler? Reuse these — don't invent a new pattern.
+5. **The subcall emit pattern** (create → execute → update status/cost/tokens) — the `emitting()` helper in `bridge/handlers/` for leaf sub-calls; `childRun` emits its own node for recursive ones (never wrap it, or the node is reported twice). `bridge/add-context.ts` follows the same shape by hand (extra mid-flight statuses). Adding a new subcall handler? Reuse these — don't invent a new pattern.
 
 6. **Child context inheritance** — `getChildContext` on `SubcallHandlerDeps` is the ONE seam by
    which a child RLM receives its parent's world (repo pack + loaded libraries). `childRun` is the
@@ -77,13 +77,29 @@ field to `SubcallHandlerDeps` instead.
 
 - **ZERO `any`** — use `unknown` always. Currently clean; keep it that way.
 - **ZERO `!` non-null assertions** — use `?.`, `??`, type guards. Currently clean.
-- **`readonly` on ALL interface properties** — every interface in this project uses `readonly`.
+- **`readonly` where it makes sense** — immutable DTOs, constants, and option bags may use `readonly`; mutable state objects (registries, counters, snapshots, timers) are fine without it. No blanket requirement.
 - **`Object.freeze()` on constants** — arrays, sets, default configs, enums must be frozen.
 - **Discriminated unions** over flags — never a boolean that silently changes a shape.
 - **`Result<T, E>`** (`{ ok: true, value } | { ok: false, error }`) for fallible operations — use from `util/errors.ts`.
 - **Fail-soft I/O** — writers return `boolean` and warn instead of throwing; never `console.log` from a
   TUI path (it corrupts the render).
 - **Type guards over casts** — every `unknown` must be narrowed via `is*` functions before use.
+
+## Strict Engineering Rules
+
+- **The DRY principle is absolute**: we never copy/paste or duplicate logic/code!
+- **No dynamic types!** Always use strict TypeScript typing. If a type is unknown, using `any` is strictly forbidden — always use `unknown`. Ensure `"strict": true` is enabled in `tsconfig.json`.
+- **Strict null/undefined safety**: NEVER use the non-null assertion operator (`!`) to force-unwrap or bypass the compiler. Always use safe checks: optional chaining (`?.`), nullish coalescing (`??`), or explicit Type Guards.
+- **No unhandled exceptions (no crashes)**: Avoid application crashes. Use try/catch blocks for critical sections, or prefer the `Either` pattern / Discriminated Unions for compile-time error handling (functional programming style).
+- **Heavy tasks out of the main thread**: Never block the Event Loop. Parsing massive JSON strings, cryptography, or heavy mathematical computations must be offloaded to Web Workers (browser) or Worker Threads (Node.js).
+- **Zero extra allocations in the UI**: Prevent wasted renders and memory leaks. In UI frameworks (React, Vue, etc.), use memoization (`React.memo`, `useMemo`, `useCallback`) wherever justified. For immutable configurations and constants, always apply `Object.freeze()` (freezing a `string`/`number` is pointless — they are immutable by nature).
+- **Keep components and render functions pure and fast**: No business logic, heavy calculations, or side effects inside the component body or JSX/templates. Only UI declaration.
+- **Optimize memory collections**: Avoid creating empty arrays and continuously calling `.push()` in loops if the collection size is known beforehand. Pre-allocate memory using `Array.from({ length })` or `new Array(size)` to prevent ongoing V8 engine reallocations.
+- **Efficient string manipulation**: Never use string concatenation (`+` or `+=`) inside heavy loops. For assembling large volumes of text, push segments into an array and use `.join('')` to minimize the creation of intermediate strings in memory.
+- **Data predictability and comparison**: For data objects (DTOs/Value Objects), mark all properties as `readonly`. Mutable runtime state (registries, counters, timers) is fine without it. If value-based (instead of reference-based) object comparison is required, explicitly implement `equals()` / `hashCode()` methods or utilize proven deep-equality libraries.
+- **Safe FFI/Wasm memory management**: When integrating with low-level code via WebAssembly (Wasm), Node-API (N-API), or Bun FFI, strictly manage allocated memory. Always manually free native memory and destroy references to prevent memory leaks outside the V8 heap.
+- **Follow best practices**: Enforce strict ESLint rules (including `@typescript-eslint/eslint-plugin` with `strict-type-checked` configurations), Prettier, and the official style guides of your chosen framework.
+- **Optional props use `?` syntax** — never write `prop: string | undefined` in interfaces or option bags; write `prop?: string`. The explicit `| undefined` union is the same thing but noisier — `?` is the convention.
 
 ## Patterns to Follow
 
