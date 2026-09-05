@@ -127,18 +127,6 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (enableLedger !== undefined) out.enableLedger = enableLedger;
   const rlmBudget = validateNumber(r.rlmBudget, 0);
   if (rlmBudget !== undefined) out.rlmBudget = rlmBudget;
-  // v5 durable memory
-  const enableMemory = validateBoolean(r.enableMemory);
-  if (enableMemory !== undefined) out.enableMemory = enableMemory;
-  const injectNoteTokens = validateNumber(r.injectNoteTokens, 100);
-  if (injectNoteTokens !== undefined) out.injectNoteTokens = injectNoteTokens;
-  const evolveEvery = validateNumber(r.evolveEvery, 0);
-  if (evolveEvery !== undefined) out.evolveEvery = evolveEvery;
-  if (r.memoryDir === null) out.memoryDir = null;
-  else {
-    const memoryDir = validateString(r.memoryDir);
-    if (memoryDir !== undefined) out.memoryDir = memoryDir;
-  }
   // v5 provider concurrency caps: { provider: minConcurrent }
   if (typeof r.providerMaxConcurrent === "object" && r.providerMaxConcurrent !== null) {
     const caps: Record<string, number> = {};

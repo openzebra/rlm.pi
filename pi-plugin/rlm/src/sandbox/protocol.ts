@@ -71,7 +71,7 @@ export interface WorkerResponse {
   readonly index?: number;
 }
 
-/** Canonical interrupt kinds (api_v5 + v5 ledger + memory). */
+/** Canonical interrupt kinds (api_v5 + v5 ledger). */
 export type InterruptKind =
   | "llm_query"
   | "rlm_query"
@@ -80,8 +80,7 @@ export type InterruptKind =
   | "await"
   | "finish"
   | "add_context"
-  | "ledger_claims"
-  | "memory";
+  | "ledger_claims";
 
 interface InterruptBase {
   readonly rid: string;
@@ -128,17 +127,6 @@ export interface LedgerClaimsInterrupt extends InterruptBase {
   readonly type: "ledger_claims";
 }
 
-/** v5: sandbox reaches the durable MemoryStore (`memory.query/add/stats`). */
-export interface MemoryInterrupt extends InterruptBase {
-  readonly type: "memory";
-  readonly op: "query" | "add" | "stats";
-  readonly query?: string;
-  readonly k?: number;
-  readonly content?: string;
-  readonly paths?: readonly string[];
-  readonly tags?: readonly string[];
-}
-
 /** A mid-exec sub-LLM/tool request from the worker. */
 export type WorkerInterrupt =
   | PromptInterrupt
@@ -146,8 +134,7 @@ export type WorkerInterrupt =
   | AwaitInterrupt
   | FinishInterrupt
   | AddContextInterrupt
-  | LedgerClaimsInterrupt
-  | MemoryInterrupt;
+  | LedgerClaimsInterrupt;
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
 
@@ -161,7 +148,6 @@ export const INTERRUPT_KINDS = Object.freeze(
     "finish",
     "add_context",
     "ledger_claims",
-    "memory",
   ]),
 );
 

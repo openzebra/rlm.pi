@@ -16,8 +16,7 @@ import {
   createTaskRegistry,
   type Invocation,
 } from "../bridge/handlers/index.ts";
-import { TaskLedger, contextSig, taskKey } from "./ledger.ts";
-import { type MemoryStore, rootContextPaths } from "./memory.ts";
+import { TaskLedger } from "./ledger.ts";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import { buildRlmSystemPrompt } from "../prompts/system.ts";
 import { buildTurnPrompt, FINALIZE_PROMPT, RETRIEVAL_NUDGE, REASONING_BUDGET_HINT, VERIFICATION_NUDGE } from "../prompts/user.ts";
@@ -49,11 +48,6 @@ const DETACHED_SETTLE_MS = 5_000;
 /** Verification nudge (enableVerificationNudge): only an EARLY finalize is suspicious — from
  *  turn 4 on, a bare answer is just... an answer. "Before iteration ~4", per the bench data. */
 const VERIFICATION_NUDGE_TURN_CAP = 4;
-/** H6 (audit): root episodes snapshot at most this many real files — replay invalidation for
- *  the disk-backed slice of the context without hashing an unbounded repository. */
-const ROOT_HASH_MAX = 64;
-
-
 export interface EngineDeps {
   readonly model: Model<Api>;
   readonly llmModel: Model<Api>;
@@ -69,8 +63,6 @@ export interface EngineDeps {
   readonly onUsage?: (usage: Usage, role: "root" | "sub") => void;
   /** Test-only: override model completion (scripted multi-turn responses). */
   readonly complete?: import("./iteration.ts").CompleteFn;
-  /** v5: session-wide durable memory store (`.rlm/`); omitted → memory off for this engine. */
-  readonly memory?: MemoryStore;
 }
 
 /** Build a `runRlm` bound to the given deps. The returned function is reused for recursion. */
@@ -143,49 +135,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
     const runLedger = input.ledger ?? new TaskLedger();
     if (deps.config.enableLedger) runLedger.beginRun(input.rootPrompt);
 
-    // v5 durable memory: read-only root replay — an identical prompt over an identical
-    // context answers for zero API calls (measured 10,051 → 0 tok in bake-off runs).
-    const rootMemory =
-      deps.memory !== undefined && deps.config.enableMemory ? deps.memory : undefined;
-    const modelRefStr = `${model.provider}/${model.id}`;
-    const rootKey = taskKey("root", input.rootPrompt, [], modelRefStr, contextSig(input.context));
-    if (rootMemory !== undefined && input.depth === 0 && input.budget === undefined) {
-      const hit = rootMemory.replay(rootKey);
-      if (hit !== undefined) {
-        emitter.emitStatus("done");
-        return {
-          answer: hit.result,
-          iterations: 0,
-          costUsd: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          durationMs: 0,
-        };
-      }
-    }
-    const persistRoot = (
-      answer: string,
-      spend?: { readonly inputTokens: number; readonly outputTokens: number },
-    ): void => {
-      if (rootMemory === undefined || input.depth !== 0) return;
-      // H2 (audit): only clean root runs persist — a continuation leaf carries the ORIGINAL
-      // run's key (it persists the chain itself), and stopped/aborted partials must never
-      // replay as if they were real answers.
-      if (input.budget !== undefined) return;
-      if (answer === "" || answer === "(aborted)" || answer.startsWith("(stopped")) return;
-      const u = spend ?? limits.usage();
-      rootMemory.recordEpisode({
-        key: rootKey,
-        kind: "root",
-        model: modelRefStr,
-        prompt: input.rootPrompt,
-        paths: rootContextPaths(input.context, ROOT_HASH_MAX),
-        result: answer,
-        tokensIn: u.inputTokens,
-        tokensOut: u.outputTokens,
-      });
-    };
-
     const subcalls = createSubcallHandlers({
       resolve: () => invocation,
       gates: deps.gates
@@ -201,7 +150,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
       // interrupt during runTurn, which is strictly after loadContext below.
       getChildContext: () => liveContext,
       ledger: runLedger,
-      memory: rootMemory,
       trackDetached: async (task) => {
         detachedInFlight += 1;
         try {
@@ -296,8 +244,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           }).handlers
         : {};
 
-      // v5 doctrine: one condition feeds BOTH the python surface and the memory scope —
-      // delegation children keep llm/memory-read/ledger, never repo retrieval or memory.add.
+      // v5 doctrine: delegation children keep the llm/ledger surface — never repo retrieval.
       const surface = input.depth > 0 && deps.config.childSurface === "delegation" ? "child" : "root";
       sandbox = await PythonSandbox.spawn({
         depth: input.depth,
@@ -313,10 +260,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
           ...subcalls,
           ...contextHandlers,
           ledgerClaims: () => Promise.resolve(runLedger.listClaims()),
-          memoryOp: (op, args) =>
-            Promise.resolve(
-              rootMemory === undefined ? "memory off" : rootMemory.serviceOp(op, args, surface === "child" ? "child" : "root"),
-            ),
         },
       });
 
@@ -371,9 +314,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
           );
         }
 
-        // v5 [ledger] blackboard + [memory] notes — each silent ("") when it has nothing to say.
+        // v5 [ledger] blackboard — silent ("") when it has nothing to say.
         const ledgerBlock = deps.config.enableLedger ? runLedger.injectBlock() : "";
-        const memoryBlock = rootMemory !== undefined ? rootMemory.injectBlock(input.rootPrompt) : "";
         // H3: after two retrieval-free turns, inject the coach nudge exactly once, for one turn.
         const nudgeNow = i >= 2 && !sawRetrieval && !retrievalNudged;
         if (nudgeNow) retrievalNudged = true;
@@ -381,7 +323,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
           [
             i === softNoteTurn ? WRAP_UP_BUDGET : undefined,
             ledgerBlock === "" ? undefined : ledgerBlock,
-            memoryBlock === "" ? undefined : memoryBlock,
             nudgeNow ? RETRIEVAL_NUDGE : undefined,
             verificationNudgePending ? VERIFICATION_NUDGE : undefined,
             // One-shot (turn 0 only): thinking tokens share the completion budget — mirror of
@@ -439,7 +380,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
             verificationNudgePending = true;
           } else {
             const done = result(final, i + 1, limits);
-            persistRoot(done.answer);
             lastAnswer = done.answer;
             return done;
           }
@@ -488,12 +428,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
                 outputTokens: inner.outputTokens + u.outputTokens,
                 costUsd: inner.costUsd + u.costUsd,
               };
-              // H2: the ORIGINAL run persists the chain's answer under the ORIGINAL key —
-              // the next identical prompt must replay the full result, not miss.
-              // R2: lastAnswer must be set before return — `finally` emitAnswer reads it,
-              // and persist must store the CHAIN totals, not just the parent window.
+              // R2: lastAnswer must be set before return — `finally` emitAnswer reads it.
               lastAnswer = chained.answer;
-              persistRoot(chained.answer, chained);
               return chained;
             }
             // Chain cap reached — finalize with the best partial (a budget never throws).
@@ -503,7 +439,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
       }
       if (pendingReplOutputs) appendUserMessage(history, pendingReplOutputs);
       const finalized = result(await finalize(history, model, deps, limits, sandbox), deps.config.maxIterations, limits);
-      persistRoot(finalized.answer);
       lastAnswer = finalized.answer;
       return finalized;
     } catch (err) {

@@ -31,7 +31,6 @@ function benchConfig(opts?: Parameters<typeof benchSampling>[0]): RlmConfig {
     maxIterations: 2,
     enableTokenBudget: false, // bench measures capability — see bench/engine.ts
     compaction: false,
-    enableMemory: false,
     enableLedger: false,
     rootSampling: sampling.root,
     subSampling: sampling.sub,

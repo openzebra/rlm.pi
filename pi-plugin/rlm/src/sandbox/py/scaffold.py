@@ -37,28 +37,6 @@ from tasks import (
 )
 
 
-class _MemoryApi:
-    """v5 durable memory surface — thin shims over the `memory` interrupt.
-
-    memory.query(q, k=8) → retrieved notes; memory.add(text, paths=…, tags=…) → status;
-    memory.stats() → store counters. All calls block on the host RPC like add_context does.
-    """
-
-    def __init__(self, worker: "WorkerScaffold"):
-        self._w = worker
-
-    def query(self, q, k: int = 8) -> str:
-        return self._w._memory_rpc("query", {"query": str(q), "k": int(k)})
-
-    def add(self, text, paths=None, tags=None) -> str:
-        p = [str(x) for x in (paths or [])]
-        t = [str(x) for x in (tags or [])]
-        return self._w._memory_rpc("add", {"content": str(text), "paths": p, "tags": t})
-
-    def stats(self) -> str:
-        return self._w._memory_rpc("stats", {})
-
-
 class WorkerScaffold:
     """Mixin: the model-facing REPL API. Requires the host methods from Worker
     (`_post`, `_rpc`, `_drain_until`, `_take`, `self.inbox`, `self.ns`, `self._handles`)."""
@@ -602,14 +580,5 @@ class WorkerScaffold:
         if r.get("error"):
             return f"Error: {r['error']}"
         return str(r.get("response") or "ledger: no claims")
-
-    def _memory_rpc(self, op: str, payload: dict[str, Any]) -> str:
-        r = self._rpc("memory", {"op": op, **payload})
-        if r.get("error"):
-            return f"Error: {r['error']}"
-        return str(r.get("response") or "")
-
-    def _memory_api(self) -> "_MemoryApi":
-        return _MemoryApi(self)
 
     # ---- context + execution --------------------------------------------------------------

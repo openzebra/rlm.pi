@@ -332,12 +332,12 @@ async function main(): Promise<void> {
   // ── 9. verification-discipline nudge (enableVerificationNudge, default OFF) ──
   {
     const ready = (a: string): string => repl(`answer["content"] = ${JSON.stringify(a)}\nanswer["ready"] = True`);
-    const nudgeCfg = (mi: number): RlmConfig => cfg({ maxIterations: mi, enableMemory: false, enableLedger: false, enableVerificationNudge: true });
+    const nudgeCfg = (mi: number): RlmConfig => cfg({ maxIterations: mi, enableLedger: false, enableVerificationNudge: true });
 
     // Default OFF: an early bare answer is accepted exactly as before (guardrail).
     {
       const { complete, calls } = captureComplete([ready("7")]);
-      const engine = createEngine({ model: wireModel(false), llmModel: wireModel(false), registry: MOCK_REGISTRY, config: cfg({ maxIterations: 6, enableMemory: false, enableLedger: false }), emitter: new RlmEmitter(), complete });
+      const engine = createEngine({ model: wireModel(false), llmModel: wireModel(false), registry: MOCK_REGISTRY, config: cfg({ maxIterations: 6, enableLedger: false }), emitter: new RlmEmitter(), complete });
       const out = await engine({ rootPrompt: "nudge-off-9411", context: "ctx", depth: 0 });
       check("nudge: default OFF accepts the early bare answer", out.answer === "7" && calls.length === 1);
     }

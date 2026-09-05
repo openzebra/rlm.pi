@@ -18,8 +18,6 @@ import {
 } from "../src/core/budget.ts";
 import { elideOldToolPayloads } from "../src/core/compaction.ts";
 import { formatReplOutputs } from "../src/core/answer.ts";
-import { MemoryStore } from "../src/core/memory.ts";
-import { contextSig, taskKey } from "../src/core/ledger.ts";
 import { createEngine } from "../src/core/engine.ts";
 import type { RlmConfig } from "../src/core/types.ts";
 import { ModelContextRegistry, modelsCachePath, UNKNOWN_CONTEXT } from "../src/core/model-registry.ts";
@@ -261,68 +259,6 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
   const c = distillTrajectory(chrono, "q", 4_000);
   check("C4: findings joined chronologically", c.indexOf("FIRST:") < c.indexOf("SECOND:"), "");
   check("C4: next-step hint from the NEWEST finding", c.includes("check gamma"), "");
-}
-
-// ── audit H2: continuation persists under the ORIGINAL key + stopped answers never persist ──
-
-{
-  const dir = mkdtempSync(join(tmpdir(), "rlm-h2-"));
-  try {
-    const store = new MemoryStore(dir, { dir: join(dir, "m") });
-    const config = cfg({ budgetShare: 1, budgetTaskCap: 550, budgetMaxContinuations: 2, maxIterations: 10 });
-    let calls = 0;
-    const script: (msgs: readonly ChatMsg[]) => Promise<CompleteResult> = (msgs) => {
-      calls++;
-      // [continuation N] lives on the system <task> line (rootPrompt), not a user turn.
-      const prompt = msgs.map((m) => m.content).join("\n");
-      if (prompt.includes("FINAL") || calls >= 8) {
-        return { text: "plain final text", usage: usage(200) };
-      }
-      if (prompt.includes("[continuation")) {
-        return { text: '```repl\nanswer["content"] = "chain-answer"\nanswer["ready"] = True\n```', usage: usage(200) };
-      }
-      return { text: "```repl\nprint('working')\n```", usage: usage(300) };
-    };
-    const emitter = new RlmEmitter();
-    let emittedAnswer = "";
-    emitter.onAnswer((e) => { emittedAnswer = e.text; });
-    const mk = (em = new RlmEmitter()) =>
-      createEngine({
-        model: MOCK_MODEL, llmModel: MOCK_MODEL, registry: MOCK_REGISTRY, config,
-        emitter: em, memory: store,
-        complete: script as unknown as import("../src/core/iteration.ts").CompleteFn,
-      });
-    const first = await mk(emitter)({ rootPrompt: "h2 chain test", context: "ctx-body", depth: 0 });
-    check("H2: continuation chain produced an answer", first.answer.length > 0, first.answer.slice(0, 40));
-    check("H2: chain persisted an episode under the original key", store.stats().episodes >= 1, JSON.stringify(store.stats()));
-    check("R2: continuation emitAnswer carries the chain answer",
-      emittedAnswer.length > 0 && first.answer.includes("chain-answer") && emittedAnswer.includes("chain-answer"),
-      `emitted=${emittedAnswer.slice(0, 60)} answer=${first.answer.slice(0, 40)}`);
-    const persisted = store.replay(taskKey("root", "h2 chain test", [], "test/mock", contextSig("ctx-body")));
-    check("R2: persist tokens are the CHAIN total (parent + leaf)",
-      persisted !== undefined && persisted.tokensIn === first.inputTokens && first.inputTokens > 0,
-      `ep=${persisted?.tokensIn} chained=${first.inputTokens}`);
-    const callsBefore = calls;
-    const second = await mk()({ rootPrompt: "h2 chain test", context: "ctx-body", depth: 0 });
-    check("H2: identical re-run replays the chain answer (0 completions)",
-      calls === callsBefore && second.answer === first.answer && second.iterations === 0,
-      `calls+${calls - callsBefore} iters=${second.iterations}`);
-
-    // Stopped (LimitError) answers must never be recorded — they would replay as real.
-    const stoppedStore = new MemoryStore(dir, { dir: join(dir, "s") });
-    const stopEngine = createEngine({
-      model: MOCK_MODEL, llmModel: MOCK_MODEL, registry: MOCK_REGISTRY,
-      config: cfg({ maxIterations: 5 }),
-      emitter: new RlmEmitter(), memory: stoppedStore,
-      limits: { maxTokens: 1 },
-      complete: (async () => ({ text: "thinking...", usage: usage(50) })) as unknown as import("../src/core/iteration.ts").CompleteFn,
-    });
-    const stopped = await stopEngine({ rootPrompt: "will be stopped", context: "ctx", depth: 0 });
-    check("H2: maxTokens stop ends the run with a partial", stopped.answer.length > 0 && stopped.iterations < 5, stopped.answer.slice(0, 40));
-    check("H2: stopped partial NOT persisted", stoppedStore.stats().episodes === 0, JSON.stringify(stoppedStore.stats()));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 finish();

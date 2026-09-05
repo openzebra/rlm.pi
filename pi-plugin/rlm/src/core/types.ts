@@ -96,18 +96,9 @@ export interface RlmConfig {
   readonly enableLedger: boolean;
   /** Real rlm spawns allowed before extra rlm_query demotes to llm_query (0 = never). */
   readonly rlmBudget: number;
-  /** v5 durable memory: L1 episode replay + L2 BM25 notes under `<root>/.rlm/memory`. */
-  readonly enableMemory: boolean;
-  /** Char budget for the `[memory]` injection = tokens × 4. */
-  readonly injectNoteTokens: number;
-  /** Pending episodes per L2 consolidation batch (0 = never auto-consolidate). */
-  readonly evolveEvery: number;
-  /** Override the memory dir. `null` (default) = `<root>/.rlm/memory` — this field only
- *  RELOCATES the store; the on/off switch is `enableMemory` (audit M3). */
-  readonly memoryDir: string | null;
   /** v5: per-provider concurrent-request caps (e.g. `{ zai: 4 }`). Caps only lower limits. */
   readonly providerMaxConcurrent?: Readonly<Record<string, number>>;
-  /** v5 doctrine: "delegation" = child engines get llm/memory/ledger only (no repo retrieval);
+  /** v5 doctrine: "delegation" = child engines get llm/ledger only (no repo retrieval);
    *  "legacy" keeps today's full child surface as a one-flip rollback. */
   readonly childSurface: "delegation" | "legacy";
   /** Verification-discipline nudge (default OFF — it changes interactive behavior): when the

@@ -21,9 +21,6 @@ import { SANDBOX_WATCHDOG_HEARTBEAT_MS } from "./sandbox/sandbox.ts";
 import { SandboxManager } from "./sandbox/sandbox-manager.ts";
 import { buildSessionGates, type SubcallGates } from "./util/concurrency.ts";
 import { BackgroundTasks } from "./tool/background-tasks.ts";
-import { MemoryStore } from "./core/memory.ts";
-import { modelComplete } from "./bridge/model.ts";
-import { retryPolicy } from "./util/retry.ts";
 import { resolve } from "node:path";
 import { resolveSource } from "./context/resolve.ts";
 import { formatContextListing } from "./context/listing.ts";
@@ -69,21 +66,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
 
   // Init synchronously with defaults — ensures commands/tools/handlers register before session_start
   const config = mergeConfig({});
-  // v5 durable memory: one store per session under <cwd>/.rlm/memory (L1 replay + L2 notes).
-  // NOTE (audit M4): this store IS shared by both composition roots, but the TaskLedger is
-  // NOT — the native repl() session and each headless rlm run each keep their own blackboard
-  // (v5 parity: per-run ledger). Claims/coalescing reset at that boundary, by design.
-  // The consolidation LLM + real workspace root are attached in session_start (setLlm/setRoot).
-  const memory = new MemoryStore(
-    process.cwd(),
-    {
-      dir: config.memoryDir ?? undefined,
-      injectNoteTokens: config.injectNoteTokens,
-      evolveEvery: config.evolveEvery,
-    },
-    config.enableMemory,
-  );
-  const controller = new RlmController(config, memory);
+  const controller = new RlmController(config);
   let onSandboxDiscardExtra: (() => void) | undefined;
   const sandboxManager = new SandboxManager({
     execTimeoutS: config.execTimeoutS,
@@ -253,17 +236,6 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const llmModel = controller.llmModel ?? cheapestModel(ctx.modelRegistry) ?? ctx.model;
     const model = ctx.model;
     if (llmModel && model) {
-      // Consolidation runs on the cheap worker model through the single completion entry point;
-      // the workspace root is only known once the session starts.
-      const consolidateModel = llmModel;
-      memory.setLlm((prompt) =>
-        modelComplete([{ role: "user", content: prompt }], {
-          model: consolidateModel,
-          registry: ctx.modelRegistry,
-          retry: retryPolicy(controller.config),
-        })
-          .then((r) => r.text));
-      memory.setRoot(ctx.cwd ?? process.cwd());
       // v5 provider caps (audit C1/C6): ONE resolver shared by both composition roots — the
       // repl() tool and RlmController.start admit through the same pool, each gate capped
       // against the model that actually runs on it (leaves = worker, children = smart).
@@ -304,7 +276,6 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           resolveGates: resolveSessionGates,
           background,
           runRegistry,
-          memory,
           registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
           registerContextBundle: (bundle) => {
             contextBundleRef = bundle;

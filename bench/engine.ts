@@ -162,7 +162,6 @@ export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts
     retryMaxAttempts: 5,
     retryBaseDelayMs: 1_000,
     retryMaxDelayMs: 30_000,
-    enableMemory: false, // keep bench runs isolated from durable notes
     autoSeedCwd: false, // tasks carry explicit context; never sweep the repo into a run
     // Paper-tier tasks carry 100–400k-char contexts; the budget cascade caps a task at
     // contextWindow × budgetShare (≈33k tokens on a 131k window) — below the raw context

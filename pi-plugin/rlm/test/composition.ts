@@ -1,7 +1,7 @@
 /**
- * Composition-root tests (audit C1/C6/M9): the SECOND construction path —
- * RlmController.start() — must receive the session MemoryStore and the provider-capped
- * session gates, exactly like the repl() tool does. Issue #4 and audit C1 were both
+ * Composition-root tests (audit C1/C6): the SECOND construction path —
+ * RlmController.start() — must receive the provider-capped session gates,
+ * exactly like the repl() tool does. Issue #4 and audit C1 were both
  * "one root grew, the other forgot".
  */
 
@@ -10,7 +10,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { RlmController } from "../src/mode/rlm-mode.ts";
-import { MemoryStore as MemoryStoreImpl } from "../src/core/memory.ts";
 import { buildSessionGates, createSubcallGates } from "../src/util/concurrency.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import type { EngineDeps } from "../src/core/engine.ts";
@@ -43,9 +42,8 @@ try {
     cwd: dir,
   } as unknown as ExtensionContext;
 
-  // C1: the session store + provider-capped gates must reach the rlm tool's engine.
-  const memory = new MemoryStoreImpl(dir, { dir: join(dir, "m") });
-  const controller = new ProbeController({ ...DEFAULT_CONFIG, enabled: true }, memory);
+  // C1: the provider-capped gates must reach the rlm tool's engine.
+  const controller = new ProbeController({ ...DEFAULT_CONFIG, enabled: true });
   const sessionGates = buildSessionGates(
     { ...DEFAULT_CONFIG, providerMaxConcurrent: Object.freeze({ zai: 4 }) },
     "zai", // smart
@@ -58,13 +56,12 @@ try {
 
   check("C1: start() completed through the stubbed engine", result.answer === "stub-answer", result.answer.slice(0, 30));
   const cap = controller.captured;
-  check("C1: engine received the session MemoryStore", cap?.memory === memory);
   check("C1: engine received the provider-capped session gates", cap?.gates === sessionGates);
   check("C1: gates carry the smart-provider child cap (zai=4)",
     cap?.gates !== undefined && cap.gates.rlm.at(1).inFlight >= 0 && cap.gates !== createSubcallGates(16, 6));
 
   // Without setSessionGates the engine still runs (private gates fallback) — no crash.
-  const bare = new ProbeController({ ...DEFAULT_CONFIG, enabled: true }, memory);
+  const bare = new ProbeController({ ...DEFAULT_CONFIG, enabled: true });
   const bareHandle = bare.start(ctx, { rootPrompt: "bare probe", context: "seed" });
   await bareHandle.done;
   check("C1: start() works without session gates (private fallback)", bare.captured?.gates === undefined);

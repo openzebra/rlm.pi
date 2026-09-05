@@ -357,17 +357,6 @@ export function replGlossary(
     "  verified result in `answers` — see the decomposition doctrine below.",
     "- `SHOW_VARS() -> str`: list every variable currently in the REPL (Task handles show as `<Task …>`).",
     "- `list_tasks()`: every Task this REPL created — [{kind, label, done, var}].",
-    ...(delegation
-      ? [
-          "- `memory.query(q) -> str`: durable notes under `.rlm/` that survive across sessions.",
-          "  **READ-ONLY here** — `memory.add` is root-only. Query before re-studying a known area;",
-          "  your own final answer is recorded as an episode automatically.",
-        ]
-      : [
-          "- `memory.query(q) -> str` / `memory.add(text, paths=…, tags=…)`: durable notes under `.rlm/`",
-          "  that survive across sessions. Query before re-studying a known area; add concise findings",
-          "  (facts, locations, decisions) — never secrets or API keys (notes persist on disk).",
-        ]),
     "- `list_claims()`: the live `[ledger]` table of inflight/done agent work.",
     '- `answer`: a dict initialized to {"content": "", "ready": False}. To submit your final answer,',
     '  set `answer["content"]` to the answer text and `answer["ready"] = True`.',

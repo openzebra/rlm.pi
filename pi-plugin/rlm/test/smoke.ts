@@ -25,7 +25,6 @@ const SUITES: readonly string[] = Object.freeze([
   "budget.ts",
   "ledger.ts",
   "phase-native-ledger.ts",
-  "memory.ts",
   "composition.ts",
   "concurrency-provider.ts",
   "retry.ts",

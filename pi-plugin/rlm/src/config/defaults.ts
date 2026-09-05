@@ -51,12 +51,7 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   // v5 TaskLedger blackboard
   enableLedger: true,
   rlmBudget: 8,
-  // v5 durable memory
-  enableMemory: true,
-  injectNoteTokens: 2_000,
-  evolveEvery: 8,
-  memoryDir: null,
-  // v5 role separation: children delegate (llm + memory/ledger); "legacy" = full child surface.
+  // v5 role separation: children delegate (llm + ledger); "legacy" = full child surface.
   childSurface: "delegation",
   // Verification-discipline nudge — deliberately OFF (plan guardrail): when on, an early
   // bare-number finalize gets one coached redo instead of being accepted. Opt-in via rlm.json.

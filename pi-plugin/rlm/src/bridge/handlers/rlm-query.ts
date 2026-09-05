@@ -111,31 +111,8 @@ async function childRun(
       ? prompt
       : `${prompt}\n\n[rlm] paths=${child.unmatched.join(", ")} matched no files; you received the full context.`;
 
-  // ── v5 memory replay: an identical, still-fresh child answer replays for zero API calls ──
-  const memory = deps.memory;
   const sig = contextSig(child.context);
   const key = claimKeyFor(deps, "rlm", prompt, paths ?? [], sig);
-  if (memory !== undefined && deps.getConfig().enableMemory !== false) {
-    const hit = memory.replay(key);
-    if (hit !== undefined) {
-      const replayId = inv.emitter.emitSubcallCreated({
-        kind: "rlm",
-        parentId: inv.parentId,
-        label: "rlm_query (replay)",
-        detail: prompt.slice(0, 60),
-        depth: childDepth,
-      });
-      inv.emitter.emitSubcallUpdated({ id: replayId, status: "done", resultPreview: hit.result.slice(0, 200) });
-      return {
-        answer: hit.result,
-        iterations: 0,
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        durationMs: 0,
-      };
-    }
-  }
 
   // ── v5 TaskLedger: echo → stub; duplicate → coalesce onto the existing runner ──────
   const ledger = activeLedger(deps);
@@ -189,19 +166,6 @@ async function childRun(
     inv.limits.addRaw(res.costUsd, res.inputTokens, res.outputTokens);
     deps.onChildUsage?.(res.costUsd, res.inputTokens, res.outputTokens);
     if (ledger !== undefined && claimKey !== undefined) ledger.finish(claimKey, res.answer);
-    // v5: child answers persist unconditionally — this is what later identical runs replay.
-    if (memory !== undefined && deps.getConfig().enableMemory !== false) {
-      memory.recordEpisode({
-        key,
-        kind: "rlm",
-        model: modelLabel ?? "",
-        prompt,
-        paths: paths ?? [],
-        result: res.answer,
-        tokensIn: res.inputTokens,
-        tokensOut: res.outputTokens,
-      });
-    }
     inv.emitter.emitSubcallUpdated({
       id: subId,
       status: "done",

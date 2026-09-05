@@ -152,7 +152,6 @@ class Worker(WorkerScaffold):
         if self.surface != "child":
             ns["add_context"] = self._add_context
         ns["list_claims"] = self._list_claims
-        ns["memory"] = self._memory_api()
         ns["SHOW_VARS"] = self._show_vars
         if not isinstance(ns.get("answer"), _AnswerDict):
             cur = ns.get("answer")

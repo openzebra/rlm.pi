@@ -16,7 +16,6 @@ import { resolveSource } from "../context/resolve.ts";
 import { RlmEmitter } from "../tool/rlm-events.ts";
 import { formatError } from "../util/errors.ts";
 import { cheapestModel } from "./llm-model.ts";
-import type { MemoryStore } from "../core/memory.ts";
 import type { RunRlm } from "../core/types.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
 
@@ -45,11 +44,7 @@ export class RlmController {
    *  session_start so BOTH composition roots admit through one pool (audit C1). */
   private sessionGates: (() => SubcallGates) | undefined;
 
-  constructor(
-    public config: RlmConfig,
-    /** v5 durable memory — shared with the repl tool so child runs replay/persist too. */
-    public readonly memory?: MemoryStore,
-  ) {}
+  constructor(public config: RlmConfig) {}
 
   setSessionGates(getGates: () => SubcallGates): void {
     this.sessionGates = getGates;
@@ -129,7 +124,6 @@ export class RlmController {
       signal: args.signal,
       emitter: args.emitter,
       limits: limitsFromConfig(this.config),
-      memory: this.memory,
       gates: this.sessionGates?.(),
     });
   }

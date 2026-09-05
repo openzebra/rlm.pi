@@ -29,7 +29,6 @@ import { SandboxManager } from "../sandbox/sandbox-manager.ts";
 import type { SubcallOpts } from "../sandbox/sandbox.ts";
 import { createSubcallHandlers, type Invocation } from "../bridge/handlers/index.ts";
 import { TaskLedger } from "../core/ledger.ts";
-import type { MemoryStore } from "../core/memory.ts";
 import { BackgroundTasks } from "./background-tasks.ts";
 import type { ReplResult } from "../sandbox/protocol.ts";
 import { RlmEmitter } from "./rlm-events.ts";
@@ -121,8 +120,6 @@ export interface ReplToolDeps {
   readonly background: BackgroundTasks;
   /** Session tree panel index; omitted → runs don't appear in the widget. */
   readonly runRegistry?: RunRegistry;
-  /** v5 durable memory (session-wide `.rlm` store); omitted → memory off for this tool. */
-  readonly memory?: MemoryStore;
   readonly signal?: AbortSignal;
   readonly onUsage?: (usage: Usage, role: "sub") => void;
   readonly ensureContext?: () => Promise<void>;
@@ -159,7 +156,6 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     registry,
     config: getConfig(),
     signal,
-    memory: deps.memory,
     gates: currentGates(),
     // Same emitter the parent subcall node lives on — see SubcallHandlerDeps.runChild.
     emitter: inv.emitter,
@@ -189,7 +185,6 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     // fire: execute() awaits ensureContext() before getOrCreate().
     getChildContext: () => sandboxManager.contextPayload ?? undefined,
     ledger: sessionLedger,
-    memory: deps.memory,
     trackDetached: (task) => background.track(task),
   });
 
@@ -322,7 +317,6 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           ...subcallHandlers,
           ...(contextBundle?.handlers ?? {}),
           ledgerClaims: () => Promise.resolve(sessionLedger.listClaims()),
-          memoryOp: (op, args) => Promise.resolve(deps.memory?.serviceOp(op, args) ?? "memory off"),
         });
 
         // Detect queue contention AFTER sandbox init (initPromise settled, isExecuting now accurate)

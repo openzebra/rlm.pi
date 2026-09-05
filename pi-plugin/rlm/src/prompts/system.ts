@@ -88,7 +88,7 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
       parts.push(
         "",
         "**REPL API (ONLY these):** llm_query / llm_batch / llm_query_chunked / map_files /",
-        "llm_map_reduce / rlm_query / rlm_batch / spawn / await_task / list_tasks / memory.* /",
+        "llm_map_reduce / rlm_query / rlm_batch / spawn / await_task / list_tasks /",
         "list_claims. There is no search/grep_context/outline here — your task arrived WITH its",
         "world in `context`; slice it into llm prompts. rlm_query only for a disjoint path set.",
       );
