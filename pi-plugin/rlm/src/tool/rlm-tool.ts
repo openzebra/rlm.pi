@@ -26,6 +26,7 @@ import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 const RlmToolParams = Object.freeze(Type.Object({
   prompt: Type.String({ description: "The task or question for the RLM engine" }),
   context: Type.Optional(Type.String({ description: "Optional context. If omitted, the working directory is packed into context." })),
+  narrative: Type.Optional(Type.Boolean({ description: "History-as-deliverable run (audit/provenance/debug narrative): RunState stays off — the archive is the product." })),
 }));
 
 // ── Rendering helpers ──
@@ -98,6 +99,7 @@ export function createRlmTool(controller: RlmController, runRegistry?: RunRegist
         const input: StartInput = {
           rootPrompt: params.prompt,
           context: params.context ?? undefined,
+          narrative: params.narrative,
         };
         const { done } = controller.start(ctx, input, emitter);
         const result = await done;

@@ -134,6 +134,7 @@ async function childRun(
     ledger.markRunning(claimKey);
   }
 
+  const skillBlock = deps.getSkillBlock?.(prompt);
   const input: RlmInput = {
     rootPrompt,
     context: child.context,
@@ -141,6 +142,9 @@ async function childRun(
     parentNodeId: subId,
     remainingTimeoutMs: remTimeout,
     ledger, // DRY #6: the one seam — children share the parent's blackboard
+    // SKILL.state Ξ (Workstream C, DRY #6): the parent's block rides along — the only
+    // child-RlmInput construction site, so inheritance cannot grow a second path.
+    ...(skillBlock === undefined ? {} : { skillBlock }),
   };
 
   try {

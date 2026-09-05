@@ -71,7 +71,7 @@ export interface WorkerResponse {
   readonly index?: number;
 }
 
-/** Canonical interrupt kinds (api_v5 + v5 ledger). */
+/** Canonical interrupt kinds (api_v5 + v5 ledger + SKILL.state). */
 type InterruptKind =
   | "llm_query"
   | "rlm_query"
@@ -80,7 +80,8 @@ type InterruptKind =
   | "await"
   | "finish"
   | "add_context"
-  | "ledger_claims";
+  | "ledger_claims"
+  | "skill_search";
 
 interface InterruptBase {
   readonly rid: string;
@@ -127,6 +128,13 @@ interface LedgerClaimsInterrupt extends InterruptBase {
   readonly type: "ledger_claims";
 }
 
+/** SKILL.state (Workstream E): BM25 recall over the session SkillState store. */
+interface SkillSearchInterrupt extends InterruptBase {
+  readonly type: "skill_search";
+  readonly query?: string;
+  readonly k?: number;
+}
+
 /** A mid-exec sub-LLM/tool request from the worker. */
 export type WorkerInterrupt =
   | PromptInterrupt
@@ -134,7 +142,8 @@ export type WorkerInterrupt =
   | AwaitInterrupt
   | FinishInterrupt
   | AddContextInterrupt
-  | LedgerClaimsInterrupt;
+  | LedgerClaimsInterrupt
+  | SkillSearchInterrupt;
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
 
@@ -148,6 +157,7 @@ const INTERRUPT_KINDS = Object.freeze(
     "finish",
     "add_context",
     "ledger_claims",
+    "skill_search",
   ]),
 );
 

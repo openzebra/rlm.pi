@@ -49,6 +49,23 @@ const DELEGATION_SURFACE_LINES: readonly string[] = Object.freeze([
   "  never re-ask the parent for retrieval.",
 ]);
 
+/** Workstream E: the one new sandbox function (prime-agent rule — surface grows by one). */
+const SKILL_SEARCH_GLOSSARY_LINES: readonly string[] = Object.freeze([
+  "- `skill_search(query, k=8) -> [{id, text, tags, score}]`: BM25 over distilled project facts",
+  "  from PRIOR sessions (SkillState). Free: no sub-LLM call. Use when a config/gotcha/symbol",
+  "  smells like something already learned — do not re-discover it.",
+]);
+
+/** Single source of wording for the injected SkillState block (headless + native, Workstream C).
+ *  Takes the dynamic body as an argument — the glossary itself stays static-only. */
+export function skillStateLines(noteCount: number, body: string): string {
+  return [
+    `[Project facts — SkillState, ${noteCount} note${noteCount === 1 ? "" : "s"}, distilled from prior sessions]`,
+    body,
+    "Recall more anytime inside repl: `skill_search(query, k=8)` → [{id, text, tags, score}].",
+  ].join("\n");
+}
+
 /** One-line delegation helpers — orchestrating must be cheaper than solving. */
 const DELEGATION_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "- `map_files(files, prompt) -> Task`: always spawn. `await_task(t)` → dict[path, answer].",
@@ -231,9 +248,6 @@ export function envTips(delegation = false): string {
   ].join("\n");
 }
 
-/** Root-surface doctrine (back-compat alias of `envTips(false)`). */
-export const ENV_TIPS = envTips(false);
-
 /** Native-mode variant of the doctrine — same rules, sized for the native prompt budget. */
 export const ENV_TIPS_CONDENSED = [
   "### Decomposition doctrine",
@@ -314,6 +328,7 @@ export function replGlossary(
     "  await_task → ordered list[str]. NEVER pass bare file paths as if the worker can open them.",
     ...CHUNKED_GLOSSARY_LINES,
     ...SPAWN_GLOSSARY_LINES,
+    ...SKILL_SEARCH_GLOSSARY_LINES,
     ...(delegation ? SPAWN_EXAMPLE_DELEGATION : SPAWN_EXAMPLE_RETRIEVAL),
     ...DELEGATION_GLOSSARY_LINES,
   );

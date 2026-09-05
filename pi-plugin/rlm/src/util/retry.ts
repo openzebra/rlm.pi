@@ -95,8 +95,10 @@ export interface RetryPolicy {
 }
 
 export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze({
-  maxAttempts: 3,
-  rateLimitMaxAttempts: 8,
+  // DOCTRINE: 15 attempts on the SAME model, then the call fails loudly. No cross-model
+  // or cross-provider fallback exists anywhere in the runtime — by design.
+  maxAttempts: 15,
+  rateLimitMaxAttempts: 15,
   baseDelayMs: 500,
   maxDelayMs: 15_000,
   throttleBaseMs: 2_000,

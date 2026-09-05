@@ -16,6 +16,7 @@ import { resolveSource } from "../context/resolve.ts";
 import { RlmEmitter } from "../tool/rlm-events.ts";
 import { formatError } from "../util/errors.ts";
 import { cheapestModel } from "./llm-model.ts";
+import type { SkillStore } from "../config/skillstate.ts";
 import type { RunRlm } from "../core/types.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
 
@@ -27,6 +28,8 @@ interface RunHandle {
 export interface StartInput {
   readonly rootPrompt: string;
   readonly context: unknown;
+  /** History-as-deliverable opt-out (§12.1): RunState stays off — the archive is the product. */
+  readonly narrative?: boolean;
 }
 
 export class RlmController {
@@ -37,6 +40,9 @@ export class RlmController {
   /** Pinned rlm root/worker model — when unset, child engines follow pi's session model. */
   rlmModel: Model<Api> | undefined;
   savedRlmRef?: string;
+  /** SKILL.state (Workstream B): the session store — hydrated by index.ts at session_start.
+   *  Undefined ⇒ no Ξ composition, no harvest: the headless path runs exactly as built. */
+  skillStore: SkillStore | undefined;
   /** Set by applyRlmSelection when the user explicitly picks "(follow session model)". */
   explicitClearRlmPin = false;
   private active: AbortController | null = null;
@@ -110,6 +116,14 @@ export class RlmController {
     return createEngine(deps);
   }
 
+  /** Ξ (Workstream C): BM25 slice of the session SkillState for a root prompt; undefined when
+   *  the store is absent/disabled or nothing is relevant. */
+  private skillBlockFor(query: string): string | undefined {
+    if (this.skillStore === undefined || !this.config.enableSkillState) return undefined;
+    const block = this.skillStore.blockFor(query, this.config.skillStateMaxTokens);
+    return block === "" ? undefined : block;
+  }
+
   /** The ONE engine construction path for this controller (DRY #6 — a second path that
    *  forgets to grow is exactly how issue #4 and audit C1 happened). Protected so tests can
    *  subclass and assert the wiring without touching the network. */
@@ -128,6 +142,7 @@ export class RlmController {
       emitter: args.emitter,
       limits: limitsFromConfig(this.config),
       gates: this.sessionGates?.(),
+      skillStore: this.skillStore,
     });
   }
 
@@ -156,7 +171,14 @@ export class RlmController {
         signal: abortController.signal,
         emitter: emitter ?? new RlmEmitter(),
       });
-      return await engine({ rootPrompt: input.rootPrompt, context: contextValue, depth: 0 });
+      const skillBlock = this.skillBlockFor(input.rootPrompt);
+      return await engine({
+        rootPrompt: input.rootPrompt,
+        context: contextValue,
+        depth: 0,
+        ...(skillBlock === undefined ? {} : { skillBlock }), // Ξ (Workstream C)
+        ...(input.narrative === undefined ? {} : { narrative: input.narrative }),
+      });
     })().finally(() => {
       if (this.active === abortController) this.active = null;
     });

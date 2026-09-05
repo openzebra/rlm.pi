@@ -118,6 +118,13 @@ export interface SubcallHandlerDeps {
   readonly trackDetached?: <T>(run: () => Promise<T>) => Promise<T>;
   /** v5 TaskLedger blackboard shared across the whole run tree (claim/coalesce/echo/demote). */
   readonly ledger?: TaskLedger;
+  /** SKILL.state (Workstream D): ground a leaf prompt with verified facts. Applied ONCE in
+   *  complete1 (DRY #1) so every leaf path inherits it; returns the prompt unchanged when
+   *  nothing clears the score threshold — below it, byte-identical. */
+  readonly groundLeaf?: (prompt: string) => string;
+  /** SKILL.state (Workstream C): the parent run's Ξ block source, for childRun to copy
+   *  into the child RlmInput (DRY #6 — one construction site). */
+  readonly getSkillBlock?: (task: string) => string | undefined;
 }
 
 // ---------------------------------------------------------------------------

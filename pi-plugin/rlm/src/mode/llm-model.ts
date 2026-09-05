@@ -48,6 +48,9 @@ export function cheapestModel(registry: ModelRegistry): Model<Api> | undefined {
   for (let i = 0; i < models.length; i++) {
     const model = models[i];
     if (model === undefined) continue;
+    // Sentinel negative cost (openrouter/auto reports −1e6) = unpriceable router. priceOf()
+    // would crown it "cheapest" (−4M) — skip; fail closed on unknown prices.
+    if ((model.cost?.input ?? 0) < 0 || (model.cost?.output ?? 0) < 0) continue;
     if (best === undefined || compareLlm(model, best) < 0) best = model;
   }
   return best;

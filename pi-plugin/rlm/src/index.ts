@@ -28,6 +28,7 @@ import { formatContextListing } from "./context/listing.ts";
 import { extractEditPaths, readDiskFile } from "./context/refresh.ts";
 import type { AddContextHandlerBundle } from "./bridge/add-context.ts";
 import { buildNativeSystemPrompt } from "./prompts/native.ts";
+import { SkillStore } from "./config/skillstate.ts";
 import { capToolResultText } from "./mode/native-guards.ts";
 import {
   isSubagentChildBypass,
@@ -100,6 +101,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     hideWhenEmpty: true,
   });
   let treePanelInstalled = false;
+  /** SKILL.state (Workstream B): session store — hydrated at session_start, flushed at shutdown. */
+  let skillStore: SkillStore | undefined;
   // A detached child works in its OWN sandbox, so this one sees no frames and its request
   // watchdog would fire mid-await and SIGKILL a healthy worker, taking the REPL namespace
   // with it. Keep it alive while detached work is genuinely in flight.
@@ -139,6 +142,14 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       })
       .finally(() => { seedPromise = undefined; });
     await seedPromise;
+  };
+
+  /** Ξ (Workstream C): BM25 slice of the SkillState store for a query; undefined when off. */
+  const composeSkillBlock = (query: string): string | undefined => {
+    const cfg = controller.config;
+    if (!cfg.enableSkillState || skillStore === undefined) return undefined;
+    const block = skillStore.blockFor(query, cfg.skillStateMaxTokens);
+    return block === "" ? undefined : block;
   };
 
   // ── Message renderers ──
@@ -192,11 +203,17 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
     controller.savedLlmRef = persisted.llm ?? undefined;
     controller.savedRlmRef = persisted.rlm ?? undefined;
 
+    // SKILL.state (Workstream B): hydrate the cross-session note store (fail-soft).
+    skillStore = controller.config.enableSkillState
+      ? await SkillStore.hydrate(controller.config.skillStateNotesPerProject)
+      : undefined;
+    controller.skillStore = skillStore;
+
     // An explicit --rlm flag wins over the persisted setting for this session.
     const flag = pi.getFlag("rlm");
     if (typeof flag === "boolean") controller.setConfig(Object.freeze({ ...controller.config, enabled: flag }));
 
-    // Reload the catalog before the worker-model pick below reads it. Newer pi builds make
+    // Reload the catalog before the worker pick below reads it. Newer pi builds make
     // `getAvailable()` an async-populated snapshot that starts empty, and picking from an empty
     // catalog silently falls back to the root model. Called with no arguments and awaited so it
     // is valid whether `refresh` returns void (current) or a promise (newer); fail-soft, because
@@ -293,6 +310,8 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
           resolveGates: resolveSessionGates,
           background,
           runRegistry,
+          skillStore,
+          getSkillBlock: composeSkillBlock,
           registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
           registerContextBundle: (bundle) => {
             contextBundleRef = bundle;
@@ -341,7 +360,11 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
   // ── System prompt: native RLM mode addendum (only when the trade holds) ──
   pi.on("before_agent_start", async (event) => {
     if (!nativeTradeHolds()) return;
-    return { systemPrompt: event.systemPrompt + "\n\n" + buildNativeSystemPrompt() };
+    // Ξ (Workstream C): the session skill block is PER-SESSION text — concatenated here, so
+    // NATIVE_PROMPT_STATIC (the module-load snapshot) and its budget math stay untouched.
+    const xi = composeSkillBlock(event.systemPrompt.slice(0, 2_000));
+    const xiPart = xi === undefined ? "" : `${xi}\n\n`;
+    return { systemPrompt: event.systemPrompt + "\n\n" + xiPart + buildNativeSystemPrompt() };
   });
 
   // ── Context injection: listing of whatever is currently loaded ──
@@ -423,6 +446,7 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
 
   // ── Session shutdown: cleanup ──
   pi.on("session_shutdown", async () => {
+    await skillStore?.flush(); // SKILL.state (Workstream B): persist distilled notes
     controller.abort();
     clearInterval(watchdogHeartbeat);
     background.dispose();
@@ -432,6 +456,7 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
     contextBundleRef = undefined;
     listingPayloadRef = undefined;
     listingInjected = false;
+    skillStore = undefined;
     sandboxManager.contextPayload = [];
   });
 }

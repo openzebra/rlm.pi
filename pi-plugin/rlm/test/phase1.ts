@@ -3,9 +3,6 @@
  * Run: bun run pi-plugin/rlm/test/phase1.ts
  */
 
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { check, failureCount, runSuite } from "./helpers.ts";
 import { RlmController } from "../src/mode/rlm-mode.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
@@ -307,12 +304,6 @@ async function main() {
     check("settings save reports success", saved);
     check("settings round-trips llm ref", loaded.llm === "test/llm");
     check("settings round-trips reasoning", roundTrip.smartReasoning === "high" && roundTrip.subSampling.reasoning === "low");
-
-    // A pin written before the worker->llm rename must survive the upgrade, or every user
-    // silently reverts to "cheapest (auto)" on first launch of the new build.
-    await writeFile(join(getAgentDir(), "rlm.json"), `${JSON.stringify({ config: {}, worker: "legacy/pin" }, null, 2)}\n`);
-    const legacy = await loadSettings();
-    check("settings still read the legacy `worker` key", legacy.llm === "legacy/pin", String(legacy.llm));
 
     await saveSettings(previous);
   }

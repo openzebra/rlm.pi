@@ -22,6 +22,9 @@ interface PromptMeta {
   readonly contextChars: number;
   readonly contextStats?: ContextSizeStats;
   readonly rootPrompt?: string;
+  /** SKILL.state Ξ (Workstream C): verified project facts from prior sessions. Per-run
+   *  argument only — never baked into any module-load snapshot. */
+  readonly skillBlock?: string;
 }
 
 interface SystemPromptOptions {
@@ -110,11 +113,16 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
   );
   if (opts.orchestrator ?? true) {
     // Two counterweights, both required (paper App. B): the addendum bounds OVER-recursion
-    // (batching/cost), ENV_TIPS bounds UNDER-recursion (solving it yourself).
+    // (batching/cost), envTips() bounds UNDER-recursion (solving it yourself).
     parts.push("", orchestratorAddendum(maxPromptChars, opts.delegation ?? false), "", envTips(opts.delegation ?? false));
   }
   if (kind === "files") {
     parts.push("", LARGE_FILE_RULE_LINES.join("\n"));
+  }
+  // Ξ (Workstream C): lands BEFORE the metadata line so the task header stays last — the model
+  // reads it freshest. Verified-fact grounding precedes the fresh task statement.
+  if (meta.skillBlock !== undefined && meta.skillBlock !== "") {
+    parts.push("", meta.skillBlock);
   }
   parts.push("", buildMetadataLine(meta, maxPromptChars));
   return parts.join("\n");

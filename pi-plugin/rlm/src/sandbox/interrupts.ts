@@ -53,6 +53,8 @@ export interface SubLlmHandlers {
   addContext(source: string, depth: number): Promise<AddContextResult>;
   /** v5: the `[ledger]` claims table for the sandbox's `list_claims()` REPL call. */
   ledgerClaims(): Promise<string>;
+  /** SKILL.state (Workstream E): BM25 over the session SkillState store; JSON hits reply. */
+  skillSearch(query: string, k: number, depth: number): Promise<unknown>;
 }
 
 function toStringArray(value: unknown): readonly string[] | undefined {
@@ -83,6 +85,7 @@ export const REJECT: SubLlmHandlers = Object.freeze({
     throw new Error("add_context not configured");
   },
   ledgerClaims: async () => UNCONFIGURED,
+  skillSearch: async () => UNCONFIGURED,
 });
 
 export interface ReplyBody {
@@ -343,6 +346,13 @@ export async function serviceInterrupt(
       case "ledger_claims": {
         const table = await h.ledgerClaims();
         reply(msg.rid, { response: table });
+        return;
+      }
+      case "skill_search": {
+        // SKILL.state (Workstream E): the store serializes its own hits; plain strings
+        // (tests/stubs) pass through. Errors are replied, never thrown.
+        const raw = await h.skillSearch(msg.query ?? "", msg.k ?? 8, d);
+        reply(msg.rid, { response: typeof raw === "string" ? raw : JSON.stringify(raw) });
         return;
       }
       default: {

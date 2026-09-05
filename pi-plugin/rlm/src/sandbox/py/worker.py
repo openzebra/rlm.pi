@@ -139,6 +139,9 @@ class Worker(WorkerScaffold):
         ns["list_tasks"] = self._list_tasks
         ns["map_files"] = self._map_files
         ns["llm_map_reduce"] = self._llm_map_reduce
+        # SKILL.state recall (Workstream E): distilled facts are NOT repo retrieval — they are
+        # project knowledge, so delegation children keep them too (unconditional binding).
+        ns["skill_search"] = self._skill_search
         if self.surface != "child":
             ns["search"] = self._search
             ns["grep_context"] = self._grep_context

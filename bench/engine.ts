@@ -169,6 +169,11 @@ export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts
     // unit tests (test/budget.ts); the bench measures capability, so it runs without it.
     // Runs stay bounded by maxIterations + maxErrors.
     enableTokenBudget: false,
+    // A/B toggles: RLM_BENCH_NO_RUNSTATE=1 / RLM_BENCH_NO_SKILLSTATE=1 revert the
+    // corresponding integration (Σ-state compaction / persistent skill grounding) to the
+    // pre-integration baseline. Defaults follow DEFAULT_CONFIG (both ON).
+    enableRunState: process.env.RLM_BENCH_NO_RUNSTATE !== "1",
+    enableSkillState: process.env.RLM_BENCH_NO_SKILLSTATE !== "1",
     // Sampling comes from the ONE bench assembly (benchSampling) — the parity test drives it
     // through the real engine so the two wirings cannot drift.
     rootSampling: benchSampling(opts).root,

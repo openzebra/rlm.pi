@@ -21,7 +21,7 @@ pi-plugin/rlm/src/
 ├── context/       native walker + anydoc document conversion + add_context
 ├── ui/            Config panel, model picker, status line, theme
 ├── text/          REPL block parsing, token estimation, text preview
-├── mode/          RlmController, worker-model ranking, native-mode guards
+├── mode/          RlmController, native-mode guards
 ├── util/          Result type, error formatting, concurrency pool
 ├── commands/      /rlm, /rlm-stop, /rlm-config
 └── index.ts       Extension entry point
@@ -115,7 +115,6 @@ field to `SubcallHandlerDeps` instead.
 | Pre-allocated arrays | `new Array<R>(items.length)` before loops, never `.push()` in a loop |
 | JSONL protocol | `sandbox/protocol.ts` — newline-delimited JSON, parent→worker requests, worker→parent interrupts |
 | Async sub-calls | `py/worker.py` posts a request and parks the reply by rid (`_post` / `park_reply` / `_drain_until`); `spawn()` returns a `Task`, `await_task` / `await_task` collect it, possibly in a later exec |
-| Worker-model ranking | `mode/worker-model.ts` `compareWorker` — free first, then widest context window, then provider/id for determinism |
 
 ## Adding a New Bridge Handler
 
@@ -127,6 +126,49 @@ If a new sandbox function is needed (e.g., `new_tool()` from Python):
 5. Register in `sandbox/interrupts.ts`: the `SubLlmHandlers` interface, the `REJECT` default,
    and the `serviceInterrupt` dispatch
 6. Register in `py/worker.py` `RESERVED` + `_restore_scaffold`
+
+## SKILL.state Integration Conventions
+
+The SKILL.state integration (full plan: `/tmp/SKILL_STATE_INTEGRATION_PLAN.md`) replaces
+append-only history with execution state `Σ_t` and adds a persistent SkillState store. All code
+in these workstreams obeys the standards above PLUS:
+
+- **Notation in comments**: use the paper's symbols — `P` (immutable spec/system prompt),
+  `Σ_t` (execution state), `ΔΣ_t` (model patch), `⊕` (deep-merge, `null` = delete),
+  `V(ΔΣ_t, Σ_t)` (deterministic validator), `A_t = (P, Σ_t, O_t)` (per-step inputs), `Ξ`
+  (injected skill block), `κ_Σ` (state byte cap). Comments referencing SKILL.state cite
+  section numbers (§3.2, §5.7, §7).
+- **One merge implementation**: `util/state-merge.ts` `deepMergeWithNullDeletion` is the only
+  merge for both RunState (Σ) and SkillState notes. Never inline a second merge.
+- **State is validated runtime-side, never model-side**: patches arrive as `unknown`, narrow
+  via `is*` type guards, return `Result<RunState, PatchError>` from `util/errors.ts`.
+  Implicit key drops are errors (`implicit-drop`), not silent keeps — small models overwrite
+  keys prematurely (paper §5.7: 68% of failures).
+- **Degrade, never crash**: RunStateTracker is a discriminated union
+  (`active | degraded`); on retry-cap exhaustion the engine falls back to as-built
+  append-only + `compactHistory` behavior. No throw paths in the turn loop.
+- **Persistence mirrors `config/settings.ts`**: new disk artifacts use
+  `join(getAgentDir(), name)` path helpers, fail-soft readers (`try/catch` → frozen empty
+  value), fail-soft boolean writers (`mkdir` → `writeFile` → `true | false`). No second I/O
+  style. Three-state pins: `undefined` = merge-from-disk, `null` = explicit clear.
+- **No session state at module load**: `NATIVE_PROMPT_STATIC` / `NATIVE_PROMPT_BUDGET` are
+  frozen import-time snapshots — never bake per-session text into them or any module-level
+  const. Dynamic text enters via function arguments (`PromptMeta.skillBlock?`,
+  `before_agent_start` concat) only.
+- **One leaf-completion seam**: grounding attaches inside `completion.ts:complete1` via
+  `SubcallHandlerDeps.groundLeaf?` — never per-handler prompt surgery (DRY #1).
+- **One child-construction seam**: `childRun` copies `skillBlock` into child `RlmInput` —
+  no second child-input path (DRY #6).
+- **Compact serialization**: state JSON uses `JSON.stringify(Σ)` (no pretty-print, paper
+  A.4); caps (`RUN_STATE_LIMITS`) are `Object.freeze`d and enforced before every persist —
+  state size must stay flat across iterations.
+- **BM25 duality is documented, not accidental**: `sandbox/py/retrieval.py:_Bm25Index`
+  (sandbox) and `util/bm25.ts` (host) implement the same scoring for two runtimes; keep their
+  constants identical.
+- **New sandbox functions**: follow "Adding a New Bridge Handler" (§ above) in full —
+  interrupt type, `SubLlmHandlers` + `REJECT` + dispatch, worker method + `RESERVED` in
+  `guards.py`/`worker.py`, glossary line. Model-visible surface grows only when the profit is
+  proven.
 
 ## Testing
 - Tests live in `pi-plugin/rlm/test/`

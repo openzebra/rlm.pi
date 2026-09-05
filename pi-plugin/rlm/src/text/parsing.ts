@@ -15,6 +15,8 @@ const FENCE = /(`{3,})[ \t]*repl[ \t]*\r?\n([\s\S]*?)\1/g;
 const FALLBACK_FENCE = /(`{3,})[ \t]*([^`\r\n]*)[ \t]*\r?\n([\s\S]*?)\1/g;
 const PYTHON_TAG = /^py(thon)?$/i;
 
+import { errorMessage } from "../util/errors.ts";
+
 /** Shared fence scan: run `re` over `text`, keep bodies the selector accepts (same trimming). */
 function collectFences(text: string, re: RegExp, select: (m: RegExpExecArray) => string | null): string[] {
   const blocks: string[] = [];
@@ -38,6 +40,34 @@ export function findReplBlocks(text: string): string[] {
     const tag = m[2] ?? "";
     return tag === "" || PYTHON_TAG.test(tag) ? (m[3] ?? "") : null;
   });
+}
+
+/** One ```state fence: parsed JSON payload, or the parse error (error-as-observation). */
+export type StateFenceResult =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly error: string };
+
+const STATE_FENCE = /(`{3,})[ \t]*state[ \t]*\r?\n([\s\S]*?)\1/g;
+
+/**
+ * Workstream A: extract ```state fences (model-proposed ΔΣ_t) from a response, in document
+ * order. ```repl parsing is untouched — the two fences coexist in one response. Malformed
+ * JSON is surfaced as an error result for the retry loop, never thrown.
+ */
+export function findStatePatches(text: string): readonly StateFenceResult[] {
+  const out: StateFenceResult[] = [];
+  let m: RegExpExecArray | null;
+  STATE_FENCE.lastIndex = 0;
+  while ((m = STATE_FENCE.exec(text)) !== null) {
+    const body = (m[2] ?? "").trim();
+    if (body === "") continue;
+    try {
+      out.push({ ok: true, value: JSON.parse(body) as unknown });
+    } catch (err: unknown) {
+      out.push({ ok: false, error: errorMessage(err) });
+    }
+  }
+  return out;
 }
 
 /** Truncate REPL stdout for the model's context window (head + tail, with an elision note). */

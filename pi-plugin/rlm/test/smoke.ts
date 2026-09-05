@@ -31,6 +31,10 @@ const SUITES: readonly string[] = Object.freeze([
   "child-surface.ts",
   "phase-encoding.ts", "phase-retrieval.ts", "phase-llm-model.ts",
   "native-mode.ts", "native-smoke.ts", "subagent-bypass.ts",
+  // SKILL.state integration (Workstreams A–F)
+  "phase-rs-patch.ts", "phase-rs-engine.ts",
+  "phase-ss-store.ts", "phase-ss-prompt.ts",
+  "phase-leaf-ground.ts", "phase-skill-search.ts", "phase-rectify.ts",
 ]);
 
 async function assertEditSurfaceRemoved(): Promise<void> {

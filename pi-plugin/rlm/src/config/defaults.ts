@@ -20,11 +20,12 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   // of the context it inherited, where a leaf is one HTTP request. Worst case is
   // (maxDepth - 1) × this many concurrent child engines. Default 4.
   maxConcurrentChildren: 4,
-  // v5.1 rate-limit resilience (util/retry.ts): 3 total attempts, 500ms→15s backoff,
-  // 2s→60s adaptive per-provider cooldown. All overridable in rlm.json.
-  retryMaxAttempts: 3,
-  // 429s park on the cooldown instead of dying — up to 8 windows (2s→4s→…≤60s ≈ 4 min).
-  rateLimitMaxAttempts: 8,
+  // v5.1 rate-limit resilience (util/retry.ts): 15 total attempts on the SAME model —
+  // 500ms→15s backoff, 2s→60s adaptive per-provider cooldown. DOCTRINE: NO fallback —
+  // when the attempts are exhausted the call fails loudly; model/provider never switch.
+  retryMaxAttempts: 15,
+  // 429s park on the cooldown instead of dying — up to 15 windows (2s→4s→…≤60s).
+  rateLimitMaxAttempts: 15,
   retryBaseDelayMs: 500,
   retryMaxDelayMs: 15_000,
   throttleBaseMs: 2_000,
@@ -51,9 +52,16 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   // v5 TaskLedger blackboard
   enableLedger: true,
   rlmBudget: 8,
-  // v5 role separation: children delegate (llm + ledger); "legacy" = full child surface.
-  childSurface: "delegation",
   // Verification-discipline nudge — deliberately OFF (plan guardrail): when on, an early
   // bare-number finalize gets one coached redo instead of being accepted. Opt-in via rlm.json.
   enableVerificationNudge: false,
+  // SKILL.state integration: Σ_t execution state + cross-session distilled knowledge.
+  enableRunState: true,
+  runStateRetryMax: 2,
+  enableSkillState: true,
+  enableSkillStateDistill: false, // opt-in: one leaf call to phrase A-Mem-style notes
+  skillStateMaxTokens: 1_200,
+  skillStateLeafTokens: 200,
+  skillStateMinScore: 4.0,
+  skillStateNotesPerProject: 128,
 });

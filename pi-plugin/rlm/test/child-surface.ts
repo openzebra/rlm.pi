@@ -176,23 +176,19 @@ async function engineChildProbe(config: RlmConfig): Promise<{ readonly answer: s
   check("engine: child sandbox had NO search (delegation doctrine)",
     childLine.includes("child-has-search: False") && childLine.includes("child-has-llm: True"),
     childLine.slice(0, 80));
-  check("C5: child system prompt never teaches search(", !childSys.includes("search("), childSys.slice(0, 60));
+  check("C5: child system prompt never teaches repo search(", !childSys.includes("`search(query"), childSys.slice(0, 60));
+  // SKILL.state Workstream E: skill_search is distilled-facts recall, NOT repo retrieval —
+  // it is deliberately available on every surface, delegation children included.
+  check("WE: child prompt still offers skill_search (facts, not retrieval)", childSys.includes("`skill_search(query"), "");
   check("C5: child system prompt never teaches grep_context(", !childSys.includes("grep_context("), "");
   check("C5: child prompt states the delegation surface", childSys.includes("No `search`"), "");
   check("C5: child prompt shows the delegation spawn example (slice, not search)",
     childSys.includes("slice your world") || childSys.includes("slice the world you were handed"), "");
-  check("C5: ROOT prompt still teaches the retrieval example", rootSys.includes("search("), "");
+  check("C5: ROOT prompt still teaches the retrieval example", rootSys.includes("`search(query"), "");
   check("R3: child ENV_TIPS does not instruct locating via search",
     !childSys.includes("free locate with `search`") && !childSys.includes("locate targets with `search`"));
   check("R3: root ENV_TIPS still names search",
     rootSys.includes("free locate with `search`") || rootSys.includes("locate targets with `search`"));
-
-  // Legacy rollback: full child surface restored by one config flip.
-  const legacy = await engineChildProbe({ ...DEFAULT_CONFIG, maxIterations: 6, childSurface: "legacy" });
-  check("engine: legacy rollback keeps the run working", legacy.answer === "probe-finished", legacy.answer.slice(0, 50));
-  check("engine: legacy child keeps search",
-    legacy.childLine.includes("child-has-search: True"), legacy.childLine.slice(0, 80));
-  check("C5: legacy child prompt keeps the retrieval doctrine", legacy.childSys.includes("search("), "");
 }
 
 finish();

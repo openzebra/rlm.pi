@@ -29,12 +29,32 @@ import { previewStdout, previewText } from "../text/preview.ts";
 import { findReplBlocks } from "../text/parsing.ts";
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
-import { compactHistory, elideOldToolPayloads, shouldCompact } from "./compaction.ts";
+import { compactHistory, elideOldToolPayloads, rebaseWithState, shouldCompact } from "./compaction.ts";
+import { applyStatePatches, freshRunState, runStateTurnBlock, type RunStateMode } from "./run-state.ts";
+import { findStatePatches } from "../text/parsing.ts";
+import { complete1, completeDeps } from "../bridge/handlers/completion.ts";
+import type { SubcallHandlerDeps } from "../bridge/handlers/types.ts";
+import {
+  distillPromptFor,
+  groundLeafPrompt,
+  notesFromRunState,
+  parseDistilledNotes,
+  skillSearchHandler,
+  type SkillStore,
+} from "../config/skillstate.ts";
 import { retryPolicy } from "../util/retry.ts";
 import { appendUserMessage } from "./history.ts";
 import { runTurn } from "./iteration.ts";
 import { type Limits, LimitError, LimitGuard } from "./limits.ts";
-import { continuationPrompt, distillTrajectory, resolveBudget, WRAP_UP_BUDGET } from "./budget.ts";
+import {
+  continuationPrompt,
+  distillTrajectory,
+  rectify,
+  rectifyLabel,
+  resolveBudget,
+  stateHandoff,
+  WRAP_UP_BUDGET,
+} from "./budget.ts";
 import { ModelContextRegistry, modelsCachePath } from "./model-registry.ts";
 import type { RlmConfig, RlmInput, RlmResult, RunRlm, Sampling } from "./types.ts";
 import { createSubcallGates, type SubcallGates } from "../util/concurrency.ts";
@@ -63,6 +83,9 @@ export interface EngineDeps {
   readonly onUsage?: (usage: Usage, role: "root" | "sub") => void;
   /** Test-only: override model completion (scripted multi-turn responses). */
   readonly complete?: import("./iteration.ts").CompleteFn;
+  /** SKILL.state (Workstream B): session-scoped distilled-knowledge store. Omitted ⇒ no Ξ
+   *  harvest, no leaf grounding, no skill_search — zero behavior change. */
+  readonly skillStore?: SkillStore;
 }
 
 /** Build a `runRlm` bound to the given deps. The returned function is reused for recursion. */
@@ -79,6 +102,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
     }
 
     const model = deps.model;
+    const skillStore = deps.skillStore;
 
     // Create LimitGuard BEFORE the bridge so sub-LLM usage feeds into it.
     // Children inherit the parent's remaining timeout (propagated as remaining amount, not
@@ -134,11 +158,26 @@ export function createEngine(deps: EngineDeps): RunRlm {
     // childRun (RlmInput.ledger — the one construction seam, DRY #6).
     const runLedger = input.ledger ?? new TaskLedger();
     if (deps.config.enableLedger) runLedger.beginRun(input.rootPrompt);
+    // ── Workstream A: Σ_t — the structured execution state (paper §3). Degraded ⇒ the run
+    // behaves exactly as built. History-as-deliverable runs (narrative) keep their archive
+    // as the product — RunState never activates there (§12.1).
+    let runStateMode: RunStateMode =
+      deps.config.enableRunState === true && input.narrative !== true
+        ? { kind: "active", state: freshRunState(input.rootPrompt.slice(0, 200)), retries: 0 }
+        : { kind: "degraded", reason: input.narrative === true ? "narrative" : "disabled" };
 
-    const subcalls = createSubcallHandlers({
+    // Workstream F: a rectified continuation may shrink leaf admission for THIS run only —
+    // the choice rides in on input.rectification (deterministic, logged). DOCTRINE: the
+    // model/provider pair is never a rectification axis — a failing model retries on itself
+    // until the attempt budget is exhausted, then fails loudly. No silent fallback.
+    const leafLimit = input.rectification?.kind === "reduce-concurrency"
+      ? input.rectification.maxConcurrentSubcalls
+      : deps.config.maxConcurrentSubcalls;
+    const gates = deps.gates
+      ?? createSubcallGates(leafLimit, deps.config.maxConcurrentChildren);
+    const subcallDeps = {
       resolve: () => invocation,
-      gates: deps.gates
-        ?? createSubcallGates(deps.config.maxConcurrentSubcalls, deps.config.maxConcurrentChildren),
+      gates,
       registry: deps.registry,
       getLlmModel: () => deps.llmModel,
       getModel: () => model,
@@ -159,7 +198,36 @@ export function createEngine(deps: EngineDeps): RunRlm {
           if (detachedInFlight === 0) detachedIdle?.();
         }
       },
-    }, taskRegistry);
+      // SKILL.state: leaf grounding (Workstream D, DRY #1) + the parent Ξ for children (C, DRY #6).
+      groundLeaf:
+        skillStore === undefined || !deps.config.enableSkillState
+          ? undefined
+          : (prompt: string) => groundLeafPrompt(skillStore, deps.config, prompt),
+      getSkillBlock: () => input.skillBlock,
+    } satisfies SubcallHandlerDeps;
+    const subcalls = createSubcallHandlers(subcallDeps, taskRegistry);
+
+    // ── Workstream B write path: distill Σ into the session store at run end ──────────
+    // Deterministic harvest is free (Σ is already structured); the opt-in A-Mem phrasing is
+    // ONE cheap leaf call. Fail-soft: a distill failure must never damage a finished run.
+    const harvestSkillNotes = async (): Promise<void> => {
+      if (skillStore === undefined || !deps.config.enableSkillState) return;
+      if (runStateMode.kind !== "active") return;
+      skillStore.merge(notesFromRunState(runStateMode.state));
+      if (deps.config.enableSkillStateDistill !== true || deps.signal?.aborted === true) return;
+      try {
+        const raw = await complete1(
+          invocation,
+          distillPromptFor(runStateMode.state),
+          () => {},
+          completeDeps(subcallDeps),
+        );
+        const parsed = parseDistilledNotes(raw);
+        if (parsed.length > 0) skillStore.merge(parsed);
+      } catch {
+        // fail-soft by design
+      }
+    };
     /** Wait (bounded) for detached work before the sandbox goes away. */
     const settleDetached = async (): Promise<void> => {
       if (detachedInFlight === 0) return;
@@ -215,6 +283,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         contextChars: contextLength(input.context),
         contextStats: contextSizeStats(input.context),
         rootPrompt: input.rootPrompt || undefined,
+        skillBlock: input.skillBlock,
       };
       const system = buildRlmSystemPrompt(meta, {
         orchestrator: deps.config.orchestrator,
@@ -222,13 +291,13 @@ export function createEngine(deps: EngineDeps): RunRlm {
         maxPromptChars: deps.config.maxPromptChars,
         contextLoader: deps.config.contextLoader,
         child: input.depth > 0,
-        delegation: input.depth > 0 && deps.config.childSurface === "delegation",
+        delegation: input.depth > 0,
         depth: input.depth,
       });
 
       // v5 (audit M5): a delegation child does not grow the world — add_context stays root-only.
       const contextHandlers =
-        deps.config.contextLoader && (input.depth === 0 || deps.config.childSurface !== "delegation")
+        deps.config.contextLoader && input.depth === 0
         ? buildAddContextHandler({
             cwd: runCwd,
             emitter,
@@ -245,7 +314,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         : {};
 
       // v5 doctrine: delegation children keep the llm/ledger surface — never repo retrieval.
-      const surface = input.depth > 0 && deps.config.childSurface === "delegation" ? "child" : "root";
+      const surface = input.depth > 0 ? "child" : "root";
       sandbox = await PythonSandbox.spawn({
         depth: input.depth,
         surface,
@@ -260,6 +329,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
           ...subcalls,
           ...contextHandlers,
           ledgerClaims: () => Promise.resolve(runLedger.listClaims()),
+          // SKILL.state (Workstream E): the model-visible recall surface — one function.
+          skillSearch: skillSearchHandler(() => (deps.config.enableSkillState ? skillStore : undefined)),
         },
       });
 
@@ -296,7 +367,11 @@ export function createEngine(deps: EngineDeps): RunRlm {
             signal: deps.signal,
           };
           if (shouldCompact(history, compactionDeps)) {
-            history = await compactHistory(history, compactionDeps, ++compactions, (u) => limits.addUsage(u));
+            // Workstream A: with Σ active, rebase structurally — [P, Σ_t, window(O)] — and
+            // the summarizer call disappears entirely; degraded runs keep compactHistory.
+            history = runStateMode.kind === "active"
+              ? rebaseWithState(history, runStateMode.state, ++compactions)
+              : await compactHistory(history, compactionDeps, ++compactions, (u) => limits.addUsage(u));
           }
         }
 
@@ -322,6 +397,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
         const notes =
           [
             i === softNoteTurn ? WRAP_UP_BUDGET : undefined,
+            // Workstream A: from iteration 3 the run conditions on Σ (A_t = (P, Σ_t, O_t)) and
+            // the state fence is requested — exploratory cold-start stays as-built (§12.2).
+            runStateMode.kind === "active" && i >= 2 ? runStateTurnBlock(runStateMode.state) : undefined,
             ledgerBlock === "" ? undefined : ledgerBlock,
             nudgeNow ? RETRIEVAL_NUDGE : undefined,
             verificationNudgePending ? VERIFICATION_NUDGE : undefined,
@@ -388,6 +466,17 @@ export function createEngine(deps: EngineDeps): RunRlm {
         limits.observe(turnHadError(turn.results));
         history.push({ role: "assistant", content: turn.response });
         pendingReplOutputs = formatReplOutputs(turn.results, turn.skippedBlocks);
+        // ── Workstream A: apply ΔΣ_t AFTER the environment reply — Algorithm 1 ordering:
+        // state reflects intended effects; feedback arrives as the next O_t. Rejections roll
+        // back and lead the next observation (error-as-observation retry); retries exhausted
+        // ⇒ degrade to as-built for the rest of the run.
+        if (runStateMode.kind === "active") {
+          const applied = applyStatePatches(runStateMode, findStatePatches(turn.response), i + 1, deps.config);
+          runStateMode = applied.mode;
+          if (applied.observation !== undefined) {
+            pendingReplOutputs = `${applied.observation}\n\n${pendingReplOutputs}`;
+          }
+        }
 
         // ── v5 budget cascade ─────────────────────────────────────────────────────
         // Content control lives here; wall-clock timeouts stay hang backstops. Whole-tree
@@ -405,19 +494,37 @@ export function createEngine(deps: EngineDeps): RunRlm {
           }
           if (bstate === "hard") {
             if (budget.canContinue()) {
-              // Distill the trajectory and chain a fresh run with a fresh spend window —
-              // the v4 "finalize NOW" flaw fix: never abort mid-task, restructure-and-resume.
-              const handoff = distillTrajectory(history, input.rootPrompt, deps.config.budgetHandoffChars);
+              // Distill and chain a fresh run with a fresh spend window — the v4 "finalize
+              // NOW" flaw fix: never abort mid-task, restructure-and-resume. Workstream A:
+              // with Σ active the handoff IS the state (compactJSON — lossless where it
+              // matters); the prose walk stays only for degraded runs.
+              const handoff = runStateMode.kind === "active"
+                ? stateHandoff(runStateMode.state, input.rootPrompt, deps.config.budgetHandoffChars)
+                : distillTrajectory(history, input.rootPrompt, deps.config.budgetHandoffChars);
               const cont = budget.nextContinuation();
+              // Workstream F (MAS2 Eq. 5): one deterministic local fix for the continuation.
+              const fix = rectify({
+                state: runStateMode.kind === "active" ? runStateMode.state : undefined,
+                config: deps.config,
+              });
               if (selfReportId) {
-                emitter.emitSubcallUpdated({ id: selfReportId, detail: `budget hard → continuation ${cont.continuations}` });
+                emitter.emitSubcallUpdated({
+                  id: selfReportId,
+                  detail:
+                    `budget hard → continuation ${cont.continuations}` +
+                    (fix.kind === "none" ? "" : ` · rectify: ${rectifyLabel(fix)}`),
+                });
               }
               const inner = await run({
                 ...input,
-                rootPrompt: continuationPrompt(cont.continuations, handoff),
+                rootPrompt: continuationPrompt(cont.continuations, handoff)
+                  + (fix.kind === "narrow-paths"
+                    ? `\n\n[rectify] narrow child spawns: rlm_query(task, paths=${JSON.stringify(fix.paths)})`
+                    : ""),
                 context: liveContext, // H9: sources added mid-run reach the leaf
                 budget: cont,
                 remainingTimeoutMs: limits.remainingTimeoutMs(),
+                ...(fix.kind === "none" ? {} : { rectification: fix }),
               });
               // H9: report the CHAIN's spend, not just the leaf's fresh guard.
               const u = limits.usage();
@@ -457,6 +564,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
       nodeStatus = "error";
       throw err;
     } finally {
+      // Workstream B Hook 1: Σ → SkillState notes at run end (all return paths; never throws).
+      if (skillStore !== undefined && deps.config.enableSkillState) await harvestSkillNotes();
       if (deps.config.enableLedger) runLedger.endRun();
       if (selfReportId) {
         emitter.emitSubcallUpdated({

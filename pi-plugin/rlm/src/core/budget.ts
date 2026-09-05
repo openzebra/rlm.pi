@@ -14,6 +14,8 @@
 
 import type { ChatMsg } from "../bridge/model.ts";
 import type { RlmConfig } from "./types.ts";
+import type { RunState } from "./run-state.ts";
+import { compactJSON } from "./run-state.ts";
 
 interface TokenBudgetOptions {
   readonly softFrac?: number;
@@ -201,4 +203,85 @@ export function distillTrajectory(
 /** The full continuation prompt: `[continuation n]` header + distilled handoff. */
 export function continuationPrompt(n: number, handoff: string): string {
   return `[continuation ${n}]\n${handoff}`;
+}
+
+// ── Workstream A: state-shaped hard-budget handoff ─────────────────────────────────
+
+/**
+ * With Σ active, the hard-budget handoff IS the execution state: compactJSON(Σ) replaces the
+ * prose walk — smaller and lossless where it matters (findings/verifiedFacts survive
+ * verbatim; the paper's exact-state > prose-summary result, Tables 1/5). Reuses the v5
+ * HANDOFF_TEMPLATE slots; `distillTrajectory` remains only for degraded runs.
+ */
+export function stateHandoff(state: RunState, query: string, handoffChars = 4_000): string {
+  const findingsBlock = state.findings.slice(-3).join("\n");
+  return HANDOFF_TEMPLATE.replace("{query}", truncateMid(query.slice(0, QUERY_CHARS), Math.floor(handoffChars * 0.3)))
+    .replace("{findings}", truncateMid(findingsBlock, Math.floor(handoffChars * 0.2)))
+    .replace("{state}", truncateMid(compactJSON(state), Math.floor(handoffChars * 0.35)))
+    .replace("{next}", state.nextStep !== "" ? state.nextStep : DEFAULT_NEXT_STEP);
+}
+
+// ── Workstream F: rectification at budget hard-state (MAS2 Eq. 5, local tier) ─────────
+
+/** One deterministic local fix for a continuation — discriminated union, no flags.
+ *  DOCTRINE: no arm ever switches models or providers — a failing model retries on itself
+ *  until the attempt budget is exhausted, then fails loudly. */
+export type RectifyAction =
+  | { readonly kind: "narrow-paths"; readonly paths: readonly string[] }
+  | { readonly kind: "reduce-concurrency"; readonly maxConcurrentSubcalls: number }
+  | { readonly kind: "none"; readonly reason: string };
+
+/** Compact telemetry label for a rectification (run-node detail line). */
+export function rectifyLabel(action: RectifyAction): string {
+  switch (action.kind) {
+    case "narrow-paths":
+      return `narrow-paths (${action.paths.length})`;
+    case "reduce-concurrency":
+      return `reduce-concurrency → ${action.maxConcurrentSubcalls}`;
+    case "none":
+      return "none";
+  }
+}
+
+/** Path-like tokens harvested from Σ — must contain a separator and an extension. */
+const STATE_PATH_TOKEN = /(?:[\w@.-]+\/+)+[\w@.-]+\.[A-Za-z]{1,6}/g;
+
+/** Top repeated paths from Σ, deterministic: frequency desc, then lexicographic; ≤4. */
+function topPathsFromState(state: RunState | undefined): readonly string[] {
+  if (state === undefined) return [];
+  const freq = new Map<string, number>();
+  const sources = [...state.verifiedFacts, ...state.findings];
+  for (const line of sources) {
+    for (const match of line.matchAll(STATE_PATH_TOKEN)) {
+      const path = match[0];
+      freq.set(path, (freq.get(path) ?? 0) + 1);
+    }
+  }
+  return [...freq.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 4)
+    .map(([path]) => path);
+}
+
+/**
+ * MAS2 rectification (Eq. 5 adapted): at a budget hard-state, sample ONE local fix — no LLM.
+ * Deterministic priority: (1) narrow child paths from the run's top Σ paths, (2) halve leaf
+ * admission, (3) none. The model/provider pair is NEVER a rectification axis: a failing
+ * model retries until its attempt budget is exhausted and then the call fails loudly —
+ * no silent fallback, no swapping. The engine applies the choice to the continuation
+ * invocation and logs it on the run node.
+ */
+export function rectify(args: {
+  readonly state?: RunState;
+  readonly config: RlmConfig;
+}): RectifyAction {
+  const paths = topPathsFromState(args.state);
+  if (paths.length >= 2) return { kind: "narrow-paths", paths };
+  if (args.config.maxConcurrentSubcalls >= 4) {
+    return {
+      kind: "reduce-concurrency",
+      maxConcurrentSubcalls: Math.max(1, Math.floor(args.config.maxConcurrentSubcalls / 2)),
+    };
+  }
+  return { kind: "none", reason: "no local fix available" };
 }
