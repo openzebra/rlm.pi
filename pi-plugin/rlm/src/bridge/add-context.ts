@@ -24,7 +24,7 @@ import {
 import { resolveSource } from "../context/resolve.ts";
 import { previewText } from "../text/preview.ts";
 
-export interface AddContextBridgeOpts {
+interface AddContextBridgeOpts {
   /** Fixed cwd (headless). Prefer getCwd when the sandbox outlives a single invocation. */
   readonly cwd?: string;
   /** Late-bound cwd (native mode — sandbox handlers outlive a single repl()). */

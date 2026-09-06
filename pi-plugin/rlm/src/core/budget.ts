@@ -14,28 +14,29 @@
 
 import type { ChatMsg } from "../bridge/model.ts";
 import type { RlmConfig } from "./types.ts";
+import type { RunState } from "./run-state.ts";
+import { compactJSON } from "./run-state.ts";
 
-export interface TokenBudgetOptions {
+interface TokenBudgetOptions {
   readonly softFrac?: number;
   readonly continuations?: number;
   readonly maxContinuations?: number;
 }
 
-export type BudgetState = "" | "soft" | "hard";
+type BudgetState = "" | "soft" | "hard";
 
 /** v5 verbatim: the soft wrap-up note prepended to the single turn after crossing soft. */
-export const WRAP_UP_BUDGET: string = Object.freeze(
+export const WRAP_UP_BUDGET: string =
   "[budget] ~80% of your token cap — ONE turn left. If the task is answerable NOW, finalize " +
     '(set answer["ready"] = True). Otherwise print a compact findings dump: what is confirmed, ' +
     "current file/line or search position, and the exact next step — a fresh continuation picks " +
-    "it up. Do not start new exploration.",
-);
+    "it up. Do not start new exploration.";
 
 export const DEFAULT_NEXT_STEP: string =
-  Object.freeze("continue the probing that was in flight, then finalize");
+  "continue the probing that was in flight, then finalize";
 
 /** v5 verbatim template (adapting the finalize spelling to this plugin's REPL). */
-const HANDOFF_TEMPLATE: string = Object.freeze(
+const HANDOFF_TEMPLATE: string =
   "A prior RLM run hit its token cap mid-task.\n" +
     "You are its continuation — pick up EXACTLY where it stopped.\n\n" +
     "ORIGINAL TASK:\n{query}\n\n" +
@@ -43,8 +44,7 @@ const HANDOFF_TEMPLATE: string = Object.freeze(
     "CURRENT STATE / LAST ACTIONS:\n{state}\n\n" +
     "NEXT STEP: {next}\n" +
     "Do not re-do confirmed work; continue from the NEXT STEP and finalize as\n" +
-    'soon as the task is answerable (answer["ready"] = True).',
-);
+    'soon as the task is answerable (answer["ready"] = True).';
 
 /** v5's elision marker, used whenever a handoff section is trimmed. */
 const ELISION_MARK = "\n…(+N chars elided [v5 handoff])…\n";
@@ -119,13 +119,18 @@ export class TokenBudget {
  */
 export const BUDGET_WINDOW_FLOOR = 250_000;
 
-/** An effective budget that can never trigger — the cascade "switched off" without changing
- *  any call-site types (budget: TokenBudget | undefined). */
-function unboundedBudget(config: RlmConfig): TokenBudget {
-  return new TokenBudget(Number.MAX_SAFE_INTEGER, {
+/** One TokenBudget construction shape — the cap varies, the policy knobs never do (DRY). */
+function makeBudget(config: RlmConfig, cap: number): TokenBudget {
+  return new TokenBudget(cap, {
     softFrac: config.budgetSoftFrac,
     maxContinuations: config.budgetMaxContinuations,
   });
+}
+
+/** An effective budget that can never trigger — the cascade "switched off" without changing
+ *  any call-site types (budget: TokenBudget | undefined). */
+function unboundedBudget(config: RlmConfig): TokenBudget {
+  return makeBudget(config, Number.MAX_SAFE_INTEGER);
 }
 
 export function resolveBudget(contextWindow: number | undefined, config: RlmConfig): TokenBudget {
@@ -133,10 +138,7 @@ export function resolveBudget(contextWindow: number | undefined, config: RlmConf
   if (ctx < BUDGET_WINDOW_FLOOR) return unboundedBudget(config);
   const shareCap = Math.floor(ctx * config.budgetShare);
   const cap = config.budgetTaskCap > 0 ? Math.min(shareCap, config.budgetTaskCap) : shareCap;
-  return new TokenBudget(Math.max(cap, 1), {
-    softFrac: config.budgetSoftFrac,
-    maxContinuations: config.budgetMaxContinuations,
-  });
+  return makeBudget(config, Math.max(cap, 1));
 }
 
 /**
@@ -150,12 +152,15 @@ export function truncateMid(text: string, maxChars: number): string {
   return text.slice(0, half) + ELISION_MARK.replace("N", String(elided)) + text.slice(text.length - half);
 }
 
+/** Digest/handoff section caps — ONE source: budget.ts's handoff distillation and the root
+ *  digest (core/root-digest.ts) must never drift apart on the same trajectory heuristics. */
+export const FINDINGS_MAX = 6;
+export const FINDINGS_MIN_CHARS = 20;
+export const STATE_MAX = 8;
 const QUERY_CHARS = 800;
-const FINDINGS_MAX = 6;
-const FINDINGS_MIN_CHARS = 20;
-const STATE_MAX = 8;
 const STATE_NEEDLE = "REPL stdout";
-const NEXT_STEP_RE = /next|then|will |todo/i;
+/** Next-step probe shared by the engine handoff and the root digest (one wording source). */
+export const NEXT_STEP_RE = /next|then|will |todo/i;
 
 /**
  * Deterministic trajectory → handoff (v5 `distill_trajectory`). No LLM call: the model was
@@ -201,4 +206,85 @@ export function distillTrajectory(
 /** The full continuation prompt: `[continuation n]` header + distilled handoff. */
 export function continuationPrompt(n: number, handoff: string): string {
   return `[continuation ${n}]\n${handoff}`;
+}
+
+// ── Workstream A: state-shaped hard-budget handoff ─────────────────────────────────
+
+/**
+ * With Σ active, the hard-budget handoff IS the execution state: compactJSON(Σ) replaces the
+ * prose walk — smaller and lossless where it matters (findings/verifiedFacts survive
+ * verbatim; the paper's exact-state > prose-summary result, Tables 1/5). Reuses the v5
+ * HANDOFF_TEMPLATE slots; `distillTrajectory` remains only for degraded runs.
+ */
+export function stateHandoff(state: RunState, query: string, handoffChars = 4_000): string {
+  const findingsBlock = state.findings.slice(-3).join("\n");
+  return HANDOFF_TEMPLATE.replace("{query}", truncateMid(query.slice(0, QUERY_CHARS), Math.floor(handoffChars * 0.3)))
+    .replace("{findings}", truncateMid(findingsBlock, Math.floor(handoffChars * 0.2)))
+    .replace("{state}", truncateMid(compactJSON(state), Math.floor(handoffChars * 0.35)))
+    .replace("{next}", state.nextStep !== "" ? state.nextStep : DEFAULT_NEXT_STEP);
+}
+
+// ── Workstream F: rectification at budget hard-state (MAS2 Eq. 5, local tier) ─────────
+
+/** One deterministic local fix for a continuation — discriminated union, no flags.
+ *  DOCTRINE: no arm ever switches models or providers — a failing model retries on itself
+ *  until the attempt budget is exhausted, then fails loudly. */
+export type RectifyAction =
+  | { readonly kind: "narrow-paths"; readonly paths: readonly string[] }
+  | { readonly kind: "reduce-concurrency"; readonly maxConcurrentSubcalls: number }
+  | { readonly kind: "none"; readonly reason: string };
+
+/** Compact telemetry label for a rectification (run-node detail line). */
+export function rectifyLabel(action: RectifyAction): string {
+  switch (action.kind) {
+    case "narrow-paths":
+      return `narrow-paths (${action.paths.length})`;
+    case "reduce-concurrency":
+      return `reduce-concurrency → ${action.maxConcurrentSubcalls}`;
+    case "none":
+      return "none";
+  }
+}
+
+/** Path-like tokens harvested from Σ — must contain a separator and an extension. */
+const STATE_PATH_TOKEN = /(?:[\w@.-]+\/+)+[\w@.-]+\.[A-Za-z]{1,6}/g;
+
+/** Top repeated paths from Σ, deterministic: frequency desc, then lexicographic; ≤4. */
+function topPathsFromState(state: RunState | undefined): readonly string[] {
+  if (state === undefined) return [];
+  const freq = new Map<string, number>();
+  const sources = [...state.verifiedFacts, ...state.findings];
+  for (const line of sources) {
+    for (const match of line.matchAll(STATE_PATH_TOKEN)) {
+      const path = match[0];
+      freq.set(path, (freq.get(path) ?? 0) + 1);
+    }
+  }
+  return [...freq.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 4)
+    .map(([path]) => path);
+}
+
+/**
+ * MAS2 rectification (Eq. 5 adapted): at a budget hard-state, sample ONE local fix — no LLM.
+ * Deterministic priority: (1) narrow child paths from the run's top Σ paths, (2) halve leaf
+ * admission, (3) none. The model/provider pair is NEVER a rectification axis: a failing
+ * model retries until its attempt budget is exhausted and then the call fails loudly —
+ * no silent fallback, no swapping. The engine applies the choice to the continuation
+ * invocation and logs it on the run node.
+ */
+export function rectify(args: {
+  readonly state?: RunState;
+  readonly config: RlmConfig;
+}): RectifyAction {
+  const paths = topPathsFromState(args.state);
+  if (paths.length >= 2) return { kind: "narrow-paths", paths };
+  if (args.config.maxConcurrentSubcalls >= 4) {
+    return {
+      kind: "reduce-concurrency",
+      maxConcurrentSubcalls: Math.max(1, Math.floor(args.config.maxConcurrentSubcalls / 2)),
+    };
+  }
+  return { kind: "none", reason: "no local fix available" };
 }

@@ -7,7 +7,7 @@ import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { RlmConfig } from "../core/types.ts";
 import { DEFAULT_CONFIG } from "./defaults.ts";
 
-export interface PersistedSettings {
+interface PersistedSettings {
   readonly config: Partial<RlmConfig>;
   /** "provider/id" of the pinned sub-LLM, or undefined for "cheapest (auto)".
    *  `null` = explicit "cheapest" clear (omit key on disk). */
@@ -104,8 +104,7 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (subSystemPrompt !== undefined) out.subSystemPrompt = subSystemPrompt;
   const sandboxInitTimeoutMs = validateNumber(r.sandboxInitTimeoutMs, 100);
   if (sandboxInitTimeoutMs !== undefined) out.sandboxInitTimeoutMs = sandboxInitTimeoutMs;
-  // `libraryLoader` is the pre-rename key — still read so an existing rlm.json survives the upgrade.
-  const contextLoader = validateBoolean(r.contextLoader) ?? validateBoolean(r.libraryLoader);
+  const contextLoader = validateBoolean(r.contextLoader);
   if (contextLoader !== undefined) out.contextLoader = contextLoader;
   const autoSeedCwd = validateBoolean(r.autoSeedCwd);
   if (autoSeedCwd !== undefined) out.autoSeedCwd = autoSeedCwd;
@@ -127,18 +126,6 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (enableLedger !== undefined) out.enableLedger = enableLedger;
   const rlmBudget = validateNumber(r.rlmBudget, 0);
   if (rlmBudget !== undefined) out.rlmBudget = rlmBudget;
-  // v5 durable memory
-  const enableMemory = validateBoolean(r.enableMemory);
-  if (enableMemory !== undefined) out.enableMemory = enableMemory;
-  const injectNoteTokens = validateNumber(r.injectNoteTokens, 100);
-  if (injectNoteTokens !== undefined) out.injectNoteTokens = injectNoteTokens;
-  const evolveEvery = validateNumber(r.evolveEvery, 0);
-  if (evolveEvery !== undefined) out.evolveEvery = evolveEvery;
-  if (r.memoryDir === null) out.memoryDir = null;
-  else {
-    const memoryDir = validateString(r.memoryDir);
-    if (memoryDir !== undefined) out.memoryDir = memoryDir;
-  }
   // v5 provider concurrency caps: { provider: minConcurrent }
   if (typeof r.providerMaxConcurrent === "object" && r.providerMaxConcurrent !== null) {
     const caps: Record<string, number> = {};
@@ -148,11 +135,43 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
     }
     if (Object.keys(caps).length > 0) out.providerMaxConcurrent = Object.freeze(caps);
   }
-  // v5 child surface doctrine
-  if (r.childSurface === "delegation" || r.childSurface === "legacy") out.childSurface = r.childSurface;
   // Verification-discipline nudge (default OFF).
   const enableVerificationNudge = validateBoolean(r.enableVerificationNudge);
   if (enableVerificationNudge !== undefined) out.enableVerificationNudge = enableVerificationNudge;
+  // SKILL.state integration (Workstreams A–F)
+  const enableRunState = validateBoolean(r.enableRunState);
+  if (enableRunState !== undefined) out.enableRunState = enableRunState;
+  const runStateRetryMax = validateNumber(r.runStateRetryMax, 0);
+  if (runStateRetryMax !== undefined) out.runStateRetryMax = runStateRetryMax;
+  const enableSkillState = validateBoolean(r.enableSkillState);
+  if (enableSkillState !== undefined) out.enableSkillState = enableSkillState;
+  const enableSkillStateDistill = validateBoolean(r.enableSkillStateDistill);
+  if (enableSkillStateDistill !== undefined) out.enableSkillStateDistill = enableSkillStateDistill;
+  const skillStateMaxTokens = validateNumber(r.skillStateMaxTokens, 50);
+  if (skillStateMaxTokens !== undefined) out.skillStateMaxTokens = skillStateMaxTokens;
+  const skillStateLeafTokens = validateNumber(r.skillStateLeafTokens, 0);
+  if (skillStateLeafTokens !== undefined) out.skillStateLeafTokens = skillStateLeafTokens;
+  const skillStateMinScore = validateNumber(r.skillStateMinScore, 0);
+  if (skillStateMinScore !== undefined) out.skillStateMinScore = skillStateMinScore;
+  const skillStateNotesPerProject = validateNumber(r.skillStateNotesPerProject, 1);
+  if (skillStateNotesPerProject !== undefined) out.skillStateNotesPerProject = skillStateNotesPerProject;
+  // Root Σ integration (WS-2..WS-4)
+  const enableRootDigestCompaction = validateBoolean(r.enableRootDigestCompaction);
+  if (enableRootDigestCompaction !== undefined) out.enableRootDigestCompaction = enableRootDigestCompaction;
+  const rootDigestKeepRecentChars = validateNumber(r.rootDigestKeepRecentChars, 200);
+  if (rootDigestKeepRecentChars !== undefined) out.rootDigestKeepRecentChars = rootDigestKeepRecentChars;
+  const rootDigestMaxChars = validateNumber(r.rootDigestMaxChars, 200);
+  if (rootDigestMaxChars !== undefined) out.rootDigestMaxChars = rootDigestMaxChars;
+  const enableRootContextTransform = validateBoolean(r.enableRootContextTransform);
+  if (enableRootContextTransform !== undefined) out.enableRootContextTransform = enableRootContextTransform;
+  const rootContextKeepTurns = validateNumber(r.rootContextKeepTurns, 0);
+  if (rootContextKeepTurns !== undefined) out.rootContextKeepTurns = rootContextKeepTurns;
+  const rootContextElideChars = validateNumber(r.rootContextElideChars, 100);
+  if (rootContextElideChars !== undefined) out.rootContextElideChars = rootContextElideChars;
+  const rootContextSnapshot = validateBoolean(r.rootContextSnapshot);
+  if (rootContextSnapshot !== undefined) out.rootContextSnapshot = rootContextSnapshot;
+  const enableRootStateFences = validateBoolean(r.enableRootStateFences);
+  if (enableRootStateFences !== undefined) out.enableRootStateFences = enableRootStateFences;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
     const ss = r.subSampling as Record<string, unknown>;
     const sampling: { maxTokens?: number; temperature?: number; reasoning?: ThinkingLevel } = {};
@@ -185,8 +204,7 @@ export async function loadSettings(): Promise<PersistedSettings> {
     const r = raw as Record<string, unknown>;
     return {
       config: validateConfig(r.config),
-      // `worker` is the pre-rename key — still read so an existing pin survives the upgrade.
-      llm: validateString(r.llm) ?? validateString(r.worker),
+      llm: validateString(r.llm),
       rlm: validateString(r.rlm),
     };
   } catch {
@@ -242,16 +260,8 @@ export function modelRef(model: Model<Api> | undefined): string | undefined {
   return model ? `${model.provider}/${model.id}` : undefined;
 }
 
-/**
- * Human-readable "provider/id" for a sub-call node: the resolved override when one was
- * supplied and resolves, otherwise the fallback model. Shared by the llm and rlm bridges
- * so sub-call trees label their nodes identically.
- */
-export function displayModelRef(
-  registry: ModelRegistry,
-  override: string | null,
-  fallback: Model<Api>,
-): string {
-  const resolved = override ? (resolveModelId(registry, override) ?? fallback) : fallback;
-  return modelRef(resolved) ?? fallback.id;
+/** Single "provider/id" projection for sub-call node labels — shared by the llm and rlm
+ *  bridges so sub-call trees label their nodes identically. */
+export function modelLabelOf(model: Model<Api>): string {
+  return modelRef(model) ?? model.id;
 }

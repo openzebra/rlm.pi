@@ -23,7 +23,7 @@ import { join } from "node:path";
 const SERIALIZE_CHUNK = 64;
 
 /** A temp file on disk holding a serialized context payload. */
-export interface ContextTempFile {
+interface ContextTempFile {
   readonly path: string;
   /** True when the file holds JSON; false when the payload was a raw string. */
   readonly json: boolean;

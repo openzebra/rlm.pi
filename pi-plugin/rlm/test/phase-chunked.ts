@@ -4,7 +4,7 @@
  * Run: bun run pi-plugin/rlm/test/phase-chunked.ts
  */
 
-import { check, failureCount } from "./helpers.ts";
+import { check, failureCount, runSuite } from "./helpers.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
 import { NATIVE_PROMPT_STATIC } from "../src/prompts/native.ts";
@@ -106,7 +106,4 @@ async function main() {
   process.exit(failureCount() === 0 ? 0 : 1);
 }
 
-main().catch((e) => {
-  console.error("FATAL", e);
-  process.exit(1);
-});
+runSuite(main);

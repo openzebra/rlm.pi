@@ -12,6 +12,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { isRecord } from "../util/type-guards.ts";
 
 const NOISE = /\b(no edits?|do not edit|analysis[- ]only|do not change)\.?/gi;
 const TOK = /[a-z0-9_]{2,}/g;
@@ -23,13 +24,13 @@ const DONE_LINES = 6;
 const PROMPT_PREVIEW = 80;
 /** v5 wait() parity (audit H1): a coalescing twin never parks forever. Generous default —
  *  a twin can legitimately wait out a full child engine run. */
-export const WAIT_TIMEOUT_MS = 600_000;
+const WAIT_TIMEOUT_MS = 600_000;
 
-export type ClaimKind = "llm" | "rlm";
-export type ClaimStatus = "pending" | "running" | "done" | "error";
+type ClaimKind = "llm" | "rlm";
+type ClaimStatus = "pending" | "running" | "done" | "error";
 
 /** All-readonly (project rule): transitions replace the map entry with a new frozen Claim. */
-export interface Claim {
+interface Claim {
   readonly key: string;
   readonly kind: ClaimKind;
   readonly prompt: string;
@@ -39,7 +40,7 @@ export interface Claim {
   readonly result: string | null;
 }
 
-export interface ClaimRequest {
+interface ClaimRequest {
   readonly kind: ClaimKind;
   readonly prompt: string;
   readonly paths: readonly string[];
@@ -47,12 +48,12 @@ export interface ClaimRequest {
 }
 
 /** Result of `tryClaim` — a discriminated union, never an exception. */
-export type ClaimDecision =
+type ClaimDecision =
   | { readonly type: "run"; readonly key: string }
   | { readonly type: "coalesce"; readonly key: string; readonly done: boolean }
   | { readonly type: "echo" };
 
-export interface LedgerHits {
+interface LedgerHits {
   readonly exact: number;
   readonly echo: number;
   readonly near: number;
@@ -98,11 +99,6 @@ function sha256Hex(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-/** Type guard (project rule: no `as` narrowing) — used by contextSig over unknown payloads. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 /** v5 `context_sig`: fingerprint a packed context so same-question/different-haystack never collide. */
 export function contextSig(context: unknown): string {
   if (context === undefined || context === null) return "";
@@ -124,7 +120,8 @@ export function contextSig(context: unknown): string {
     }
     return h.digest("hex").slice(0, 16);
   }
-  return sha256Hex(String(context)).slice(0, 16);
+  // JSON (not String()): String(obj) collapsed EVERY object context to "[object Object]".
+  return sha256Hex(JSON.stringify(context)).slice(0, 16);
 }
 
 export function taskKey(

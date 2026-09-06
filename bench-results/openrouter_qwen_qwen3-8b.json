@@ -1,0 +1,126 @@
+{
+  "model": "openrouter/qwen/qwen3-8b",
+  "persona": "default",
+  "generatedAt": "2026-09-04T21:55:04.012Z",
+  "successRate": {
+    "ok": true,
+    "value": 0.4444444444444444
+  },
+  "hallucinationRate": {
+    "ok": true,
+    "value": 0.1111111111111111
+  },
+  "patchFailureRate": {
+    "ok": true,
+    "value": 0.6666666666666666
+  },
+  "costUsd": {
+    "ok": true,
+    "value": 0
+  },
+  "tokens": {
+    "input": 371259,
+    "output": 40283
+  },
+  "results": [
+    {
+      "fixtureId": "lookup-session-ttl",
+      "category": "lookup",
+      "answer": "3600",
+      "pass": true,
+      "hallucinated": false,
+      "tokensIn": 15132,
+      "tokensOut": 2028,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "lookup-rate-limit",
+      "category": "lookup",
+      "answer": "120",
+      "pass": true,
+      "hallucinated": false,
+      "tokensIn": 52729,
+      "tokensOut": 4407,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "lookup-retry-formula",
+      "category": "lookup",
+      "answer": "The constant is RETRY_BASE_DELAY_MS.",
+      "pass": true,
+      "hallucinated": false,
+      "tokensIn": 32934,
+      "tokensOut": 3363,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "trap-oauth-provider",
+      "category": "trap",
+      "answer": "The `OAuthProvider` class's constructor accepts two arguments:\n1. `configService` of type `ConfigService`\n2. `jwtService` of type `JwtService`\n\n**Answer:**  \nThe `OAuthProvider` class constructor arguments are `ConfigService` and `JwtService`.",
+      "pass": false,
+      "hallucinated": false,
+      "tokensIn": 69633,
+      "tokensOut": 7758,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "trap-webhook-config",
+      "category": "trap",
+      "answer": "NONE",
+      "pass": false,
+      "hallucinated": false,
+      "tokensIn": 23054,
+      "tokensOut": 2175,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "trap-circuit-breaker",
+      "category": "trap",
+      "answer": "The CircuitBreaker class is not found in the provided context. Verify the file path or ensure the source files are loaded into the context.",
+      "pass": false,
+      "hallucinated": true,
+      "tokensIn": 10885,
+      "tokensOut": 2201,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "patch-bump-upload-limit",
+      "category": "patch",
+      "answer": "{\"file\":\"src/config/limits.ts\",\"op\":\"replace\",\"anchor\":\"export const MAX_UPLOAD_MB = 25;\",\"newText\":\"export const MAX_UPLOAD_MB = 50;\"}",
+      "pass": true,
+      "hallucinated": false,
+      "patch": {
+        "file": "src/config/limits.ts",
+        "op": "replace",
+        "anchor": "export const MAX_UPLOAD_MB = 25;",
+        "newText": "export const MAX_UPLOAD_MB = 50;"
+      },
+      "patchAppliedOk": true,
+      "tokensIn": 54434,
+      "tokensOut": 5351,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "patch-retry-attempts",
+      "category": "patch",
+      "answer": "```python\n# Finalizing the answer with the correct JSON structure and ready flag set\nanswer = {\n    \"file\": \"src/net/retry.ts\",\n    \"op\": \"edit\",\n    \"anchor\": 2,\n    \"newText\": \"export const RETRY_MAX_ATTEMPTS = 5;\"\n}\nanswer[\"ready\"] = True\nprint(answer)\n```",
+      "pass": false,
+      "hallucinated": false,
+      "patchAppliedOk": false,
+      "tokensIn": 58039,
+      "tokensOut": 5684,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "patch-session-comment",
+      "category": "patch",
+      "answer": "{\"file\": \"src/auth/session.ts\", \"op\": \"insert\", \"anchor\": \"SESSION_TTL_SECONDS\", \"newText\": \"// sessions expire after one hour\"}",
+      "pass": false,
+      "hallucinated": false,
+      "patchAppliedOk": false,
+      "tokensIn": 54419,
+      "tokensOut": 7316,
+      "costUsd": 0
+    }
+  ]
+}

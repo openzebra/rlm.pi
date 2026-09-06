@@ -9,7 +9,7 @@ import { applyPathPrefix } from "./namespace.ts";
 import { isBinary } from "./walk.ts";
 import { MAX_WALK_FILE_BYTES, type ContextFile, type SkippedFile } from "./types.ts";
 
-export type TextFileResult =
+type TextFileResult =
   | { readonly ok: true; readonly value: ContextFile }
   | { readonly ok: false; readonly skipped: SkippedFile };
 

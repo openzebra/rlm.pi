@@ -15,6 +15,8 @@ const FENCE = /(`{3,})[ \t]*repl[ \t]*\r?\n([\s\S]*?)\1/g;
 const FALLBACK_FENCE = /(`{3,})[ \t]*([^`\r\n]*)[ \t]*\r?\n([\s\S]*?)\1/g;
 const PYTHON_TAG = /^py(thon)?$/i;
 
+import { errorMessage } from "../util/errors.ts";
+
 /** Shared fence scan: run `re` over `text`, keep bodies the selector accepts (same trimming). */
 function collectFences(text: string, re: RegExp, select: (m: RegExpExecArray) => string | null): string[] {
   const blocks: string[] = [];
@@ -40,11 +42,41 @@ export function findReplBlocks(text: string): string[] {
   });
 }
 
-/** Truncate REPL stdout for the model's context window (head + tail, with an elision note). */
-export function truncateOutput(text: string, limit = 20_000): string {
+/** One ```state fence: parsed JSON payload, or the parse error (error-as-observation). */
+export type StateFenceResult =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly error: string };
+
+const STATE_FENCE = /(`{3,})[ \t]*state[ \t]*\r?\n([\s\S]*?)\1/g;
+
+/**
+ * Workstream A: extract ```state fences (model-proposed ΔΣ_t) from a response, in document
+ * order. ```repl parsing is untouched — the two fences coexist in one response. Malformed
+ * JSON is surfaced as an error result for the retry loop, never thrown.
+ */
+export function findStatePatches(text: string): readonly StateFenceResult[] {
+  const out: StateFenceResult[] = [];
+  let m: RegExpExecArray | null;
+  STATE_FENCE.lastIndex = 0;
+  while ((m = STATE_FENCE.exec(text)) !== null) {
+    const body = (m[2] ?? "").trim();
+    if (body === "") continue;
+    try {
+      out.push({ ok: true, value: JSON.parse(body) as unknown });
+    } catch (err: unknown) {
+      out.push({ ok: false, error: errorMessage(err) });
+    }
+  }
+  return out;
+}
+
+/** Truncate REPL stdout for the model's context window (head + tail, with an elision note).
+ *  `mark` lets callers specialize the wording (root elision cites the session log) while the
+ *  head/tail math stays the one implementation. */
+export function truncateOutput(text: string, limit = 20_000, mark = "chars elided"): string {
   if (text.length <= limit) return text;
   const head = Math.floor(limit * 0.7);
   const tail = limit - head;
   const cut = text.length - head - tail;
-  return `${text.slice(0, head)}\n... [${cut} chars elided] ...\n${text.slice(-tail)}`;
+  return `${text.slice(0, head)}\n... [${cut} ${mark}] ...\n${text.slice(-tail)}`;
 }

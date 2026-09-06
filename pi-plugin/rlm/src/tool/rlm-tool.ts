@@ -13,7 +13,7 @@ import { modelRef } from "../config/settings.ts";
 import { spinnerFrame } from "../ui/theme.ts";
 import type { RunRegistry } from "../ui/panel/run-registry.ts";
 import { markdownTheme } from "../ui/theme-adapter.ts";
-import { previewText } from "../text/preview.ts";
+import { CALL_PREVIEW_CHARS, previewText } from "../text/preview.ts";
 import { errorMessage } from "../util/errors.ts";
 import { type RlmDetails } from "./rlm-details.ts";
 import { RlmEmitter } from "./rlm-events.ts";
@@ -21,14 +21,12 @@ import { RlmEventAggregator } from "./rlm-aggregator.ts";
 import { cardHeader, cardStatsLine, renderCollapsedCard } from "./subcall-render.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 
-/** Chars of the prompt shown on the tool call line. */
-const CALL_PREVIEW_CHARS = 80;
-
 // ── Parameter schema ──
 
-export const RlmToolParams = Object.freeze(Type.Object({
+const RlmToolParams = Object.freeze(Type.Object({
   prompt: Type.String({ description: "The task or question for the RLM engine" }),
   context: Type.Optional(Type.String({ description: "Optional context. If omitted, the working directory is packed into context." })),
+  narrative: Type.Optional(Type.Boolean({ description: "History-as-deliverable run (audit/provenance/debug narrative): RunState stays off — the archive is the product." })),
 }));
 
 // ── Rendering helpers ──
@@ -101,6 +99,7 @@ export function createRlmTool(controller: RlmController, runRegistry?: RunRegist
         const input: StartInput = {
           rootPrompt: params.prompt,
           context: params.context ?? undefined,
+          narrative: params.narrative,
         };
         const { done } = controller.start(ctx, input, emitter);
         const result = await done;

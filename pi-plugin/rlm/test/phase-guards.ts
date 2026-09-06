@@ -4,7 +4,7 @@
  * Run: bun run pi-plugin/rlm/test/phase-guards.ts
  */
 
-import { check, failureCount } from "./helpers.ts";
+import { check, failureCount, runSuite } from "./helpers.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { NATIVE_PROMPT_STATIC, NATIVE_PROMPT_BUDGET } from "../src/prompts/native.ts";
 import { formatContextListing } from "../src/context/listing.ts";
@@ -160,7 +160,7 @@ async function main() {
 
   // ── repl result assembly (exercises the real production function, not a hand-built concatenation) ──
   const bigStdout = "z".repeat(10_000);
-  const llmSubcall = { id: "s1", depth: 0, kind: "llm" as const, label: "q", status: "done" as const, startedAt: 0, costUsd: 0, tokens: 0 };
+  const llmSubcall = { id: "s1", depth: 0, kind: "llm" as const, label: "q", status: "done" as const, startedAt: 0, costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0 };
   // Big stdout + no subcalls → stdout is capped and the zero-subcall nudge fires.
   const solo = buildReplResultText(bigStdout, undefined, []);
   check(
@@ -201,7 +201,4 @@ async function main() {
   process.exit(failureCount() === 0 ? 0 : 1);
 }
 
-main().catch((e) => {
-  console.error("FATAL", e);
-  process.exit(1);
-});
+runSuite(main);

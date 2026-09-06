@@ -29,12 +29,31 @@ import { applyPathPrefix, contextSourceId, pathPrefixFor } from "./namespace.ts"
 /** Conversions are libuv-threadpool bound (default pool 4); 8 keeps the pool busy without thrash. */
 const CONVERT_CONCURRENCY = 8;
 
-export interface PackDirResult {
+interface PackDirResult {
   readonly files: readonly ContextFile[];
   readonly chars: number;
   readonly documents: number;
   readonly converted: number;
   readonly skipped: readonly SkippedFile[];
+}
+
+/** DRY: the ONE PackDirResult → SourceResult flattening — shared by the local-dir source and
+ *  the git-clone source (which wraps it in Result). Never inline a second copy. */
+export function packToSourceResult(
+  packed: PackDirResult,
+  sourceId: string,
+  pathPrefix: string,
+): SourceResult {
+  return Object.freeze({
+    payload: packed.files,
+    files: packed.files.length,
+    chars: packed.chars,
+    sourceId,
+    pathPrefix,
+    documents: packed.documents,
+    converted: packed.converted,
+    skipped: packed.skipped,
+  });
 }
 
 /**
@@ -153,14 +172,5 @@ export async function sourceDir(
   // Explicit pathPrefix (including "") wins; otherwise derive ctx/<id>/.
   const pathPrefix = opts.pathPrefix !== undefined ? opts.pathPrefix : pathPrefixFor(sourceId);
   const packed = await packDirectory(dir, pathPrefix, opts.signal);
-  return Object.freeze({
-    payload: packed.files,
-    files: packed.files.length,
-    chars: packed.chars,
-    sourceId,
-    pathPrefix,
-    documents: packed.documents,
-    converted: packed.converted,
-    skipped: packed.skipped,
-  });
+  return packToSourceResult(packed, sourceId, pathPrefix);
 }

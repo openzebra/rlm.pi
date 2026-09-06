@@ -1,21 +1,12 @@
 /** `/rlm-llm` — pin the leaf-LLM model (llm_query / llm_batch / map_files). */
 
-import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { modelRef } from "../config/settings.ts";
-import { cheapestModel } from "../mode/llm-model.ts";
+import { cheapestModel, sessionScopedModels } from "../mode/llm-model.ts";
 import type { RlmController } from "../mode/rlm-mode.ts";
 import { pickableModels, selectModel } from "../ui/model-picker.ts";
 import { setRlmModeStatus } from "../ui/status.ts";
 import { applyLlmSelection } from "./pins.ts";
-
-/** Newer Pi hosts expose session-scoped models; 0.79 peers do not — duck-type safely. */
-function sessionScopedModels(
-  ctx: ExtensionContext,
-): readonly { readonly model: Model<Api> }[] | undefined {
-  const scoped: unknown = Reflect.get(ctx, "scopedModels");
-  return Array.isArray(scoped) ? scoped as readonly { readonly model: Model<Api> }[] : undefined;
-}
 
 async function runRlmLlm(controller: RlmController, ctx: ExtensionContext): Promise<void> {
   try {

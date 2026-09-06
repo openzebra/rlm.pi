@@ -14,7 +14,7 @@ import { type Api, completeSimple, type Message, type Model, type ThinkingLevel,
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { completeWithRetry, DEFAULT_RETRY_POLICY, type RetryPolicy } from "../util/retry.ts";
 
-export type Role = "system" | "user" | "assistant";
+type Role = "system" | "user" | "assistant";
 export interface ChatMsg {
   readonly role: Role;
   readonly content: string;
@@ -55,17 +55,20 @@ function assistantMessage(text: string, model: Model<Api>): Message {
 }
 
 function toPiMessages(messages: readonly ChatMsg[], model: Model<Api>): { readonly systemPrompt?: string; readonly messages: Message[] } {
-  let systemPrompt: string | undefined;
+  // System segments joined once below — no quadratic re-copy of the accumulated prompt (rule:
+  // never build large text with `+`/template concat inside a loop).
+  const systemParts: string[] = [];
   const out: Message[] = [];
   for (const m of messages) {
     if (m.role === "system") {
-      systemPrompt = systemPrompt ? `${systemPrompt}\n\n${m.content}` : m.content;
+      systemParts.push(m.content);
     } else if (m.role === "user") {
       out.push({ role: "user", content: m.content, timestamp: Date.now() });
     } else {
       out.push(assistantMessage(m.content, model));
     }
   }
+  const systemPrompt = systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
   return { systemPrompt, messages: out };
 }
 

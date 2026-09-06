@@ -4,29 +4,20 @@
 
 import type { Usage } from "@earendil-works/pi-ai";
 import { modelRef } from "../../config/settings.ts";
-import { complete1, type Complete1Deps } from "./completion.ts";
-import { emitting, summarizeLeaf, throttleHooks } from "./emitting.ts";
+import { complete1, completeDeps } from "./completion.ts";
+import { emitting, summarizeLeaf, throttleHooks, type EmitNote } from "./emitting.ts";
 import { formatError, errorMessage } from "../../util/errors.ts";
 import { previewText } from "../../text/preview.ts";
-import type { SpawnResult, SubcallHandlerDeps } from "./types.ts";
+import type { Invocation, SpawnResult, SubcallHandlerDeps } from "./types.ts";
 import type { SubcallOpts } from "../../sandbox/interrupts.ts";
 import { SPAWN_HINT, spawnAndRun, type SpawnDeps } from "./task-registry.ts";
 import { ECHO_STUB, taskKey, type TaskLedger } from "../../core/ledger.ts";
 
-const UNWIRED = formatError("RLM bridge not wired for this invocation");
+/** Shared with rlm-query.ts — the unwired rejection sentinel (AGENTS DRY). */
+export const UNWIRED = formatError("RLM bridge not wired for this invocation");
 
-function completeDeps(deps: SubcallHandlerDeps): Complete1Deps {
-  return {
-    leafGate: deps.gates.leaf,
-    registry: deps.registry,
-    getLlmModel: deps.getLlmModel,
-    getConfig: deps.getConfig,
-    signal: deps.signal,
-    onUsage: deps.onUsage,
-  };
-}
-
-function displayModel(deps: SubcallHandlerDeps): string | undefined {
+/** Shared with rlm-query.ts — one display-model resolution (AGENTS DRY #3). */
+export function displayModel(deps: SubcallHandlerDeps): string | undefined {
   try {
     const m = deps.getLlmModel();
     return modelRef(m) ?? m.id;
@@ -36,8 +27,34 @@ function displayModel(deps: SubcallHandlerDeps): string | undefined {
 }
 
 /** The ledger active for leaf calls — undefined when disabled by config or not threaded in. */
-function activeLedger(deps: SubcallHandlerDeps): TaskLedger | undefined {
+export function activeLedger(deps: SubcallHandlerDeps): TaskLedger | undefined {
   return deps.getConfig().enableLedger ? deps.ledger : undefined;
+}
+
+/** DRY: one unwired-spawn shape — kind/n vary, everything else is the same rejection.
+ *  Shared with rlm-query.ts. */
+export function unwiredSpawn(kind: SpawnResult["kind"], n: number): SpawnResult {
+  return { ok: false, task_id: null, kind, n, status: "pending", hint: SPAWN_HINT, error: UNWIRED };
+}
+
+/** DRY: the shared leaf recipe — one UI node, one complete1 execution, one summarizer. */
+function emitLeaf(
+  inv: Invocation,
+  deps: SubcallHandlerDeps,
+  prompt: string,
+  exec: (track: (u: Usage) => void, note: EmitNote) => Promise<string>,
+): Promise<string> {
+  return emitting(
+    inv,
+    {
+      kind: "llm",
+      label: "llm_query",
+      args: `prompt: ${previewText(prompt)}`,
+      model: displayModel(deps),
+    },
+    (track, note) => exec(track, note),
+    summarizeLeaf,
+  );
 }
 
 /** v5 TaskLedger routing for ONE leaf prompt (audit H3 — shared by llm_query and every
@@ -84,31 +101,12 @@ export function createLlmQueryHandler(
     opts: SubcallOpts,
   ): Promise<SpawnResult> => {
     const inv = deps.resolve(opts, depth);
-    if (inv === null) {
-      return {
-        ok: false,
-        task_id: null,
-        kind: "llm",
-        n: 1,
-        status: "pending",
-        hint: SPAWN_HINT,
-        error: UNWIRED,
-      };
-    }
+    if (inv === null) return unwiredSpawn("llm", 1);
 
     const cdeps = completeDeps(deps);
     const runLeaf = (): Promise<string> =>
-      emitting(
-        inv,
-        {
-          kind: "llm",
-          label: "llm_query",
-          args: `prompt: ${previewText(prompt)}`,
-          model: displayModel(deps),
-        },
-        (track: (u: Usage) => void, note) => complete1(inv, prompt, track, cdeps, throttleHooks(note)),
-        summarizeLeaf,
-      );
+      emitLeaf(inv, deps, prompt, (track, note) =>
+        complete1(inv, prompt, track, cdeps, throttleHooks(note)));
     // v5 TaskLedger for leaves: identical prompts coalesce onto one completion (key has no
     // context — a leaf's entire world is the prompt text itself).
     return spawnAndRun(
@@ -132,17 +130,7 @@ export function createLlmBatchHandler(
     opts: SubcallOpts,
   ): Promise<SpawnResult> => {
     const inv = deps.resolve(opts, depth);
-    if (inv === null) {
-      return {
-        ok: false,
-        task_id: null,
-        kind: "llm_batch",
-        n: prompts.length,
-        status: "pending",
-        hint: SPAWN_HINT,
-        error: UNWIRED,
-      };
-    }
+    if (inv === null) return unwiredSpawn("llm_batch", prompts.length);
 
     const cdeps = completeDeps(deps);
     const ledger = activeLedger(deps);
@@ -155,27 +143,17 @@ export function createLlmBatchHandler(
       () =>
         Promise.all(
           prompts.map((p) =>
-            emitting(
-              inv,
-              {
-                kind: "llm",
-                label: "llm_query",
-                args: `prompt: ${previewText(p)}`,
-                model: displayModel(deps),
-              },
+            emitLeaf(inv, deps, p, (track, note) =>
               // NO outer gate — complete1 takes the single leaf slot per prompt.
               // v5 (audit H3): every item routes through the ledger — duplicate prompts inside
               // one batch (or twins of other in-flight leaves) coalesce instead of paying N times.
-              (track: (u: Usage) => void, note) =>
-                runClaimedLeaf(
-                  ledger,
-                  ledger === undefined ? undefined : leafClaimKey(deps, p),
-                  p,
-                  inv.depth,
-                  () => complete1(inv, p, track, cdeps, throttleHooks(note)),
-                ),
-              summarizeLeaf,
-            ),
+              runClaimedLeaf(
+                ledger,
+                ledger === undefined ? undefined : leafClaimKey(deps, p),
+                p,
+                inv.depth,
+                () => complete1(inv, p, track, cdeps, throttleHooks(note)),
+              )),
           ),
         ),
       deps.trackDetached,

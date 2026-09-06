@@ -32,6 +32,10 @@ import { appendRow, makeRow, type BenchRow } from "./journal.ts";
 import { gradeAnswer } from "./grade.ts";
 import { DEFAULT_MODEL_REF, fetchPricing, makeRun, requireApiKey, resolveTarget, type BenchRunOpts } from "./engine.ts";
 import { buildTasks, type BenchTask, type SuiteName } from "./tasks.ts";
+import { SkillStore } from "../pi-plugin/rlm/src/config/skillstate.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { RunRlm } from "../pi-plugin/rlm/src/core/types.ts";
 
 interface Args {
@@ -152,7 +156,7 @@ async function runTaskWithRetries(run: RunRlm, task: BenchTask): Promise<Partial
       return await runTask(run, task);
     } catch (err) {
       if (attempt >= TASK_ATTEMPTS) throw err;
-      console.log(`  ↻ ${task.suite}/${task.id} attempt ${attempt} failed (${err instanceof Error ? err.message.slice(0, 80) : err}); retrying in ${TASK_RETRY_SLEEP_MS / 1000}s`);
+      console.log(`  ↻ ${task.suite}/${task.id} attempt ${attempt} failed (${err instanceof Error ? err.message.slice(0, 80) : String(err)}); retrying in ${TASK_RETRY_SLEEP_MS / 1000}s`);
       await new Promise((resolve) => setTimeout(resolve, TASK_RETRY_SLEEP_MS));
     }
   }
@@ -173,11 +177,17 @@ async function main(): Promise<void> {
   const apiKey = requireApiKey();
   const target = resolveTarget(args.model ?? process.env.RLM_BENCH_MODEL ?? DEFAULT_MODEL_REF);
   const pricing = await fetchPricing(target.id);
+  const skillStateOn = process.env.RLM_BENCH_NO_SKILLSTATE !== "1";
+  // Warmable store: point RLM_BENCH_SKILLSTATE_DIR at a prior run's dir to measure the warm
+  // arm (notes harvested by that run ground this one). Default: fresh tmp dir per invocation.
+  const skillDir = process.env.RLM_BENCH_SKILLSTATE_DIR ?? mkdtempSync(join(tmpdir(), "rlm-bench-ss-"));
+  const skillStore = skillStateOn ? await SkillStore.hydrate(128, skillDir) : undefined;
   const run = makeRun(target, apiKey, {
     maxIterations: args.maxIterations,
     temperature: args.temperature,
     reasoning: args.reasoning as BenchRunOpts["reasoning"],
     pricing,
+    ...(skillStore === undefined ? {} : { skillStore }),
   });
   const journalPath = args.journal ?? `bench/runs/bench-${Date.now()}.jsonl`;
 
@@ -242,6 +252,10 @@ async function main(): Promise<void> {
   }
 
   // ---- run summary: pooled totals, per-run subtotals + stability table (plan §2.2.5) ----
+  if (skillStore !== undefined) {
+    const flushed = await skillStore.flush();
+    console.log(`  skillstore: notes=${skillStore.noteCount} dir=${skillDir} flushed=${flushed}`);
+  }
   const totalIn = rows.reduce((s, r) => s + r.inputTokens, 0);
   const totalOut = rows.reduce((s, r) => s + r.outputTokens, 0);
   const totalCost = rows.reduce((s, r) => s + r.costUsd, 0);

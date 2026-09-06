@@ -26,8 +26,8 @@ function testFormatContextListing() {
   check("formatContextListing empty — does not suggest add_context(\".\")", !out.includes('add_context(".")'));
 
   const small: readonly ContextFile[] = Object.freeze([
-    { path: "a.ts", content: "const x = 1;", tokens: 5 },
-    { path: "b.ts", content: "const y = 2;", tokens: 5 },
+    { path: "a.ts", content: "const x = 1;", tokens: 5, tokensIn: 5, tokensOut: 5 },
+    { path: "b.ts", content: "const y = 2;", tokens: 5, tokensIn: 5, tokensOut: 5 },
   ]);
   const out2 = formatContextListing(small);
   check("formatContextListing small — shows file paths", out2.includes("a.ts") && out2.includes("b.ts"));
@@ -36,7 +36,7 @@ function testFormatContextListing() {
   check("formatContextListing small — no truncation", !out2.includes("truncated"));
 
   const files = Array.from({ length: 250 }, (_, i) => ({
-    path: `src/file${i}.ts`, content: "x", tokens: 1,
+    path: `src/file${i}.ts`, content: "x", tokens: 1, tokensIn: 1, tokensOut: 1,
   }));
   const out3 = formatContextListing(files);
   check("formatContextListing large — truncates", out3.includes("more files (truncated)"));
@@ -115,13 +115,13 @@ function testSilentBlockVarsHint() {
 
 function testCollectReplWarnings() {
   const ok: readonly RlmSubcall[] = Object.freeze([
-    { id: "s1", depth: 0, kind: "llm", label: "a", status: "done", startedAt: 0, costUsd: 0, tokens: 0 },
+    { id: "s1", depth: 0, kind: "llm", label: "a", status: "done", startedAt: 0, costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0 },
   ]);
   check("collectReplWarnings — none when all ok", collectReplWarnings(ok) === undefined);
 
   const mixed: readonly RlmSubcall[] = Object.freeze([
-    { id: "s1", depth: 0, kind: "llm", label: "a", status: "done", startedAt: 0, costUsd: 0, tokens: 0 },
-    { id: "s2", depth: 0, kind: "llm", label: "b", status: "error", startedAt: 0, costUsd: 0, tokens: 0 },
+    { id: "s1", depth: 0, kind: "llm", label: "a", status: "done", startedAt: 0, costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0 },
+    { id: "s2", depth: 0, kind: "llm", label: "b", status: "error", startedAt: 0, costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0 },
   ]);
   const w = collectReplWarnings(mixed);
   check("collectReplWarnings — single error is 1/1", w !== undefined && w[0] === "1/1 sub-call(s) failed — results may be incomplete");
@@ -130,7 +130,7 @@ function testCollectReplWarnings() {
   const batch: readonly RlmSubcall[] = Object.freeze([
     {
       id: "s1", depth: 0, kind: "batch", label: "llm_query ×8", status: "error",
-      startedAt: 0, costUsd: 0, tokens: 0, failedCount: 3, totalCount: 8,
+      startedAt: 0, costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0, failedCount: 3, totalCount: 8,
     },
   ]);
   const bw = collectReplWarnings(batch);
@@ -182,14 +182,14 @@ async function testSandboxManager() {
   check("SandboxManager — core REPL surface intact", !alive.raised && alive.stdout.includes("True True True"));
 
   // ── appendContext keeps the replay copy truthful across a death-recreate ──
-  mgr.contextPayload = [{ path: "repo.ts", content: "r", tokens: 1 }];
-  mgr.appendContext([{ path: "ctx/x-9f3a/a.ts", content: "lib content", tokens: 1 }]);
+  mgr.contextPayload = [{ path: "repo.ts", content: "r", tokens: 1, tokensIn: 1, tokensOut: 1 }];
+  mgr.appendContext([{ path: "ctx/x-9f3a/a.ts", content: "lib content", tokens: 1, tokensIn: 1, tokensOut: 1 }]);
   check(
     "SandboxManager — appendContext grows the replay payload",
     Array.isArray(mgr.contextPayload) && mgr.contextPayload.length === 2,
     Array.isArray(mgr.contextPayload) ? `len=${mgr.contextPayload.length}` : "not array",
   );
-  mgr.appendContext([{ path: "ctx/x-9f3a/a.ts", content: "lib content", tokens: 1 }]);
+  mgr.appendContext([{ path: "ctx/x-9f3a/a.ts", content: "lib content", tokens: 1, tokensIn: 1, tokensOut: 1 }]);
   check(
     "SandboxManager — appendContext dedups by ctx/<id>/ prefix",
     Array.isArray(mgr.contextPayload) && mgr.contextPayload.length === 2,
@@ -220,8 +220,13 @@ async function testSandboxManager() {
   check("SandboxManager — not alive after dispose", !mgr.isAlive);
   check("SandboxManager — discard callback fires on dispose",
     discardedCount === discardsBeforeDispose + 1, String(discardedCount));
-  await mgr.dispose(); // second dispose should not throw
-  check("SandboxManager — double dispose safe", true);
+  let doubleDisposeOk = true;
+  try {
+    await mgr.dispose(); // second dispose should not throw
+  } catch {
+    doubleDisposeOk = false;
+  }
+  check("SandboxManager — double dispose safe", doubleDisposeOk);
   check("SandboxManager — double dispose does not double discard",
     discardedCount === discardsBeforeDispose + 1, String(discardedCount));
 }

@@ -95,8 +95,10 @@ export interface RetryPolicy {
 }
 
 export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze({
-  maxAttempts: 3,
-  rateLimitMaxAttempts: 8,
+  // DOCTRINE: 15 attempts on the SAME model, then the call fails loudly. No cross-model
+  // or cross-provider fallback exists anywhere in the runtime — by design.
+  maxAttempts: 15,
+  rateLimitMaxAttempts: 15,
   baseDelayMs: 500,
   maxDelayMs: 15_000,
   throttleBaseMs: 2_000,
@@ -104,7 +106,7 @@ export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze({
 });
 
 /** Shape of the optional retry knobs on RlmConfig — kept structural to avoid a cycle. */
-export interface RetryConfigNumbers {
+interface RetryConfigNumbers {
   readonly retryMaxAttempts?: number;
   readonly rateLimitMaxAttempts?: number;
   readonly retryBaseDelayMs?: number;
@@ -142,7 +144,16 @@ export async function completeWithRetry<T>(
     readonly onRelease?: () => void;
   },
 ): Promise<T> {
-  const { policy, provider, signal, onPark, onRelease } = opts;
+  const { policy, provider, signal } = opts;
+  // Bench rec #5: a silent park is indistinguishable from a hang (the campaign watched 15
+  // attempts × 15 cooldown windows with zero output). Callers may own observability via
+  // opts.onPark; otherwise one [rlm]-prefixed warn fires per park — fail-soft, never throws.
+  const onPark =
+    opts.onPark ??
+    ((ms: number): void => {
+      console.warn(`[rlm] ${provider} parked ${Math.round(ms)}ms on provider cooldown`);
+    });
+  const { onRelease } = opts;
   const cooldown = policy.cooldown ?? sharedCooldown;
   let status: number | undefined;
   let headers: Record<string, string> | undefined;
@@ -174,10 +185,14 @@ export async function completeWithRetry<T>(
       }
       if (tries + 1 >= policy.maxAttempts) throw err;
       if (!retryableError(status, msg)) throw err;
-      await sleepMs(
-        Math.min(retryAfterMs(headers) ?? backoffMs(tries, policy.baseDelayMs, policy.maxDelayMs), policy.maxDelayMs),
-        signal,
+      const delay = Math.min(
+        retryAfterMs(headers) ?? backoffMs(tries, policy.baseDelayMs, policy.maxDelayMs),
+        policy.maxDelayMs,
       );
+      console.warn(
+        `[rlm] ${provider} attempt ${tries + 1}/${policy.maxAttempts} failed (${msg.slice(0, 140)}) — retrying in ${delay}ms`,
+      );
+      await sleepMs(delay, signal);
     }
   }
 }

@@ -17,14 +17,17 @@ import {
 
 export { contextKindOf, type ContextKind } from "./glossary.ts";
 
-export interface PromptMeta {
+interface PromptMeta {
   readonly contextType: string;
   readonly contextChars: number;
   readonly contextStats?: ContextSizeStats;
   readonly rootPrompt?: string;
+  /** SKILL.state Ξ (Workstream C): verified project facts from prior sessions. Per-run
+   *  argument only — never baked into any module-load snapshot. */
+  readonly skillBlock?: string;
 }
 
-export interface SystemPromptOptions {
+interface SystemPromptOptions {
   readonly orchestrator?: boolean;
   readonly recursion?: boolean;
   readonly maxPromptChars?: number;
@@ -88,7 +91,7 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
       parts.push(
         "",
         "**REPL API (ONLY these):** llm_query / llm_batch / llm_query_chunked / map_files /",
-        "llm_map_reduce / rlm_query / rlm_batch / spawn / await_task / list_tasks / memory.* /",
+        "llm_map_reduce / rlm_query / rlm_batch / spawn / await_task / list_tasks /",
         "list_claims. There is no search/grep_context/outline here — your task arrived WITH its",
         "world in `context`; slice it into llm prompts. rlm_query only for a disjoint path set.",
       );
@@ -110,11 +113,16 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
   );
   if (opts.orchestrator ?? true) {
     // Two counterweights, both required (paper App. B): the addendum bounds OVER-recursion
-    // (batching/cost), ENV_TIPS bounds UNDER-recursion (solving it yourself).
+    // (batching/cost), envTips() bounds UNDER-recursion (solving it yourself).
     parts.push("", orchestratorAddendum(maxPromptChars, opts.delegation ?? false), "", envTips(opts.delegation ?? false));
   }
   if (kind === "files") {
     parts.push("", LARGE_FILE_RULE_LINES.join("\n"));
+  }
+  // Ξ (Workstream C): lands BEFORE the metadata line so the task header stays last — the model
+  // reads it freshest. Verified-fact grounding precedes the fresh task statement.
+  if (meta.skillBlock !== undefined && meta.skillBlock !== "") {
+    parts.push("", meta.skillBlock);
   }
   parts.push("", buildMetadataLine(meta, maxPromptChars));
   return parts.join("\n");

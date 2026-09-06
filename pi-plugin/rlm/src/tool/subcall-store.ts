@@ -7,7 +7,7 @@
  * subcall accumulation logic.
  */
 import type { RlmEmitter, SubcallCreatedEvent, SubcallUpdatedEvent } from "./rlm-events.ts";
-import type { RlmSubcall, SubcallStatus } from "./rlm-details.ts";
+import type { RlmSubcall } from "./rlm-details.ts";
 import { EmitterListener } from "./emitter-listener.ts";
 
 type MutableSubcall = {
@@ -153,7 +153,7 @@ export class SubcallStore extends EmitterListener {
         tokens += node.tokens;
         tokensIn += node.tokensIn;
         tokensOut += node.tokensOut;
-        taken.push(Object.freeze({ ...node, status: node.status as SubcallStatus }));
+        taken.push(Object.freeze({ ...node, status: node.status }));
         this.subcalls.delete(node.id);
       }
     }

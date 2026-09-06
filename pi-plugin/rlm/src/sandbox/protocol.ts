@@ -21,7 +21,7 @@ export type WorkerRequest =
   | { readonly id: string; readonly type: "shutdown" };
 
 /** Reply the parent sends to satisfy a sub-LLM interrupt. */
-export interface LlmReply {
+interface LlmReply {
   readonly type: "llm_reply";
   readonly rid: string;
   readonly response?: string;
@@ -45,7 +45,7 @@ export interface LlmReply {
 }
 
 /** Keep-alive while the host is working and has nothing else to write. */
-export interface Heartbeat {
+interface Heartbeat {
   readonly type: "heartbeat";
 }
 
@@ -71,8 +71,8 @@ export interface WorkerResponse {
   readonly index?: number;
 }
 
-/** Canonical interrupt kinds (api_v5 + v5 ledger + memory). */
-export type InterruptKind =
+/** Canonical interrupt kinds (api_v5 + v5 ledger + SKILL.state). */
+type InterruptKind =
   | "llm_query"
   | "rlm_query"
   | "llm_batch"
@@ -81,7 +81,7 @@ export type InterruptKind =
   | "finish"
   | "add_context"
   | "ledger_claims"
-  | "memory";
+  | "skill_search";
 
 interface InterruptBase {
   readonly rid: string;
@@ -118,25 +118,21 @@ interface FinishInterrupt extends InterruptBase {
   readonly summary?: string;
 }
 
-export interface AddContextInterrupt extends InterruptBase {
+interface AddContextInterrupt extends InterruptBase {
   readonly type: "add_context";
   readonly source?: string;
 }
 
 /** v5: sandbox asks the host for the TaskLedger claims table (`list_claims()`). */
-export interface LedgerClaimsInterrupt extends InterruptBase {
+interface LedgerClaimsInterrupt extends InterruptBase {
   readonly type: "ledger_claims";
 }
 
-/** v5: sandbox reaches the durable MemoryStore (`memory.query/add/stats`). */
-export interface MemoryInterrupt extends InterruptBase {
-  readonly type: "memory";
-  readonly op: "query" | "add" | "stats";
+/** SKILL.state (Workstream E): BM25 recall over the session SkillState store. */
+interface SkillSearchInterrupt extends InterruptBase {
+  readonly type: "skill_search";
   readonly query?: string;
   readonly k?: number;
-  readonly content?: string;
-  readonly paths?: readonly string[];
-  readonly tags?: readonly string[];
 }
 
 /** A mid-exec sub-LLM/tool request from the worker. */
@@ -147,11 +143,11 @@ export type WorkerInterrupt =
   | FinishInterrupt
   | AddContextInterrupt
   | LedgerClaimsInterrupt
-  | MemoryInterrupt;
+  | SkillSearchInterrupt;
 
 export type WorkerMessage = WorkerResponse | WorkerInterrupt;
 
-export const INTERRUPT_KINDS = Object.freeze(
+const INTERRUPT_KINDS = Object.freeze(
   new Set<InterruptKind>([
     "llm_query",
     "rlm_query",
@@ -161,13 +157,11 @@ export const INTERRUPT_KINDS = Object.freeze(
     "finish",
     "add_context",
     "ledger_claims",
-    "memory",
+    "skill_search",
   ]),
 );
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
+import { isRecord } from "../util/type-guards.ts";
 
 function isWorkerResponse(value: unknown): value is WorkerResponse {
   return isRecord(value) && typeof value.id === "string" && typeof value.ok === "boolean";

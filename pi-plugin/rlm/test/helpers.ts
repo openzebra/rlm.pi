@@ -101,3 +101,17 @@ export function emptyChildResult(answer = "child"): RlmResult {
     answer, iterations: 1, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 0,
   });
 }
+
+/** Shared suite epilogue: print the failure tally and exit non-zero on failures. */
+export function finish(): void {
+  console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+/** Shared suite bootstrap: run main() with the one fatal handler (DRY across phase suites). */
+export function runSuite(main: () => Promise<void>): void {
+  main().catch((err: unknown) => {
+    console.error("FATAL", err);
+    process.exit(1);
+  });
+}

@@ -24,12 +24,9 @@ import { createSubcallGates } from "../src/util/concurrency.ts";
 import type { ChatMsg, CompleteResult } from "../src/bridge/model.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { runClaimedLeaf } from "../src/bridge/handlers/llm-query.ts";
-import { check, failureCount, MOCK_MODEL, MOCK_REGISTRY, ZERO_USAGE } from "./helpers.ts";
+import { check, finish, MOCK_MODEL, MOCK_REGISTRY, ZERO_USAGE } from "./helpers.ts";
+import { errorMessage } from "../src/util/errors.ts";
 
-function finish(): void {
-  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
-  process.exit(failureCount() === 0 ? 0 : 1);
-}
 
 // ── pure helpers ────────────────────────────────────────────────────────────────
 
@@ -88,7 +85,7 @@ function finish(): void {
   const k6 = taskKey("rlm", "flaky task", [], "m", "");
   led.tryClaim({ kind: "rlm", prompt: "flaky task", paths: [], depth: 1 }, k6);
   let rejected = "";
-  void led.waitFor(k6).catch((e: Error) => { rejected = e.message; });
+  void led.waitFor(k6).catch((err: unknown) => { rejected = errorMessage(err); });
   led.fail(k6, "boom");
   await new Promise((r) => setTimeout(r, 1));
   check("fail: waiter rejected", rejected === "boom");
@@ -172,8 +169,8 @@ function finish(): void {
   const s1 = await handlers.rlmQuery("study the ledger module", 0, { detached: false });
   const s2 = await handlers.rlmQuery("study the ledger module", 0, { detached: false });
   const [a1, a2] = await Promise.all([
-    handlers.awaitTask(s1.task_id ?? "", undefined, undefined, 0, { detached: false }).then((r) => String((r as { result?: string }).result ?? "")),
-    handlers.awaitTask(s2.task_id ?? "", undefined, undefined, 0, { detached: false }).then((r) => String((r as { result?: string }).result ?? "")),
+    handlers.awaitTask(s1.task_id ?? "", undefined, undefined, 0, { detached: false }).then((r) => (r.ok && typeof r.result === "string" ? r.result : "")),
+    handlers.awaitTask(s2.task_id ?? "", undefined, undefined, 0, { detached: false }).then((r) => (r.ok && typeof r.result === "string" ? r.result : "")),
   ]);
   check("dup_spawn: one runner for identical tasks", childRuns === 1, `childRuns=${childRuns}`);
   check("dup_spawn: both awaiters got the same answer", a1 === a2 && a1.startsWith("child-"), `${a1} | ${a2}`);
@@ -182,7 +179,7 @@ function finish(): void {
   ledger.beginRun("study the payment flow end to end");
   const echoRes = await handlers.rlmQuery("study the payment flow end to end", 0, { detached: false });
   const echoOut = await handlers.awaitTask(echoRes.task_id ?? "", undefined, undefined, 0, { detached: false })
-    .then((r) => String((r as { result?: string }).result ?? ""));
+    .then((r) => (r.ok && typeof r.result === "string" ? r.result : ""));
   check("echo: handler returns the stub", echoOut === ECHO_STUB, echoOut.slice(0, 40));
   check("echo: no engine ran for the echo", childRuns === 1, `childRuns=${childRuns}`);
 
@@ -236,9 +233,9 @@ function finish(): void {
   check("R4: both demoted spawns are llm", s1.kind === "llm" && s2.kind === "llm", `${s1.kind}/${s2.kind}`);
   const [a1, a2] = await Promise.all([
     handlers.awaitTask(s1.task_id ?? "", undefined, undefined, 0, { detached: false })
-      .then((r) => String((r as { result?: string }).result ?? "")),
+      .then((r) => (r.ok && typeof r.result === "string" ? r.result : "")),
     handlers.awaitTask(s2.task_id ?? "", undefined, undefined, 0, { detached: false })
-      .then((r) => String((r as { result?: string }).result ?? "")),
+      .then((r) => (r.ok && typeof r.result === "string" ? r.result : "")),
   ]);
   check("R4: identical demoted prompts call complete1 once", leafExecs === 1, `leafExecs=${leafExecs}`);
   check("R4: second demoted spawn coalesced on the ledger", ledger.hits().exact >= 1, JSON.stringify(ledger.hits()));
@@ -271,7 +268,7 @@ function finish(): void {
     registry: MOCK_REGISTRY,
     config,
     emitter: new RlmEmitter(),
-    complete: script as unknown as import("../src/core/iteration.ts").CompleteFn,
+    complete: script,
   });
   const out = await engine({ rootPrompt: "ledger engine test", context: "ctx", depth: 0, ledger });
   check("engine: run completes with the ledger wired", out.answer === "ok-ledger", out.answer.slice(0, 40));
@@ -318,11 +315,11 @@ function finish(): void {
   led.markRunning(k);
   check("H4: markRunning flips pending → running", led.listClaims().includes("running"));
   const t0 = Date.now();
-  const timedOut = await led.waitFor(k, 50).then(() => false, (e: Error) => e.message.includes("timeout"));
+  const timedOut = await led.waitFor(k, 50).then(() => false, (err: unknown) => errorMessage(err).includes("timeout"));
   check("H1: waitFor times out instead of parking forever", timedOut && Date.now() - t0 < 2_000, `${Date.now() - t0}ms`);
   // A late waiter on an ERRORED claim rejects immediately.
   led.fail(k, "runner died");
-  const rejected = await led.waitFor(k).then(() => "", (e: Error) => e.message);
+  const rejected = await led.waitFor(k).then(() => "", (err: unknown) => errorMessage(err));
   check("H1: waitFor on errored claim rejects", rejected.includes("failed"), rejected);
   // The errored key is claimable again by a new runner.
   const again = led.tryClaim({ kind: "rlm", prompt: "slow runner", paths: [], depth: 1 }, k);
@@ -417,7 +414,7 @@ function finish(): void {
     taskKey("rlm", task, [], "m", ""),
   );
   check("BUG-1: exact re-spawn of a finished claim COALESCES (done twin)",
-    d2.type === "coalesce" && d2.done === true, JSON.stringify(d2));
+    d2.type === "coalesce" && d2.done, JSON.stringify(d2));
 
   // C3 still holds where v5 says it does: a child restating a RUNNING engine's root.
   const c3 = new TaskLedger();

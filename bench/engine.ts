@@ -12,6 +12,7 @@
 // incompatible copy of the Model/ModelRegistry types from the repo-root package.
 import { createEngine, type EngineDeps } from "../pi-plugin/rlm/src/core/engine.ts";
 import { DEFAULT_CONFIG } from "../pi-plugin/rlm/src/config/defaults.ts";
+import type { SkillStore } from "../pi-plugin/rlm/src/config/skillstate.ts";
 import { RlmEmitter } from "../pi-plugin/rlm/src/tool/rlm-events.ts";
 import type { RlmConfig, RunRlm, Sampling } from "../pi-plugin/rlm/src/core/types.ts";
 
@@ -100,6 +101,9 @@ export interface BenchRunOpts {
   readonly reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   /** Real USD-per-token prices (see fetchPricing); default zeros (only listings run without). */
   readonly pricing?: BenchPricing;
+  /** Hydrated SkillState store — without it the ON arm's SkillState features are inert
+   *  (engine runs as-built whenever deps.skillStore is undefined). Wire from run.ts. */
+  readonly skillStore?: SkillStore;
 }
 
 /**
@@ -162,7 +166,6 @@ export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts
     retryMaxAttempts: 5,
     retryBaseDelayMs: 1_000,
     retryMaxDelayMs: 30_000,
-    enableMemory: false, // keep bench runs isolated from durable notes
     autoSeedCwd: false, // tasks carry explicit context; never sweep the repo into a run
     // Paper-tier tasks carry 100–400k-char contexts; the budget cascade caps a task at
     // contextWindow × budgetShare (≈33k tokens on a 131k window) — below the raw context
@@ -170,6 +173,11 @@ export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts
     // unit tests (test/budget.ts); the bench measures capability, so it runs without it.
     // Runs stay bounded by maxIterations + maxErrors.
     enableTokenBudget: false,
+    // A/B toggles: RLM_BENCH_NO_RUNSTATE=1 / RLM_BENCH_NO_SKILLSTATE=1 revert the
+    // corresponding integration (Σ-state compaction / persistent skill grounding) to the
+    // pre-integration baseline. Defaults follow DEFAULT_CONFIG (both ON).
+    enableRunState: process.env.RLM_BENCH_NO_RUNSTATE !== "1",
+    enableSkillState: process.env.RLM_BENCH_NO_SKILLSTATE !== "1",
     // Sampling comes from the ONE bench assembly (benchSampling) — the parity test drives it
     // through the real engine so the two wirings cannot drift.
     rootSampling: benchSampling(opts).root,
@@ -182,5 +190,6 @@ export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts
     registry,
     config,
     emitter: new RlmEmitter(),
+    ...(opts?.skillStore === undefined ? {} : { skillStore: opts.skillStore }),
   });
 }

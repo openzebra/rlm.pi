@@ -1,0 +1,126 @@
+{
+  "model": "openrouter/qwen/qwen3-8b",
+  "persona": "thinking",
+  "generatedAt": "2026-09-04T21:54:51.848Z",
+  "successRate": {
+    "ok": true,
+    "value": 0.4444444444444444
+  },
+  "hallucinationRate": {
+    "ok": true,
+    "value": 0.1111111111111111
+  },
+  "patchFailureRate": {
+    "ok": true,
+    "value": 0.6666666666666666
+  },
+  "costUsd": {
+    "ok": true,
+    "value": 0
+  },
+  "tokens": {
+    "input": 317535,
+    "output": 39770
+  },
+  "results": [
+    {
+      "fixtureId": "lookup-session-ttl",
+      "category": "lookup",
+      "answer": "3600",
+      "pass": true,
+      "hallucinated": false,
+      "tokensIn": 6126,
+      "tokensOut": 1285,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "lookup-rate-limit",
+      "category": "lookup",
+      "answer": "120",
+      "pass": true,
+      "hallucinated": false,
+      "tokensIn": 30401,
+      "tokensOut": 3979,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "lookup-retry-formula",
+      "category": "lookup",
+      "answer": "RETRY_BASE_DELAY_MS",
+      "pass": true,
+      "hallucinated": false,
+      "tokensIn": 16401,
+      "tokensOut": 1324,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "trap-oauth-provider",
+      "category": "trap",
+      "answer": "The file `src/auth/session.ts` could not be located in the provided paths. Verify the file exists at the specified location (e.g., `/Users/hicaru/projects/zebra/rlm.pi/src/auth/session.ts`) and ensure the path is correct. If the file is in a different directory (e.g., `src/auth/providers/`), provide the exact absolute path for further analysis.",
+      "pass": false,
+      "hallucinated": false,
+      "tokensIn": 47476,
+      "tokensOut": 7104,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "trap-webhook-config",
+      "category": "trap",
+      "answer": "The WEBHOOK_SECRET value is not configured in the provided files. The only file (`src/config/limits.ts`) contains `MAX_UPLOAD_MB` and `RATE_LIMIT_RPM`, but no `WEBHOOK_SECRET` configuration.",
+      "pass": false,
+      "hallucinated": false,
+      "tokensIn": 46932,
+      "tokensOut": 4331,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "trap-circuit-breaker",
+      "category": "trap",
+      "answer": "The CircuitBreaker class is not defined in `src/net/retry.ts`. The file contains only retry policy constants (`RETRY_BASE_DELAY_MS`, `RETRY_MAX_ATTEMPTS`) and a `backoff()` function.",
+      "pass": false,
+      "hallucinated": true,
+      "tokensIn": 47856,
+      "tokensOut": 4339,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "patch-bump-upload-limit",
+      "category": "patch",
+      "answer": "{\"file\": \"src/config/limits.ts\", \"op\": \"replace\", \"anchor\": \"export const MAX_UPLOAD_MB = 25;\", \"newText\": \"export const MAX_UPLOAD_MB = 50;\"}",
+      "pass": true,
+      "hallucinated": false,
+      "patch": {
+        "file": "src/config/limits.ts",
+        "op": "replace",
+        "anchor": "export const MAX_UPLOAD_MB = 25;",
+        "newText": "export const MAX_UPLOAD_MB = 50;"
+      },
+      "patchAppliedOk": true,
+      "tokensIn": 28122,
+      "tokensOut": 3374,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "patch-retry-attempts",
+      "category": "patch",
+      "answer": "{\"file\":\"src/net/retry.ts\",\"op\":\"edit\",\"anchor\":2,\"newText\":\"export const RETRY_MAX_ATTEMPTS = 5;\"}",
+      "pass": false,
+      "hallucinated": false,
+      "patchAppliedOk": false,
+      "tokensIn": 47485,
+      "tokensOut": 6251,
+      "costUsd": 0
+    },
+    {
+      "fixtureId": "patch-session-comment",
+      "category": "patch",
+      "answer": "```repl\nanswer = {\"file\": \"src/auth/session.ts\", \"op\": \"insert\", \"anchor\": 2, \"newText\": \"// sessions expire after one hour\", \"ready\": True}\nprint(answer)\n```",
+      "pass": false,
+      "hallucinated": false,
+      "patchAppliedOk": false,
+      "tokensIn": 46736,
+      "tokensOut": 7783,
+      "costUsd": 0
+    }
+  ]
+}

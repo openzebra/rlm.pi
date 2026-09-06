@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/p
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { check, failureCount } from "./helpers.ts";
+import { check, failureCount, runSuite } from "./helpers.ts";
 import {
   contextEntryPath,
   contextNamespace,
@@ -28,11 +28,19 @@ import { pinContext, pinnedCount } from "../src/sandbox/context-file.ts";
 import { buildAddContextHandler } from "../src/bridge/add-context.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
+import { isRecord } from "../src/util/type-guards.ts";
 
 /** Match `ctx/<basename>-<8hex>/…` fingerprinted prefixes. */
 function hasCtxPrefix(path: string | undefined, basename: string): boolean {
   if (path === undefined) return false;
   return new RegExp(`^ctx/${basename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[0-9a-f]{8}/`).test(path);
+}
+
+/** Path of the first packed context file - narrowed, never an `any` leak. */
+function firstPath(payload: unknown): string | undefined {
+  if (!Array.isArray(payload) || payload.length === 0) return undefined;
+  const first: unknown = payload[0];
+  return isRecord(first) && typeof first.path === "string" ? first.path : undefined;
 }
 
 async function main() {
@@ -48,8 +56,8 @@ async function main() {
       r1.ok
         && Array.isArray(r1.value.payload)
         && r1.value.files === 1
-        && hasCtxPrefix(r1.value.payload[0]?.path, "doc.md"),
-      r1.ok ? `path=${r1.value.payload[0]?.path} chars=${r1.value.chars}` : r1.error,
+        && hasCtxPrefix(firstPath(r1.value.payload), "doc.md"),
+      r1.ok ? `path=${String(firstPath(r1.value.payload))} chars=${r1.value.chars}` : r1.error,
     );
     check(
       "resolver: chars equals content length (not JSON length)",
@@ -66,8 +74,8 @@ async function main() {
       r2.ok
         && Array.isArray(r2.value.payload)
         && r2.value.files === 1
-        && hasCtxPrefix(r2.value.payload[0]?.path, "extlib"),
-      r2.ok ? `files=${r2.value.files} path=${r2.value.payload[0]?.path}` : r2.error,
+        && hasCtxPrefix(firstPath(r2.value.payload), "extlib"),
+      r2.ok ? `files=${r2.value.files} path=${String(firstPath(r2.value.payload))}` : r2.error,
     );
 
     // 3. Resolver: missing path + bad scheme
@@ -438,8 +446,9 @@ async function main() {
     const payload = [{ path: "p.ts", content: "shared", tokens: 1 }];
     const [pinA, pinB] = await Promise.all([pinContext(payload), pinContext(payload)]);
     check("pin: concurrent holders share one file", pinA.path === pinB.path, pinA.path);
+    const pinParsed: unknown = JSON.parse(await readFile(pinA.path, "utf-8"));
     check("pin: content is the serialized payload",
-      JSON.parse(await readFile(pinA.path, "utf-8"))[0].content === "shared");
+      Array.isArray(pinParsed) && pinParsed.length > 0 && isRecord(pinParsed[0]) && pinParsed[0].content === "shared");
     await pinA.release();
     check("pin: file survives while a holder remains", existsSync(pinB.path));
     await pinB.release();
@@ -714,8 +723,8 @@ async function main() {
       check(
         "live: shallow clone + pack Hello-World",
         live.ok && Array.isArray(live.value.payload) && live.value.files >= 1
-          && hasCtxPrefix(live.value.payload[0]?.path, "Hello-World"),
-        live.ok ? `files=${live.value.files} path=${live.value.payload[0]?.path}` : live.error,
+          && hasCtxPrefix(firstPath(live.value.payload), "Hello-World"),
+        live.ok ? `files=${live.value.files} path=${String(firstPath(live.value.payload))}` : live.error,
       );
     }
   } finally {
@@ -730,7 +739,4 @@ async function main() {
   console.log("\nAll phase-context checks passed.");
 }
 
-main().catch((e: unknown) => {
-  console.error(e);
-  process.exit(1);
-});
+runSuite(main);

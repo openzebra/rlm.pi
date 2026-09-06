@@ -66,7 +66,6 @@ const server: Server = createServer((req, res) => {
       + "data: [DONE]\n\n",
     );
   });
-  void req;
 });
 
 await new Promise<void>((resolve) => { server.listen(0, "127.0.0.1", resolve); });
@@ -219,9 +218,19 @@ async function main(): Promise<void> {
         seen[seen.length] = deps;
         return createEngine(deps);
       }
+
+      /** Public test seam over the protected buildEngine (audit-R7). */
+      exposeBuildEngine(args: {
+        readonly ctx: ExtensionContext;
+        readonly models: { readonly model: Model<Api>; readonly llm: Model<Api> };
+        readonly signal: AbortSignal;
+        readonly emitter: RlmEmitter;
+      }): RunRlm {
+        return this.buildEngine(args);
+      }
     }
     const ctrl = new ProbeController(config);
-    ctrl.buildEngine({
+    ctrl.exposeBuildEngine({
       ctx: { modelRegistry: MOCK_REGISTRY } as unknown as ExtensionContext,
       models: { model: wireModel(false), llm: wireModel(false) },
       signal: new AbortController().signal,
@@ -239,7 +248,6 @@ async function main(): Promise<void> {
     check("gate: reasoning:true model keeps the level (unit)", effectiveReasoning(reasoner, "high") === "high");
     check("gate: absent level stays absent (unit)", effectiveReasoning(reasoner, undefined) === undefined);
 
-    const bodiesBefore = bodies.length;
     await modelComplete([{ role: "user", content: "gate probe" }], {
       model: plain,
       registry: MOCK_REGISTRY,
@@ -332,12 +340,12 @@ async function main(): Promise<void> {
   // ── 9. verification-discipline nudge (enableVerificationNudge, default OFF) ──
   {
     const ready = (a: string): string => repl(`answer["content"] = ${JSON.stringify(a)}\nanswer["ready"] = True`);
-    const nudgeCfg = (mi: number): RlmConfig => cfg({ maxIterations: mi, enableMemory: false, enableLedger: false, enableVerificationNudge: true });
+    const nudgeCfg = (mi: number): RlmConfig => cfg({ maxIterations: mi, enableLedger: false, enableVerificationNudge: true });
 
     // Default OFF: an early bare answer is accepted exactly as before (guardrail).
     {
       const { complete, calls } = captureComplete([ready("7")]);
-      const engine = createEngine({ model: wireModel(false), llmModel: wireModel(false), registry: MOCK_REGISTRY, config: cfg({ maxIterations: 6, enableMemory: false, enableLedger: false }), emitter: new RlmEmitter(), complete });
+      const engine = createEngine({ model: wireModel(false), llmModel: wireModel(false), registry: MOCK_REGISTRY, config: cfg({ maxIterations: 6, enableLedger: false }), emitter: new RlmEmitter(), complete });
       const out = await engine({ rootPrompt: "nudge-off-9411", context: "ctx", depth: 0 });
       check("nudge: default OFF accepts the early bare answer", out.answer === "7" && calls.length === 1);
     }

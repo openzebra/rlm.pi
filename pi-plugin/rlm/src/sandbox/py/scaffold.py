@@ -10,6 +10,7 @@ without any packaging step (same mechanism as guards.py / retrieval.py / tasks.p
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -35,28 +36,6 @@ from tasks import (
     _spawnable,
     Task,
 )
-
-
-class _MemoryApi:
-    """v5 durable memory surface — thin shims over the `memory` interrupt.
-
-    memory.query(q, k=8) → retrieved notes; memory.add(text, paths=…, tags=…) → status;
-    memory.stats() → store counters. All calls block on the host RPC like add_context does.
-    """
-
-    def __init__(self, worker: "WorkerScaffold"):
-        self._w = worker
-
-    def query(self, q, k: int = 8) -> str:
-        return self._w._memory_rpc("query", {"query": str(q), "k": int(k)})
-
-    def add(self, text, paths=None, tags=None) -> str:
-        p = [str(x) for x in (paths or [])]
-        t = [str(x) for x in (tags or [])]
-        return self._w._memory_rpc("add", {"content": str(text), "paths": p, "tags": t})
-
-    def stats(self) -> str:
-        return self._w._memory_rpc("stats", {})
 
 
 class WorkerScaffold:
@@ -596,20 +575,34 @@ class WorkerScaffold:
             )
         return self._start_rlm_batch(list(p), paths)
 
+    def _skill_search(self, query: str, k: int = 8) -> list[dict[str, Any]]:
+        """SkillState recall: BM25 over distilled facts from PRIOR sessions (host-side store).
+
+        Free: no sub-LLM call. Returns [{id, text, tags, score}] — "symbol"/"config" notes
+        about this exact project learned in earlier runs. Errors surface as a text hit, never
+        a raise: a missing store must not crash a cell.
+        """
+        if not isinstance(query, str) or not query.strip():
+            raise TypeError("skill_search() needs a non-empty query string")
+        r = self._rpc("skill_search", {"query": query, "k": max(1, min(32, int(k)))})
+        if r.get("error"):
+            return [{"id": "", "text": f"Error: {r['error']}", "tags": [], "score": 0.0}]
+        raw = r.get("response")
+        if isinstance(raw, str) and raw:
+            if raw.startswith("Error:"):
+                return [{"id": "", "text": raw, "tags": [], "score": 0.0}]
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                return [{"id": "", "text": "Error: malformed skill_search reply", "tags": [], "score": 0.0}]
+            return parsed if isinstance(parsed, list) else []
+        return []
+
     def _list_claims(self) -> str:
         """v5 blackboard: the host TaskLedger's claims table (inflight + done work)."""
         r = self._rpc("ledger_claims", {})
         if r.get("error"):
             return f"Error: {r['error']}"
         return str(r.get("response") or "ledger: no claims")
-
-    def _memory_rpc(self, op: str, payload: dict[str, Any]) -> str:
-        r = self._rpc("memory", {"op": op, **payload})
-        if r.get("error"):
-            return f"Error: {r['error']}"
-        return str(r.get("response") or "")
-
-    def _memory_api(self) -> "_MemoryApi":
-        return _MemoryApi(self)
 
     # ---- context + execution --------------------------------------------------------------

@@ -3,7 +3,6 @@
  * Run: bun run pi-plugin/rlm/test/phase-finish-warn.ts
  */
 
-import { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { MOCK_REGISTRY } from "./helpers.ts";
 import { check, failureCount } from "./helpers.ts";
 import {
@@ -43,7 +42,7 @@ check("spawn registered", pending.task_id === "task_pending_1");
 check("unawaited lists id", registry.awaitDeps.unawaitedIds().includes("task_pending_1"));
 
 const fin = await handlers.finishTask("done", 0, ATTACHED);
-check("finish ok", fin.ok === true && fin.finished === true);
+check("finish ok", fin.ok && fin.finished);
 check(
   "finish warns on pending",
   typeof (fin as { warning?: string }).warning === "string"

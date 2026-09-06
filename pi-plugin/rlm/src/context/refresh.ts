@@ -69,7 +69,7 @@ export function upsertContextFile(
       item !== null &&
       typeof item === "object" &&
       "path" in item &&
-      typeof (item as { path: unknown }).path === "string" &&
+      typeof (item).path === "string" &&
       pathMatches((item as { path: string }).path, path, cwd)
     ) {
       next[n++] = entry;

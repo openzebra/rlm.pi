@@ -13,12 +13,13 @@
 
 import { execFile } from "node:child_process";
 import type { Dirent } from "node:fs";
-import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
+import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { SkipReason } from "./types.ts";
 
-const execFileP = promisify(execFile);
+/** Shared promisified execFile (git listing) — source-git.ts reuses it (DRY). */
+export const execFileP = promisify(execFile);
 
 /** 8KB probe window for the NUL-byte binary check. */
 const BINARY_PROBE_BYTES = 8 * 1024;
@@ -94,7 +95,7 @@ function absKey(path: string): string {
 }
 
 /** True when `fileAbs` is `rootAbs` or a descendant (prefix + separator). */
-export function isInsideRoot(fileAbs: string, rootAbs: string): boolean {
+function isInsideRoot(fileAbs: string, rootAbs: string): boolean {
   const root = absKey(rootAbs);
   const file = absKey(fileAbs);
   if (file === root) return true;
@@ -102,7 +103,7 @@ export function isInsideRoot(fileAbs: string, rootAbs: string): boolean {
   return file.startsWith(prefix);
 }
 
-export type PathSafety =
+type PathSafety =
   | { readonly ok: true; readonly realAbs: string }
   | { readonly ok: false; readonly reason: Extract<SkipReason, "sensitive" | "symlink-escape" | "unreadable"> };
 
@@ -147,7 +148,7 @@ export async function checkPathSafety(absPath: string, packRoot: string): Promis
  * Paths are returned raw from git (forward-slashed). Sensitive paths are NOT filtered here —
  * packDirectory reports them as skipped: "sensitive" so the drop is visible.
  */
-export async function gitFiles(cwd: string, signal?: AbortSignal): Promise<readonly string[] | undefined> {
+async function gitFiles(cwd: string, signal?: AbortSignal): Promise<readonly string[] | undefined> {
   try {
     const { stdout } = await execFileP(
       "git",
@@ -239,12 +240,3 @@ export async function enumerateFiles(root: string, signal?: AbortSignal): Promis
   return await walkFs(root, signal);
 }
 
-/** True when a path exists and is a regular file (or symlink to one). */
-export async function isRegularFile(absPath: string): Promise<boolean> {
-  try {
-    const s = await stat(absPath);
-    return s.isFile();
-  } catch {
-    return false;
-  }
-}

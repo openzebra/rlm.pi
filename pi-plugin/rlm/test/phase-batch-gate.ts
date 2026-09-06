@@ -16,7 +16,6 @@
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { MOCK_REGISTRY } from "./helpers.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import { createSubcallHandlers, limitsFromRemaining } from "../src/bridge/handlers/index.ts";

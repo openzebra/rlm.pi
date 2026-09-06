@@ -131,7 +131,7 @@ print(g["hits"][0]["snippet"][:20] if g["hits"] else "")
       depth: 1,
       handlers: {
         llmBatch: async (prompts, _depth, opts) => {
-          seen.push(opts.detached === true);
+          seen.push(opts.detached);
           return prompts.map((p) => `ok:${p.slice(0, 8)}`);
         },
       },

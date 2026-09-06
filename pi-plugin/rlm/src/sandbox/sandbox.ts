@@ -27,6 +27,10 @@ import { trace, traceEnabled } from "../util/trace.ts";
 
 export type { AddContextResult, SubcallOpts, SubLlmHandlers } from "./interrupts.ts";
 
+/** Event-loop guard: frames are model/summary-sized by construction; payloads travel via temp
+ *  files, never the wire. Anything near this cap is a runaway producer — drop it. */
+const MAX_FRAME_CHARS = 8_000_000;
+
 export interface SandboxOptions {
   /** Sandbox recursion depth label (passed to the worker, used in interrupt routing). */
   readonly depth?: number;
@@ -139,7 +143,7 @@ export class PythonSandbox {
       // windowsHide: without it each sandbox flashes a console window on Windows (pi sets
       // this on every spawn — bash.ts / shell.ts). Same Windows surface as issue #7.
       { stdio: ["pipe", "pipe", "pipe"], env: sanitizedEnv(), windowsHide: true },
-    ) as ChildProcessWithoutNullStreams;
+    );
 
     this.proc.stdout.setEncoding("utf8");
     this.proc.stdout.on("data", (chunk: string) => this.onData(chunk));
@@ -262,7 +266,8 @@ export class PythonSandbox {
       this.pending.set("_init", {
         resolve: (res) => {
           clearTimeout(timer);
-          res.ok ? resolve() : reject(new Error(res.error ?? "worker init failed"));
+          if (res.ok) resolve();
+          else reject(new Error(res.error ?? "worker init failed"));
         },
         reject,
         timer,
@@ -299,7 +304,7 @@ export class PythonSandbox {
         settle(value);
       };
       this.pending.set(id, { resolve: once(resolve), reject: once(reject), timer, requestType: payload.type });
-      this.send({ id, ...payload } as ParentMessage);
+      this.send({ id, ...payload });
     });
   }
 
@@ -356,7 +361,12 @@ export class PythonSandbox {
       this.appendStderr(`[rlm] dropped '${msg.type}' frame: worker ${this.exitDescription()}\n`);
       return;
     }
-    this.proc.stdin.write(`${JSON.stringify(msg)}\n`);
+    const frame = JSON.stringify(msg);
+    if (frame.length > MAX_FRAME_CHARS) {
+      this.appendStderr(`[rlm] dropped '${msg.type}' frame: ${frame.length} chars exceed the frame cap\n`);
+      return;
+    }
+    this.proc.stdin.write(`${frame}\n`);
   }
 
   /**
@@ -391,6 +401,13 @@ export class PythonSandbox {
 
   private onData(chunk: string): void {
     this.buf += chunk;
+    // Untrusted-stream guard: a worker that stops emitting newlines would otherwise balloon
+    // this buffer without bound and stall the pump. Reset (both cursors) and keep draining.
+    if (this.buf.length > MAX_FRAME_CHARS) {
+      this.appendStderr(`\n[protocol] stdout buffer exceeded ${MAX_FRAME_CHARS} chars without a newline — truncated\n`);
+      this.buf = "";
+      this.scanOffset = 0;
+    }
     let nl: number;
     while ((nl = this.buf.indexOf("\n", this.scanOffset)) >= 0) {
       const line = this.buf.slice(this.scanOffset, nl).trim();

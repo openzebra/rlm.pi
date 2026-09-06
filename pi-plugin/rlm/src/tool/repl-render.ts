@@ -12,7 +12,7 @@ const EXPANDED_STDERR_CHARS = 500;
 
 // ── Collapsed view ──
 
-export function replStats(details: ReplDetails, theme: Theme): string {
+function replStats(details: ReplDetails, theme: Theme): string {
   const elapsed = details.executionTimeMs > 0 ? `${details.executionTimeMs}ms` : undefined;
   return cardStatsLine(details.totals, theme, elapsed, details.backgroundPending);
 }

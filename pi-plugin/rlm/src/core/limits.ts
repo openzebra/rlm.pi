@@ -24,7 +24,7 @@ export function limitsFromConfig(config: Limits): Limits {
 }
 
 /** Point-in-time totals for a run. */
-export interface UsageSnapshot {
+interface UsageSnapshot {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly costUsd: number;

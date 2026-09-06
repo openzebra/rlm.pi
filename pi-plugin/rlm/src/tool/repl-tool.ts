@@ -29,7 +29,6 @@ import { SandboxManager } from "../sandbox/sandbox-manager.ts";
 import type { SubcallOpts } from "../sandbox/sandbox.ts";
 import { createSubcallHandlers, type Invocation } from "../bridge/handlers/index.ts";
 import { TaskLedger } from "../core/ledger.ts";
-import type { MemoryStore } from "../core/memory.ts";
 import { BackgroundTasks } from "./background-tasks.ts";
 import type { ReplResult } from "../sandbox/protocol.ts";
 import { RlmEmitter } from "./rlm-events.ts";
@@ -38,17 +37,20 @@ import { SubcallStore } from "./subcall-store.ts";
 import type { ReplDetails } from "./repl-details.ts";
 import type { RlmSubcall } from "./rlm-details.ts";
 import { createEngine } from "../core/engine.ts";
+import type { RunState } from "../core/run-state.ts";
 import { modelRef } from "../config/settings.ts";
 import { spinnerFrame } from "../ui/theme.ts";
-import { previewText } from "../text/preview.ts";
+import { CALL_PREVIEW_CHARS, previewText } from "../text/preview.ts";
 import { errorMessage } from "../util/errors.ts";
+import {
+  groundLeafPrompt,
+  skillSearchHandler,
+  type SkillStore,
+} from "../config/skillstate.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 import { buildReplResultText, collectReplWarnings } from "./repl-result.ts";
 import { renderReplCollapsed, renderReplExpanded } from "./repl-render.ts";
 import { attachTracer, trace, traceEnabled } from "../util/trace.ts";
-
-/** Chars of code shown on the tool call line. */
-const CALL_PREVIEW_CHARS = 80;
 
 /** Last non-empty line of a Python traceback — the `TypeError: …` line, not the frames. */
 function lastLine(text: string): string {
@@ -62,7 +64,7 @@ function lastLine(text: string): string {
 
 // ── Parameter schema ──
 
-export const ReplToolParams = Object.freeze(Type.Object({
+const ReplToolParams = Object.freeze(Type.Object({
   code: Type.String({ description: "Python code to execute in the persistent REPL sandbox" }),
 }));
 
@@ -103,7 +105,7 @@ class NativeBridgeState {
 
 // ── Tool factory ──
 
-export interface ReplToolDeps {
+interface ReplToolDeps {
   readonly sandboxManager: SandboxManager;
   readonly model: Model<Api>;
   readonly llmModel: Model<Api>;
@@ -119,10 +121,14 @@ export interface ReplToolDeps {
   readonly resolveGates?: () => SubcallGates;
   /** Session-scoped home for detached spawn() work. */
   readonly background: BackgroundTasks;
+  /** SKILL.state (Workstream B): session store — leaf grounding, skill_search, child Ξ. */
+  readonly skillStore?: SkillStore;
+  /** Root Σ (WS-4): engine-finalize Σ observer, forwarded to createEngine (one seam). */
+  readonly onRunState?: (state: RunState) => void;
+  /** Ξ composer for repl()-spawned child engines (first hop; deeper hops copy via childRun). */
+  readonly getSkillBlock?: (task: string) => string | undefined;
   /** Session tree panel index; omitted → runs don't appear in the widget. */
   readonly runRegistry?: RunRegistry;
-  /** v5 durable memory (session-wide `.rlm` store); omitted → memory off for this tool. */
-  readonly memory?: MemoryStore;
   readonly signal?: AbortSignal;
   readonly onUsage?: (usage: Usage, role: "sub") => void;
   readonly ensureContext?: () => Promise<void>;
@@ -149,25 +155,40 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
   const getModel = (): Model<Api> => deps.getModel?.() ?? deps.model;
   // v5 (audit C6): resolve lazily per call so provider-cap edits via /rlm-config apply live.
   const currentGates = (): SubcallGates => deps.resolveGates?.() ?? deps.gates;
+  // Workstream D: leaf grounding — one closure, self-gating on the live config.
+  const groundLeaf = (prompt: string): string => {
+    const store = deps.skillStore;
+    const cfg = getConfig();
+    if (store === undefined || !cfg.enableSkillState) return prompt;
+    return groundLeafPrompt(store, cfg, prompt);
+  };
 
   // Each rlm_query spawns a child RLM with its own sandbox and turn loop, not a flat
   // one-shot llm_query. The engine is created per call so the child's subcalls, turn
   // progress and cost deltas land on the emitter the parent invocation is using.
-  const runChild = (input: RlmInput, inv: Invocation): Promise<RlmResult> => createEngine({
-    model: getModel(),
-    llmModel: getLlmModel(),
-    registry,
-    config: getConfig(),
-    signal,
-    memory: deps.memory,
-    gates: currentGates(),
-    // Same emitter the parent subcall node lives on — see SubcallHandlerDeps.runChild.
-    emitter: inv.emitter,
-    // Everything a child engine spends is sub-work from this tool's perspective, including
-    // the child's own root turns — so fold both roles into "sub" rather than casting.
-    onUsage: onUsage === undefined ? undefined : (usage: Usage) => onUsage(usage, "sub"),
-    limits: limitsFromConfig(getConfig()),
-  })(input);
+  const runChild = (input: RlmInput, inv: Invocation): Promise<RlmResult> => {
+    // Ξ inheritance, first hop (Workstream C): a repl()-spawned child has no parent RlmInput
+    // to copy from, so the session store composes the block for its task here. Deeper hops
+    // copy input.skillBlock inside childRun (DRY #6 — one construction site).
+    const block = input.skillBlock ?? deps.getSkillBlock?.(input.rootPrompt);
+    const childInput: RlmInput = block === undefined ? input : { ...input, skillBlock: block };
+    return createEngine({
+      model: getModel(),
+      llmModel: getLlmModel(),
+      registry,
+      config: getConfig(),
+      signal,
+      gates: currentGates(),
+      // Same emitter the parent subcall node lives on — see SubcallHandlerDeps.runChild.
+      emitter: inv.emitter,
+      // Everything a child engine spends is sub-work from this tool's perspective, including
+      // the child's own root turns — so fold both roles into "sub" rather than casting.
+      onUsage: onUsage === undefined ? undefined : (usage: Usage) => onUsage(usage, "sub"),
+      limits: limitsFromConfig(getConfig()),
+      skillStore: deps.skillStore,
+      onRunState: deps.onRunState,
+    })(childInput);
+  };
 
   // Built once: the same closures stay correct across repl() calls because everything
   // per-invocation is reached through bridgeState.resolve, not captured here.
@@ -188,8 +209,10 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     // earlier repl() reaches a child spawned in a later one. Populated before any interrupt can
     // fire: execute() awaits ensureContext() before getOrCreate().
     getChildContext: () => sandboxManager.contextPayload ?? undefined,
+    // SKILL.state: leaf grounding (Workstream D) + Ξ inheritance for children (DRY #6).
+    groundLeaf,
+    getSkillBlock: (task) => deps.getSkillBlock?.(task),
     ledger: sessionLedger,
-    memory: deps.memory,
     trackDetached: (task) => background.track(task),
   });
 
@@ -322,7 +345,8 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           ...subcallHandlers,
           ...(contextBundle?.handlers ?? {}),
           ledgerClaims: () => Promise.resolve(sessionLedger.listClaims()),
-          memoryOp: (op, args) => Promise.resolve(deps.memory?.serviceOp(op, args) ?? "memory off"),
+          // SKILL.state (Workstream E): the model-visible recall surface — one function.
+          skillSearch: skillSearchHandler(() => (getConfig().enableSkillState ? deps.skillStore : undefined)),
         });
 
         // Detect queue contention AFTER sandbox init (initPromise settled, isExecuting now accurate)

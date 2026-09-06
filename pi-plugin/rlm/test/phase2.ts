@@ -5,8 +5,7 @@
  * RLM_TEST_LIVE=1. Run: RLM_TEST_LIVE=1 bun run pi-plugin/rlm/test/phase2.ts
  */
 
-import { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { MOCK_REGISTRY } from "./helpers.ts";
+import { MOCK_REGISTRY, runSuite } from "./helpers.ts";
 import {
   createSubcallHandlers,
   limitsFromRemaining,
@@ -68,7 +67,4 @@ async function main() {
   process.exit(ok ? 0 : 1);
 }
 
-main().catch((e) => {
-  console.error("FATAL", e);
-  process.exit(1);
-});
+runSuite(main);

@@ -53,12 +53,8 @@ export interface SubLlmHandlers {
   addContext(source: string, depth: number): Promise<AddContextResult>;
   /** v5: the `[ledger]` claims table for the sandbox's `list_claims()` REPL call. */
   ledgerClaims(): Promise<string>;
-  /** v5: durable memory surface for the sandbox's `memory.query/add/stats` object. */
-  memoryOp(
-    op: "query" | "add" | "stats",
-    args: { readonly query?: string; readonly k?: number; readonly content?: string; readonly paths?: readonly string[]; readonly tags?: readonly string[] },
-    depth: number,
-  ): Promise<string>;
+  /** SKILL.state (Workstream E): BM25 over the session SkillState store; JSON hits reply. */
+  skillSearch(query: string, k: number, depth: number): Promise<unknown>;
 }
 
 function toStringArray(value: unknown): readonly string[] | undefined {
@@ -89,23 +85,23 @@ export const REJECT: SubLlmHandlers = Object.freeze({
     throw new Error("add_context not configured");
   },
   ledgerClaims: async () => UNCONFIGURED,
-  memoryOp: async () => UNCONFIGURED,
+  skillSearch: async () => UNCONFIGURED,
 });
 
 export interface ReplyBody {
-  response?: string;
-  responses?: string[];
-  path?: string;
-  json?: boolean;
-  files?: number;
-  chars?: number;
-  source_id?: string;
-  path_prefix?: string;
-  already_loaded?: boolean;
-  documents?: number;
-  converted?: number;
-  skipped?: readonly { readonly path: string; readonly reason: string }[];
-  error?: string;
+  readonly response?: string;
+  readonly responses?: readonly string[];
+  readonly path?: string;
+  readonly json?: boolean;
+  readonly files?: number;
+  readonly chars?: number;
+  readonly source_id?: string;
+  readonly path_prefix?: string;
+  readonly already_loaded?: boolean;
+  readonly documents?: number;
+  readonly converted?: number;
+  readonly skipped?: readonly { readonly path: string; readonly reason: string }[];
+  readonly error?: string;
 }
 
 const RLM_PATH_TYPES = new Set(["rlm_query", "rlm_batch"]);
@@ -171,10 +167,10 @@ async function resolveSingle(
       }
       return { response: collected.result ?? "" };
     }
-    return { response: String(collected ?? "") };
+    return { response: typeof collected === "string" ? collected : "" };
   }
   // Unexpected shape — surface as text rather than crash the worker.
-  return { response: String(raw ?? "") };
+  return { response: typeof raw === "string" ? raw : "" };
 }
 
 /**
@@ -304,7 +300,7 @@ export async function serviceInterrupt(
           });
           return;
         }
-        reply(msg.rid, { response: String(result ?? "") });
+        reply(msg.rid, { response: typeof result === "string" ? result : "" });
         return;
       }
       case "finish": {
@@ -352,13 +348,11 @@ export async function serviceInterrupt(
         reply(msg.rid, { response: table });
         return;
       }
-      case "memory": {
-        const out = await h.memoryOp(
-          msg.op,
-          { query: msg.query, k: msg.k, content: msg.content, paths: msg.paths, tags: msg.tags },
-          d,
-        );
-        reply(msg.rid, { response: out });
+      case "skill_search": {
+        // SKILL.state (Workstream E): the store serializes its own hits; plain strings
+        // (tests/stubs) pass through. Errors are replied, never thrown.
+        const raw = await h.skillSearch(msg.query ?? "", msg.k ?? 8, d);
+        reply(msg.rid, { response: typeof raw === "string" ? raw : JSON.stringify(raw) });
         return;
       }
       default: {
@@ -369,6 +363,6 @@ export async function serviceInterrupt(
       }
     }
   } catch (err: unknown) {
-    reply(msg.rid, { error: errorMessage(err) });
+    reply(msg.rid, { error: formatError(errorMessage(err)) });
   }
 }

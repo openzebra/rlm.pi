@@ -31,7 +31,6 @@ function benchConfig(opts?: Parameters<typeof benchSampling>[0]): RlmConfig {
     maxIterations: 2,
     enableTokenBudget: false, // bench measures capability — see bench/engine.ts
     compaction: false,
-    enableMemory: false,
     enableLedger: false,
     rootSampling: sampling.root,
     subSampling: sampling.sub,
@@ -57,7 +56,8 @@ async function main(): Promise<void> {
   // ── thinking arm (the r3 coached shape): reasoning "high", temperature 0, 8192 root cap ──
   {
     const config = benchConfig({ temperature: 0, reasoning: "high" });
-    check("parity: bench root sampling frozen with reasoning", config.rootSampling.reasoning === "high" && config.rootSampling.temperature === 0 && config.rootSampling.maxTokens === 8192);
+    const rs = config.rootSampling;
+    check("parity: bench root sampling frozen with reasoning", rs !== undefined && rs.reasoning === "high" && rs.temperature === 0 && rs.maxTokens === 8192);
     const calls = await drive(config, [DONE]);
     const first = calls[0];
     check("parity: reasoning flag wins the engine merge (not an interactive default)", first?.opts.reasoning === "high", String(first?.opts.reasoning));
@@ -77,7 +77,8 @@ async function main(): Promise<void> {
   // ── no-reasoning arm: 4096 cap, no reasoning anywhere ──
   {
     const config = benchConfig({ temperature: 0 });
-    check("parity: no-reasoning arm keeps the lean cap", config.rootSampling.maxTokens === 4096 && config.rootSampling.reasoning === undefined);
+    const rs = config.rootSampling;
+    check("parity: no-reasoning arm keeps the lean cap", rs !== undefined && rs.maxTokens === 4096 && rs.reasoning === undefined);
     const calls = await drive(config, [DONE]);
     check("parity: no-reasoning arm wires no reasoning", calls[0]?.opts.reasoning === undefined && calls[0]?.opts.maxTokens === 4096);
   }

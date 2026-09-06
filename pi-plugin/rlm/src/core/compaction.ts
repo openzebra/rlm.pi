@@ -11,6 +11,8 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { type ChatMsg, modelComplete } from "../bridge/model.ts";
 import type { RetryPolicy } from "../util/retry.ts";
 import { estimateMessageTokens } from "../text/tokens.ts";
+import type { RunState } from "../core/run-state.ts";
+import { compactJSON } from "../core/run-state.ts";
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 
@@ -19,7 +21,7 @@ const SUMMARY_REQUEST =
   "(2) any concrete intermediate results — numbers, values, variable names — preserved exactly; " +
   "(3) your next action. Be concise (1–3 paragraphs) but preserve all key results.";
 
-export interface CompactionDeps {
+interface CompactionDeps {
   readonly model: Model<Api>;
   readonly registry: ModelRegistry;
   readonly contextWindow?: number;
@@ -110,5 +112,46 @@ export async function compactHistory(
         `Your conversation has been compacted ${count} time(s). Continue from the summary above. ` +
         "Do NOT repeat completed work. Use SHOW_VARS() to see existing REPL variables. Your next action:",
     },
+  ];
+}
+
+/** Same protected-tail rule as elideOldToolPayloads: the working set survives verbatim. */
+const REBASE_KEEP_TURNS = 2;
+
+/**
+ * Workstream A: structural rebase — the SKILL.state replacement for the LLM summary path.
+ *
+ *   history := [ P , user("[Σ] …") , window(O) ]
+ *
+ * Everything older than the protected tail is superseded by the EXACT execution state — no
+ * model call is made at all (the summarizer LLM call disappears by design; the `compactions`
+ * counter still moves so telemetry stays comparable). Failure semantics: pure function, no
+ * fallible operations — the degraded path keeps `compactHistory` for as-built runs.
+ */
+export function rebaseWithState(history: ChatMsg[], state: RunState, count = 1): ChatMsg[] {
+  const system = history.find((m) => m.role === "system");
+  const head: ChatMsg[] = system ? [system] : [];
+  let tailStart = history.length;
+  let seen = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === "assistant") {
+      seen += 1;
+      if (seen >= REBASE_KEEP_TURNS) {
+        tailStart = i;
+        break;
+      }
+    }
+  }
+  const window: ChatMsg[] = tailStart < history.length ? history.slice(tailStart) : [];
+  return [
+    ...head,
+    {
+      role: "user",
+      content:
+        `Your conversation was structurally rebased ${count} time(s): older turns are superseded ` +
+        `by the exact execution state below — do NOT repeat completed work; fresh tool results ` +
+        `outrank Σ when they disagree.\n[Σ] ${compactJSON(state)}`,
+    },
+    ...window,
   ];
 }

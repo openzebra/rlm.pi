@@ -25,7 +25,7 @@ export interface Turn {
 
 export type CompleteFn = (messages: readonly ChatMsg[], opts: CompleteOptions) => Promise<CompleteResult>;
 
-export interface TurnDeps {
+interface TurnDeps {
   readonly model: Model<Api>;
   readonly registry: ModelRegistry;
   readonly sampling?: Sampling;

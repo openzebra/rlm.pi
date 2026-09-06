@@ -81,7 +81,7 @@ export class ProviderCooldown {
 }
 
 /** Mirrored into DEFAULT_RETRY_POLICY (util/retry.ts imports these — keep one-way). */
-export const THROTTLE_DEFAULTS = Object.freeze({ baseMs: 2_000, maxMs: 60_000 } as const);
+const THROTTLE_DEFAULTS = Object.freeze({ baseMs: 2_000, maxMs: 60_000 } as const);
 
 /** Process-wide instance: every completion in this pi session shares it. */
 export const sharedCooldown: ProviderCooldown = new ProviderCooldown(

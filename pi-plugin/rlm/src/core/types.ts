@@ -96,25 +96,54 @@ export interface RlmConfig {
   readonly enableLedger: boolean;
   /** Real rlm spawns allowed before extra rlm_query demotes to llm_query (0 = never). */
   readonly rlmBudget: number;
-  /** v5 durable memory: L1 episode replay + L2 BM25 notes under `<root>/.rlm/memory`. */
-  readonly enableMemory: boolean;
-  /** Char budget for the `[memory]` injection = tokens × 4. */
-  readonly injectNoteTokens: number;
-  /** Pending episodes per L2 consolidation batch (0 = never auto-consolidate). */
-  readonly evolveEvery: number;
-  /** Override the memory dir. `null` (default) = `<root>/.rlm/memory` — this field only
- *  RELOCATES the store; the on/off switch is `enableMemory` (audit M3). */
-  readonly memoryDir: string | null;
   /** v5: per-provider concurrent-request caps (e.g. `{ zai: 4 }`). Caps only lower limits. */
   readonly providerMaxConcurrent?: Readonly<Record<string, number>>;
-  /** v5 doctrine: "delegation" = child engines get llm/memory/ledger only (no repo retrieval);
-   *  "legacy" keeps today's full child surface as a one-flip rollback. */
-  readonly childSurface: "delegation" | "legacy";
   /** Verification-discipline nudge (default OFF — it changes interactive behavior): when the
    *  root finalizes before turn 4 with a bare number / short label, it gets ONE coached redo
    *  ("recompute and sanity-check in Python") instead of accepting the answer. Opt-in via
    *  rlm.json; evidence: 28/33 bench failures were early confident wrong answers. */
   readonly enableVerificationNudge?: boolean;
+  // ── SKILL.state integration (Workstreams A–F) ──
+  /** Structured execution state Σ_t in headless runs (paper §3); false = as-built append-only
+   *  history + prose compaction. Degraded automatically on malformed-patch retry exhaustion. */
+  readonly enableRunState: boolean;
+  /** Failed state-patch applications tolerated before the run degrades to as-built behavior. */
+  readonly runStateRetryMax: number;
+  /** Cross-session SkillState store: Ξ prompt injection (C), leaf grounding (D), skill_search (E). */
+  readonly enableSkillState: boolean;
+  /** Opt-in: one cheap leaf call at run finalize to phrase A-Mem-style notes from the run. */
+  readonly enableSkillStateDistill: boolean;
+  /** Token budget for the injected Ξ skill block (Workstream C). */
+  readonly skillStateMaxTokens: number;
+  /** Per-leaf-call grounding budget in tokens (Workstream D). */
+  readonly skillStateLeafTokens: number;
+  /** BM25 score a note must clear before a leaf prompt gets grounded (below ⇒ byte-identical). */
+  readonly skillStateMinScore: number;
+  /** Per-project note cap; LRU by ts with the top-hits quartile pinned (Workstream B). */
+  readonly skillStateNotesPerProject: number;
+
+  // ── Root Σ integration (Root Σ plan WS-2..WS-4) ──
+  /** Deterministic root compaction: when the Pi session compacts, supply a no-LLM structural
+   *  digest ([Task]/[Findings]/[State]/[Next]/[Project facts]) instead of Pi's LLM prose
+  *  summarizer. Fail-soft: any error falls back to the host path. */
+  readonly enableRootDigestCompaction: boolean;
+  /** Verbatim tail (chars) the root digest keeps out of the digest span — entries after the
+   *  chosen cut stay byte-identical in context (never summarized). */
+  readonly rootDigestKeepRecentChars: number;
+  /** Cap for the generated digest string; over-cap drops sections in continuity order. */
+  readonly rootDigestMaxChars: number;
+  /** Per-LLM-call root A_t assembly via the `context` event (WS-3): elide stale tool
+   *  payloads (paper §5.3 discard) + splice the fresh Σ snapshot. Default OFF until soak. */
+  readonly enableRootContextTransform: boolean;
+  /** Newest assistant turns kept verbatim by the root elision (mirrors engine keepTurns). */
+  readonly rootContextKeepTurns: number;
+  /** Tool-result payloads older than the keep window are preview-capped at this many chars. */
+  readonly rootContextElideChars: number;
+  /** Splice the RootStateTracker Σ snapshot before the last user message each call. */
+  readonly rootContextSnapshot: boolean;
+  /** WS-4.2 (default OFF, paper §5.7 fence tax): the root may commit ΔΣ_t via a ```state
+   *  fence in a normal reply; patches ride the same V(ΔΣ_t,Σ_t) ladder as engine runs. */
+  readonly enableRootStateFences: boolean;
 }
 
 /** Input to a (headless) RLM run. */
@@ -135,6 +164,16 @@ export interface RlmInput {
   /** v5: the shared TaskLedger blackboard. Children inherit the parent's instance —
    *  set by childRun (the one child-RlmInput construction path); a fresh run gets a new one. */
   readonly ledger?: import("./ledger.ts").TaskLedger;
+  /** SKILL.state Ξ (Workstream C) — the BM25-selected SkillState block this run conditions on.
+   *  Set by the composition root / copied by childRun (DRY #6 — one construction site). */
+  readonly skillBlock?: string;
+  /** History-as-deliverable opt-out (paper §7-c): when true, RunState never activates — the
+   *  archive is the product (audit / provenance / debug-narrative runs). */
+  readonly narrative?: boolean;
+  /** Workstream F: a rectification chosen by the prior run at its budget hard-state, applied to
+   *  THIS continuation invocation (narrowed child paths / reduced leaf admission). DOCTRINE:
+   *  never a model/provider switch — a failing model retries to exhaustion and fails. */
+  readonly rectification?: import("./budget.ts").RectifyAction;
 }
 
 /** Result of a completed RLM run. */

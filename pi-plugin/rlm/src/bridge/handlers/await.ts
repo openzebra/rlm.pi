@@ -9,7 +9,7 @@
 import { errorMessage, formatError } from "../../util/errors.ts";
 import type { AwaitResult, SubcallHandlerDeps, TaskEntry } from "./types.ts";
 import type { SubcallOpts } from "../../sandbox/interrupts.ts";
-import type { AwaitDeps } from "./task-registry.ts";
+import { entryToAwaitResult, type AwaitDeps } from "./task-registry.ts";
 
 export function createAwaitHandler(_deps: SubcallHandlerDeps, ad: AwaitDeps) {
   return async (
@@ -37,7 +37,7 @@ export function createAwaitHandler(_deps: SubcallHandlerDeps, ad: AwaitDeps) {
       if (entry.status === "pending") {
         try {
           const resolved = await ad.wait(taskId, timeoutMs);
-          return toAwaitResult(resolved);
+          return entryToAwaitResult(resolved);
         } catch (err: unknown) {
           return {
             ok: false,
@@ -49,7 +49,7 @@ export function createAwaitHandler(_deps: SubcallHandlerDeps, ad: AwaitDeps) {
         }
       }
 
-      return toAwaitResult(entry);
+      return entryToAwaitResult(entry);
     }
 
     // Multiple tasks
@@ -91,7 +91,7 @@ export function createAwaitHandler(_deps: SubcallHandlerDeps, ad: AwaitDeps) {
       }),
     );
 
-    const awaited = resolved.map(toAwaitResult);
+    const awaited = resolved.map(entryToAwaitResult);
     const allDone = awaited.every((a) => a.status === "done");
     const hasResults = awaited.some((a) => a.results !== undefined);
     const firstError = awaited.find((a) => a.error)?.error;
@@ -99,12 +99,18 @@ export function createAwaitHandler(_deps: SubcallHandlerDeps, ad: AwaitDeps) {
     const kind = first?.kind ?? "unknown";
 
     if (hasResults) {
-      const allResults: string[] = [];
+      // Pre-allocated (rule: no .push() growth when the size is computable) — count, then fill.
+      const total = awaited.reduce(
+        (n, a) => n + (a.results !== undefined ? a.results.length : a.result !== undefined ? 1 : 0),
+        0,
+      );
+      const allResults = new Array<string>(total);
+      let n = 0;
       for (const a of awaited) {
         if (a.results !== undefined) {
-          for (const r of a.results) allResults.push(r);
+          for (const r of a.results) allResults[n++] = r;
         } else if (a.result !== undefined) {
-          allResults.push(a.result);
+          allResults[n++] = a.result;
         }
       }
       return {
@@ -129,20 +135,5 @@ export function createAwaitHandler(_deps: SubcallHandlerDeps, ad: AwaitDeps) {
       results: Object.freeze(awaited.map((a) => a.result ?? a.error ?? "")),
       error: firstError,
     };
-  };
-}
-
-function toAwaitResult(entry: TaskEntry): AwaitResult {
-  const status = entry.status === "pending" ? "error" : entry.status;
-  return {
-    ok: entry.status === "done",
-    task_id: entry.taskId,
-    kind: entry.kind,
-    status,
-    result: entry.result,
-    results: entry.results,
-    error:
-      entry.error ??
-      (entry.status === "pending" ? "Task still pending" : undefined),
   };
 }

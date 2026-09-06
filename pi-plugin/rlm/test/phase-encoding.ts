@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { check, failureCount } from "./helpers.ts";
+import { check, failureCount, runSuite } from "./helpers.ts";
 import { buildAddContextHandler } from "../src/bridge/add-context.ts";
 import { PythonSandbox, type SandboxOptions } from "../src/sandbox/sandbox.ts";
 import type { ReplResult } from "../src/sandbox/protocol.ts";
@@ -30,7 +30,7 @@ const PY_DIR = join(TEST_DIR, "..", "src", "sandbox", "py");
 const NO_BARE_OPEN_PY = join(TEST_DIR, "fixtures", "no-bare-open.py");
 
 /** Python length of SAMPLE (code points, not UTF-8 bytes). */
-const SAMPLE_LEN = [...SAMPLE].length;
+const SAMPLE_LEN = Array.from(SAMPLE).length;
 
 const SANDBOX_DEFAULTS = Object.freeze({
   execTimeoutS: 30,
@@ -51,7 +51,7 @@ function applyHostileEnv(): EnvSnapshot {
 
 function restoreEnv(prev: EnvSnapshot): void {
   for (const [k, v] of prev) {
-    if (v === undefined) delete process.env[k];
+    if (v === undefined) process.env[k] = undefined; // Node drops the key entirely
     else process.env[k] = v;
   }
 }
@@ -294,7 +294,4 @@ async function main(): Promise<void> {
   console.log("\nAll phase-encoding checks passed.");
 }
 
-main().catch((e: unknown) => {
-  console.error(e);
-  process.exit(1);
-});
+runSuite(main);

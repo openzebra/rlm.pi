@@ -8,7 +8,7 @@
  */
 
 import { type ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { MOCK_REGISTRY } from "./helpers.ts";
+import { runSuite } from "./helpers.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import { createEngine } from "../src/core/engine.ts";
@@ -177,7 +177,7 @@ async function testContextInheritance(): Promise<boolean> {
   log("#4: unmatched paths fall back to the full context", seen[0]?.context === files);
   log(
     "#4: unmatched paths are reported in the child's prompt",
-    seen[0]?.rootPrompt.includes("matched no files") === true,
+    seen[0]?.rootPrompt.includes("matched no files"),
   );
 
   // Batched children share one prefix set.
@@ -193,7 +193,8 @@ async function testContextInheritance(): Promise<boolean> {
 
 /**
  * End-to-end at depth > 0: an inherited file bundle must survive RlmInput → loadContext → the
- * worker, and arrive as a real `list` the retrieval primitives can index.
+ * worker, and arrive as a real `list` the child can read directly (delegation doctrine: no
+ * repo retrieval on children).
  *
  * The first engine run at depth > 0 in the suite. Token-free (scripted `complete`), but it does
  * spawn a real Python sandbox — that is the point, since the bug lived in the handoff.
@@ -220,7 +221,7 @@ async function testChildEngineSeesInheritedContext(): Promise<boolean> {
     if (turn === 0) {
       turn += 1;
       return {
-        text: repl('print("CTX", type(context).__name__, len(context), bool(search("alpha")))'),
+        text: repl('print("CTX", type(context).__name__, len(context), context[0]["content"].count("alpha"))'),
         usage: ZERO_USAGE,
       };
     }
@@ -234,16 +235,16 @@ async function testChildEngineSeesInheritedContext(): Promise<boolean> {
     model: MOCK_MODEL,
     llmModel: MOCK_MODEL,
     registry: MOCK_REGISTRY,
-    // childSurface "legacy": this suite verifies context INHERITANCE (issue #4) — probing the
-    // inherited pack with search() is the test's point, not the v5 delegation doctrine.
-    config: { ...DEFAULT_CONFIG, maxIterations: 4, compaction: false, childSurface: "legacy" },
+    // Delegation doctrine: the child inherits the pack and reads it with Python — no repo
+    // retrieval on children. The probe below asserts the CONTENT arrived, not a search hit.
+    config: { ...DEFAULT_CONFIG, maxIterations: 4, compaction: false },
     complete,
   })({ rootPrompt: "what is alpha?", context: files, depth: 1, parentNodeId: "n1" });
 
   log("#4 e2e: child engine completed", res.answer === "ok", res.answer.slice(0, 80));
   // Match the stdout line, not the assistant's echo of the code that produced it.
   const ctxLine = replEcho.indexOf("CTX list");
-  log("#4 e2e: worker sees a list of 3 and search() hits", replEcho.includes("CTX list 3 True"),
+  log("#4 e2e: worker sees a list of 3 with the inherited content", replEcho.includes("CTX list 3 3"),
     ctxLine === -1 ? "no CTX stdout line" : replEcho.slice(ctxLine, ctxLine + 20));
   log("#4 e2e: child prompt uses the file-bundle branch", systemPrompt.includes("list[dict]"));
   log("#4 e2e: child prompt says it is a sub-RLM", systemPrompt.includes("You are a sub-RLM"));
@@ -428,9 +429,9 @@ async function testRetrievalNudge(): Promise<boolean> {
     complete,
   })({ rootPrompt: "find it", context: "ctx", depth: 0 });
   log("H3: turns 1-2 carry no nudge",
-    turnPrompts[0]?.includes("[coach]") === false && turnPrompts[1]?.includes("[coach]") === false);
+    !(turnPrompts[0]?.includes("[coach]")) && !(turnPrompts[1]?.includes("[coach]")));
   log("H3: turn 3 injects the [coach] nudge via the gate-message seam",
-    turnPrompts[2]?.includes("[coach]") === true, JSON.stringify(turnPrompts[2]?.slice(0, 100)));
+    turnPrompts[2]?.includes("[coach]"), JSON.stringify(turnPrompts[2]?.slice(0, 100)));
   log("H3: no nudge after a search( block ran, run still completes",
     turnPrompts.slice(3).every((p) => !p.includes("[coach]")) && res.answer === "done",
     `answer=${JSON.stringify(res.answer.slice(0, 40))}`);
@@ -518,9 +519,7 @@ async function main() {
     model: smart,
     llmModel: worker,
     registry,
-    // childSurface "legacy": this suite verifies context INHERITANCE (issue #4) — the child
-    // probing its narrowed pack with search() is the point, not the v5 delegation doctrine.
-    config: { ...DEFAULT_CONFIG, maxIterations: 8, maxDepth: 2, execTimeoutS: 30, childSurface: "legacy" },
+    config: { ...DEFAULT_CONFIG, maxIterations: 8, maxDepth: 2, execTimeoutS: 30 },
     limits: { maxTimeoutMs: 180_000 },
     onUsage: (u, role) => {
       if (role === "root") rootUsd += u.cost.total;
@@ -542,7 +541,4 @@ async function main() {
   process.exit(ok ? 0 : 1);
 }
 
-main().catch((e) => {
-  console.error("FATAL", e);
-  process.exit(1);
-});
+runSuite(main);

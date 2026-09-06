@@ -19,7 +19,7 @@ import type { Invocation } from "../bridge/handlers/index.ts";
 import { trace, traceEnabled } from "../util/trace.ts";
 
 /** What a drain hands to the turn that is reporting it. */
-export interface BackgroundDrain {
+interface BackgroundDrain {
   readonly subcalls: readonly RlmSubcall[];
   readonly totals: SubcallTotals;
 }

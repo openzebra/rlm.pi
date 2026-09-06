@@ -4,7 +4,7 @@
  * Run: bun run pi-plugin/rlm/test/retry.ts
  */
 
-import { check, failureCount } from "./helpers.ts";
+import { check, failureCount, runSuite } from "./helpers.ts";
 import {
   backoffMs,
   completeWithRetry,
@@ -243,7 +243,4 @@ async function main(): Promise<void> {
   process.exit(failureCount() === 0 ? 0 : 1);
 }
 
-main().catch((e) => {
-  console.error("FATAL", e);
-  process.exit(1);
-});
+runSuite(main);

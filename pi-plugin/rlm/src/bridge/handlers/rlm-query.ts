@@ -4,7 +4,7 @@
  * AGENTS.md DRY #2: childRun exists once, here.
  */
 
-import { modelRef } from "../../config/settings.ts";
+import { modelLabelOf } from "../../config/settings.ts";
 import { errorMessage, formatError } from "../../util/errors.ts";
 import { filterContextByPaths } from "../../context/merge.ts";
 import { previewText } from "../../text/preview.ts";
@@ -13,12 +13,11 @@ import { checkResourceLimits } from "../../core/resource-limits.ts";
 import { contextSig, ECHO_STUB, taskKey } from "../../core/ledger.ts";
 import type { Invocation, SpawnResult, SubcallHandlerDeps } from "./types.ts";
 import type { SubcallOpts } from "../../sandbox/interrupts.ts";
-import { SPAWN_HINT, spawnAndRun, type SpawnDeps } from "./task-registry.ts";
-import { complete1, type Complete1Deps } from "./completion.ts";
+import { spawnAndRun, type SpawnDeps } from "./task-registry.ts";
+import { complete1, completeDeps } from "./completion.ts";
 import { emitting, summarizeLeaf, throttleHooks } from "./emitting.ts";
-import { leafClaimKey, runClaimedLeaf } from "./llm-query.ts";
+import { activeLedger, leafClaimKey, runClaimedLeaf, unwiredSpawn } from "./llm-query.ts";
 
-const UNWIRED = formatError("RLM bridge not wired for this invocation");
 const NO_UNMATCHED: readonly string[] = Object.freeze([]);
 
 function emptyResult(answer: string): RlmResult {
@@ -56,25 +55,9 @@ function childContextFor(
   });
 }
 
-function completeDeps(deps: SubcallHandlerDeps): Complete1Deps {
-  return {
-    leafGate: deps.gates.leaf,
-    registry: deps.registry,
-    getLlmModel: deps.getLlmModel,
-    getConfig: deps.getConfig,
-    signal: deps.signal,
-    onUsage: deps.onUsage,
-  };
-}
-
-/** Ledger active for this call — undefined when disabled by config or not threaded in. */
-function activeLedger(deps: SubcallHandlerDeps) {
-  return deps.getConfig().enableLedger ? deps.ledger : undefined;
-}
-
 function claimKeyFor(deps: SubcallHandlerDeps, kind: "llm" | "rlm", prompt: string, paths: readonly string[], ctx: string): string {
   const rootModel = deps.getModel?.();
-  const modelId = rootModel === undefined ? "" : (modelRef(rootModel) ?? rootModel.id);
+  const modelId = rootModel === undefined ? "" : modelLabelOf(rootModel);
   return taskKey(kind, prompt, paths, modelId, ctx);
 }
 
@@ -111,31 +94,8 @@ async function childRun(
       ? prompt
       : `${prompt}\n\n[rlm] paths=${child.unmatched.join(", ")} matched no files; you received the full context.`;
 
-  // ── v5 memory replay: an identical, still-fresh child answer replays for zero API calls ──
-  const memory = deps.memory;
   const sig = contextSig(child.context);
   const key = claimKeyFor(deps, "rlm", prompt, paths ?? [], sig);
-  if (memory !== undefined && deps.getConfig().enableMemory !== false) {
-    const hit = memory.replay(key);
-    if (hit !== undefined) {
-      const replayId = inv.emitter.emitSubcallCreated({
-        kind: "rlm",
-        parentId: inv.parentId,
-        label: "rlm_query (replay)",
-        detail: prompt.slice(0, 60),
-        depth: childDepth,
-      });
-      inv.emitter.emitSubcallUpdated({ id: replayId, status: "done", resultPreview: hit.result.slice(0, 200) });
-      return {
-        answer: hit.result,
-        iterations: 0,
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        durationMs: 0,
-      };
-    }
-  }
 
   // ── v5 TaskLedger: echo → stub; duplicate → coalesce onto the existing runner ──────
   const ledger = activeLedger(deps);
@@ -148,8 +108,7 @@ async function childRun(
   // ONE subcall node per childRun (audit C2 / DRY #5): the decision branch reuses it, the
   // run branch reports the engine's turns/cost on it. Never a second emit below.
   const rootModel = deps.getModel?.();
-  const modelLabel =
-    rootModel === undefined ? undefined : (modelRef(rootModel) ?? rootModel.id);
+  const modelLabel = rootModel === undefined ? undefined : modelLabelOf(rootModel);
   const subId = inv.emitter.emitSubcallCreated({
     kind: "rlm",
     parentId: inv.parentId,
@@ -168,13 +127,14 @@ async function childRun(
     const twin = await ledger
       .waitFor(decision.key)
       .catch((err: unknown) => errorMessage(err));
-    inv.emitter.emitSubcallUpdated({ id: subId, status: "done", resultPreview: previewText(String(twin).slice(0, 80)) });
-    return emptyResult(String(twin));
+    inv.emitter.emitSubcallUpdated({ id: subId, status: "done", resultPreview: previewText(twin.slice(0, 80)) });
+    return emptyResult(twin);
   }
   if (ledger !== undefined && claimKey !== undefined) {
     ledger.markRunning(claimKey);
   }
 
+  const skillBlock = deps.getSkillBlock?.(prompt);
   const input: RlmInput = {
     rootPrompt,
     context: child.context,
@@ -182,6 +142,9 @@ async function childRun(
     parentNodeId: subId,
     remainingTimeoutMs: remTimeout,
     ledger, // DRY #6: the one seam — children share the parent's blackboard
+    // SKILL.state Ξ (Workstream C, DRY #6): the parent's block rides along — the only
+    // child-RlmInput construction site, so inheritance cannot grow a second path.
+    ...(skillBlock === undefined ? {} : { skillBlock }),
   };
 
   try {
@@ -189,19 +152,6 @@ async function childRun(
     inv.limits.addRaw(res.costUsd, res.inputTokens, res.outputTokens);
     deps.onChildUsage?.(res.costUsd, res.inputTokens, res.outputTokens);
     if (ledger !== undefined && claimKey !== undefined) ledger.finish(claimKey, res.answer);
-    // v5: child answers persist unconditionally — this is what later identical runs replay.
-    if (memory !== undefined && deps.getConfig().enableMemory !== false) {
-      memory.recordEpisode({
-        key,
-        kind: "rlm",
-        model: modelLabel ?? "",
-        prompt,
-        paths: paths ?? [],
-        result: res.answer,
-        tokensIn: res.inputTokens,
-        tokensOut: res.outputTokens,
-      });
-    }
     inv.emitter.emitSubcallUpdated({
       id: subId,
       status: "done",
@@ -225,17 +175,7 @@ export function createRlmQueryHandler(deps: SubcallHandlerDeps, sd: SpawnDeps) {
     opts: SubcallOpts,
   ): Promise<SpawnResult> => {
     const inv = deps.resolve(opts, depth);
-    if (inv === null) {
-      return {
-        ok: false,
-        task_id: null,
-        kind: "rlm",
-        n: 1,
-        status: "pending",
-        hint: SPAWN_HINT,
-        error: UNWIRED,
-      };
-    }
+    if (inv === null) return unwiredSpawn("rlm", 1);
 
     const pathArg = opts.paths;
 
@@ -297,17 +237,7 @@ export function createRlmBatchHandler(deps: SubcallHandlerDeps, sd: SpawnDeps) {
     opts: SubcallOpts,
   ): Promise<SpawnResult> => {
     const inv = deps.resolve(opts, depth);
-    if (inv === null) {
-      return {
-        ok: false,
-        task_id: null,
-        kind: "rlm_batch",
-        n: tasks.length,
-        status: "pending",
-        hint: SPAWN_HINT,
-        error: UNWIRED,
-      };
-    }
+    if (inv === null) return unwiredSpawn("rlm_batch", tasks.length);
 
     const pathArg = opts.paths;
     // No wrapper "rlm_batch ×N" node: every task already gets its own rlm_query node from

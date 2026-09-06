@@ -14,15 +14,33 @@ import { checkResourceLimits } from "../../core/resource-limits.ts";
 import { errorMessage, formatError } from "../../util/errors.ts";
 import { retryPolicy } from "../../util/retry.ts";
 import type { Semaphore } from "../../util/concurrency.ts";
-import type { Invocation, SubcallConfig } from "./types.ts";
+import type { Invocation, SubcallConfig, SubcallHandlerDeps } from "./types.ts";
 
-export interface Complete1Deps {
+interface Complete1Deps {
   readonly leafGate: Semaphore;
   readonly registry: ModelRegistry;
   readonly getLlmModel: () => Model<Api>;
   readonly getConfig: () => SubcallConfig;
   readonly signal?: AbortSignal;
   readonly onUsage?: (usage: Usage, role: "sub") => void;
+  /** SKILL.state (Workstream D): the one grounding seam, projected verbatim from deps. */
+  readonly groundLeaf?: (prompt: string) => string;
+}
+
+/**
+ * AGENTS.md DRY: the ONE projection of SubcallHandlerDeps for complete1 — shared verbatim by
+ * the llm-query and rlm-query handlers. Never inline a second copy.
+ */
+export function completeDeps(deps: SubcallHandlerDeps): Complete1Deps {
+  return {
+    leafGate: deps.gates.leaf,
+    registry: deps.registry,
+    getLlmModel: deps.getLlmModel,
+    getConfig: deps.getConfig,
+    signal: deps.signal,
+    onUsage: deps.onUsage,
+    groundLeaf: deps.groundLeaf,
+  };
 }
 
 /**
@@ -41,14 +59,18 @@ export async function complete1(
     timeoutMs: inv.limits.remainingTimeoutMs(),
   });
   if (limitError !== undefined) return limitError;
-  if (prompt.length > config.maxPromptChars) {
+  // Workstream D (DRY #1): the ONE grounding application — llm_query, batch items, rlm→llm
+  // demotion and depth-cap degrade all pass through here, so all of them get Ξ facts or none
+  // does. Below-threshold prompts come back byte-identical from the groundLeaf impl.
+  const grounded = deps.groundLeaf !== undefined ? deps.groundLeaf(prompt) : prompt;
+  if (grounded.length > config.maxPromptChars) {
     return formatError(
-      `sub-LLM prompt exceeded the size limit (${prompt.length.toLocaleString()} chars > ` +
+      `sub-LLM prompt exceeded the size limit (${grounded.length.toLocaleString()} chars > ` +
         `${config.maxPromptChars.toLocaleString()}). Shorten or chunk the prompt before calling llm_query.`,
     );
   }
   try {
-    const messages: ChatMsg[] = [{ role: "user", content: prompt }];
+    const messages: ChatMsg[] = [{ role: "user", content: grounded }];
     const res = await deps.leafGate.run(() =>
       modelComplete(messages, {
         model: deps.getLlmModel(),

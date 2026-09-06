@@ -93,7 +93,7 @@ export function createSubcallGates(leafLimit: number, childLimit: number = leafL
 }
 
 /** Provider-capped config slice (RlmConfig satisfies this structurally). */
-export interface ProviderCapConfig {
+interface ProviderCapConfig {
   readonly maxConcurrentSubcalls: number;
   readonly maxConcurrentChildren: number;
   /** v5: per-provider concurrent-request caps, e.g. { zai: 4 }. Caps only ever LOWER a limit. */

@@ -19,7 +19,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
 
-export interface FileStamp {
+interface FileStamp {
   readonly size: number;
   readonly mtimeMs: number;
 }

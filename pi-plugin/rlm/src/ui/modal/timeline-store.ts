@@ -16,7 +16,7 @@ import type {
 } from "../../tool/rlm-events.ts";
 import { EmitterListener } from "../../tool/emitter-listener.ts";
 
-export const TIMELINE_CAP = 200;
+const TIMELINE_CAP = 200;
 
 export type TimelineIcon = "spawn" | "phase" | "done" | "error" | "note" | "turn";
 

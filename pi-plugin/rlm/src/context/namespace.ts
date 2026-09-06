@@ -10,7 +10,7 @@ import { basename, isAbsolute, resolve } from "node:path";
 import { estimateTokens } from "../text/tokens.ts";
 import { LEGACY_UNKNOWN_PREFIX, type ContextFile } from "./types.ts";
 
-export interface ContextNamespace {
+interface ContextNamespace {
   readonly sourceId: string;
   readonly pathPrefix: string;
 }
@@ -105,7 +105,7 @@ export function namespaceContextFilesWithChars(
   for (const item of payload) {
     if (item === null || typeof item !== "object") continue;
     const rec = item as Record<string, unknown>;
-    const content = typeof rec.content === "string" ? rec.content : String(rec.content ?? "");
+    const content = typeof rec.content === "string" ? rec.content : "";
     let path = typeof rec.path === "string" ? rec.path : "unknown";
     path = applyPathPrefix(path, prefix);
     const tokens = typeof rec.tokens === "number" && Number.isFinite(rec.tokens)

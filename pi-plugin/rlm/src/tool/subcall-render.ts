@@ -14,7 +14,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 
 // ── Glyphs ──
 
-export function headlineStatusGlyph(status: SubcallStatus | "aborted" | "done", theme: Theme): string {
+function headlineStatusGlyph(status: SubcallStatus | "aborted" | "done", theme: Theme): string {
   switch (status) {
     case "done": return theme.fg("success", "✓");
     case "error": return theme.fg("error", "✗");

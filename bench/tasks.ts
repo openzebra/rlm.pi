@@ -481,8 +481,11 @@ async function buildBrowsecompTasks(): Promise<readonly BenchTask[]> {
           packed.push(`=== ${path} ===${url ? `\nURL: ${url}` : ""}\n${text}`);
         }
       };
-      addDocs([...goldDocs, ...evidence], "gold");
-      addDocs(negDocs, "neg");
+      const gold: readonly unknown[] = goldDocs;
+      const evidenceU: readonly unknown[] = evidence;
+      const neg: readonly unknown[] = negDocs;
+      addDocs([...gold, ...evidenceU], "gold");
+      addDocs(neg, "neg");
       const query = asStr(dec.query);
       const answer = asStr(dec.answer);
       if (packed.length === 0 || !query || !answer) continue;

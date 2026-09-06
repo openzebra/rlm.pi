@@ -1,14 +1,10 @@
 /**
  * Phase 5 (v5 port): role separation — delegation-only child sandboxes.
- * Doctrine (v5 rlm_worker "ONLY these"): children delegate (llm + memory/ledger), they do not
+ * Doctrine (v5 rlm_worker "ONLY these"): children delegate (llm + ledger), they do not
  * explore the repo themselves; retrieval belongs to the root. "legacy" is the one-flip rollback.
  */
 
-import { check, failureCount, MOCK_MODEL, MOCK_REGISTRY, ZERO_USAGE } from "./helpers.ts";
-import { MemoryStore } from "../src/core/memory.ts";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { check, finish, MOCK_MODEL, MOCK_REGISTRY, ZERO_USAGE } from "./helpers.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { createEngine } from "../src/core/engine.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
@@ -21,7 +17,7 @@ import type { RlmConfig } from "../src/core/types.ts";
  *  direct name references wrapped in try/except NameError, one block per name. */
 const PROBE_NAMES: readonly string[] = Object.freeze([
   "search", "grep_context", "outline", "add_context",
-  "llm_query", "rlm_query", "map_files", "list_claims", "memory",
+  "llm_query", "rlm_query", "map_files", "list_claims",
 ]);
 const PROBE: string = PROBE_NAMES.map((n) =>
   [
@@ -39,10 +35,6 @@ function parseFlags(stdout: string): Record<string, boolean> {
   return out;
 }
 
-function finish(): void {
-  console.log(failureCount() === 0 ? "\nALL PASS" : `\n${failureCount()} FAILURE(S)`);
-  process.exit(failureCount() === 0 ? 0 : 1);
-}
 
 // ── worker level: the two surfaces ──────────────────────────────────────────────
 
@@ -59,7 +51,6 @@ function finish(): void {
       llmQuery: async () => "x",
       rlmQuery: async () => "y",
       ledgerClaims: async () => "ledger: no claims",
-      memoryOp: async () => "memory disabled",
     },
   });
   try {
@@ -67,8 +58,8 @@ function finish(): void {
     const flags = parseFlags(probe.stdout);
     check("child: retrieval + add_context are absent",
       !flags.search && !flags.grep_context && !flags.outline && !flags.add_context, probe.stdout.trim());
-    check("child: delegation + memory/ledger surface intact",
-      flags.llm_query && flags.rlm_query && flags.map_files && flags.list_claims && flags.memory, probe.stdout.trim());
+    check("child: delegation + ledger surface intact",
+      flags.llm_query && flags.rlm_query && flags.map_files && flags.list_claims, probe.stdout.trim());
   } finally {
     await sb.dispose();
   }
@@ -161,7 +152,7 @@ async function engineChildProbe(config: RlmConfig): Promise<{ readonly answer: s
     config,
     emitter: new RlmEmitter(),
     gates: createSubcallGates(4, 2),
-    complete: script as unknown as import("../src/core/iteration.ts").CompleteFn,
+    complete: script,
   });
   const out = await engine({ rootPrompt: "audit delegation behavior across engine runs", context: "ctx", depth: 0 });
   const childLine =
@@ -185,42 +176,19 @@ async function engineChildProbe(config: RlmConfig): Promise<{ readonly answer: s
   check("engine: child sandbox had NO search (delegation doctrine)",
     childLine.includes("child-has-search: False") && childLine.includes("child-has-llm: True"),
     childLine.slice(0, 80));
-  check("C5: child system prompt never teaches search(", !childSys.includes("search("), childSys.slice(0, 60));
+  check("C5: child system prompt never teaches repo search(", !childSys.includes("`search(query"), childSys.slice(0, 60));
+  // SKILL.state Workstream E: skill_search is distilled-facts recall, NOT repo retrieval —
+  // it is deliberately available on every surface, delegation children included.
+  check("WE: child prompt still offers skill_search (facts, not retrieval)", childSys.includes("`skill_search(query"), "");
   check("C5: child system prompt never teaches grep_context(", !childSys.includes("grep_context("), "");
   check("C5: child prompt states the delegation surface", childSys.includes("No `search`"), "");
   check("C5: child prompt shows the delegation spawn example (slice, not search)",
     childSys.includes("slice your world") || childSys.includes("slice the world you were handed"), "");
-  check("C5: ROOT prompt still teaches the retrieval example", rootSys.includes("search("), "");
+  check("C5: ROOT prompt still teaches the retrieval example", rootSys.includes("`search(query"), "");
   check("R3: child ENV_TIPS does not instruct locating via search",
     !childSys.includes("free locate with `search`") && !childSys.includes("locate targets with `search`"));
   check("R3: root ENV_TIPS still names search",
     rootSys.includes("free locate with `search`") || rootSys.includes("locate targets with `search`"));
-
-  // Legacy rollback: full child surface restored by one config flip.
-  const legacy = await engineChildProbe({ ...DEFAULT_CONFIG, maxIterations: 6, childSurface: "legacy" });
-  check("engine: legacy rollback keeps the run working", legacy.answer === "probe-finished", legacy.answer.slice(0, 50));
-  check("engine: legacy child keeps search",
-    legacy.childLine.includes("child-has-search: True"), legacy.childLine.slice(0, 80));
-  check("C5: legacy child prompt keeps the retrieval doctrine", legacy.childSys.includes("search("), "");
-}
-
-// ── memory scope: delegation children READ durable notes, never write ────────────
-
-{
-  const dir = await mkdtemp(join(tmpdir(), "rlm-mem-scope-"));
-  const store = new MemoryStore(dir, { dir: join(dir, "m") });
-  const childAdd = store.serviceOp("add", { content: "childnote-beta ships fast" }, "child");
-  const rootAdd = store.serviceOp("add", { content: "rootnote-alpha ships slow" }, "root");
-  check("memory: root scope can add", rootAdd.startsWith("ok note ") === true, rootAdd);
-  check(
-    "memory: child scope is read-only (add rejected with a reason)",
-    childAdd.startsWith("Error: memory.add is root-only") === true, childAdd,
-  );
-  // The rejected child add must not have written anything.
-  const q = store.serviceOp("query", { query: "childnote-beta", k: 8 }, "child");
-  check("memory: rejected child add wrote nothing", q === "no notes match", q);
-  const qRoot = store.serviceOp("query", { query: "rootnote-alpha", k: 8 }, "child");
-  check("memory: child CAN query what root wrote", qRoot.includes("rootnote-alpha"), qRoot);
 }
 
 finish();

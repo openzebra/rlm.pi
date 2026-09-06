@@ -30,7 +30,7 @@ interface CacheEntry {
 }
 type CacheFile = Readonly<Record<string, CacheEntry>>;
 
-/** `<root>/.rlm/models_cache.json` — the single cache path helper (also used by memory). */
+/** `<root>/.rlm/models_cache.json` — the single cache path helper. */
 export function modelsCachePath(root: string): string {
   return `${root.replace(/\/+$/, "")}/.rlm/models_cache.json`;
 }

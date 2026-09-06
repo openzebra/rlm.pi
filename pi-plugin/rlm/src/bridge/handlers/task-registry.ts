@@ -7,6 +7,7 @@
  */
 
 import type { AwaitResult, SpawnResult, TaskEntry } from "./types.ts";
+import { formatError, isErrorText } from "../../util/errors.ts";
 
 export const SPAWN_HINT =
   "Call await_task(task_id=...) to get the result — this is NOT the answer.";
@@ -24,6 +25,22 @@ export interface AwaitDeps {
   unawaitedIds(): readonly string[];
 }
 
+/** DRY: the ONE TaskEntry → AwaitResult mapping — shared by the await handler and the registry. */
+export function entryToAwaitResult(entry: TaskEntry): AwaitResult {
+  const status = entry.status === "pending" ? "error" : entry.status;
+  return {
+    ok: entry.status === "done",
+    task_id: entry.taskId,
+    kind: entry.kind,
+    status,
+    result: entry.result,
+    results: entry.results,
+    error:
+      entry.error ??
+      (entry.status === "pending" ? "Task still pending" : undefined),
+  };
+}
+
 export interface TaskRegistry {
   readonly spawnDeps: SpawnDeps;
   readonly awaitDeps: AwaitDeps;
@@ -32,8 +49,8 @@ export interface TaskRegistry {
 }
 
 interface Waiter {
-  resolve: (entry: TaskEntry) => void;
-  reject: (err: Error) => void;
+  readonly resolve: (entry: TaskEntry) => void;
+  readonly reject: (err: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -146,19 +163,7 @@ export function createTaskRegistry(): TaskRegistry {
           error: `Task ${taskId} not found`,
         };
       }
-      const status =
-        entry.status === "pending" ? "error" : entry.status;
-      return {
-        ok: entry.status === "done",
-        task_id: entry.taskId,
-        kind: entry.kind,
-        status,
-        result: entry.result,
-        results: entry.results,
-        error:
-          entry.error ??
-          (entry.status === "pending" ? "Task still pending" : undefined),
-      };
+      return entryToAwaitResult(entry);
     },
   };
 }
@@ -185,14 +190,14 @@ export function spawnAndRun(
       sd.resolve(taskId, result);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      sd.reject(taskId, message.startsWith("Error:") ? message : `Error: ${message}`);
+      sd.reject(taskId, isErrorText(message) ? message : formatError(message));
     }
   };
 
   if (trackDetached !== undefined && detached) {
     void trackDetached(run).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      sd.reject(taskId, message.startsWith("Error:") ? message : `Error: ${message}`);
+      sd.reject(taskId, isErrorText(message) ? message : formatError(message));
     });
   } else {
     void run();

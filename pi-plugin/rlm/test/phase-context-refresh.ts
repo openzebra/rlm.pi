@@ -36,7 +36,7 @@ const seeded = upsertContextFile(
   "DEFAULT_TIMEOUT_MS = 500\n",
   dir,
 );
-check("upsert replaces content", seeded[0]?.content.includes("500") === true);
+check("upsert replaces content", seeded[0]?.content.includes("500"));
 check("upsert returns new array identity", Array.isArray(seeded) && seeded.length === 1);
 
 // ── live worker ──
