@@ -70,6 +70,16 @@ export function projectFingerprint(cwd: string): string {
   return fnv1aHex(resolve(cwd), 0x811c9dc5).slice(0, 12);
 }
 
+/**
+ * Root Σ WS-1: the BM25 query for a root Ξ composition — the LIVE user prompt wins so
+ * mid-session harvested notes rank against what the user is actually asking; the static
+ * system-prompt slice is only the empty-prompt fallback (prior behavior).
+ */
+export function xiQuery(prompt: string, fallback: string): string {
+  const trimmed = prompt.trim();
+  return trimmed !== "" ? trimmed : fallback;
+}
+
 /** FNV-1a hex; two passes for long ids. Never cryptographic — dedup keys only. */
 function fnv1aHex(text: string, seed: number): string {
   let hash = seed | 0;

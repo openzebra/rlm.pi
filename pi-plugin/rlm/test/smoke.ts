@@ -35,6 +35,8 @@ const SUITES: readonly string[] = Object.freeze([
   "phase-rs-patch.ts", "phase-rs-engine.ts",
   "phase-ss-store.ts", "phase-ss-prompt.ts",
   "phase-leaf-ground.ts", "phase-skill-search.ts", "phase-rectify.ts",
+  // Root Σ integration (WS-1..WS-4)
+  "phase-root-digest.ts", "phase-root-context.ts",
 ]);
 
 async function assertEditSurfaceRemoved(): Promise<void> {

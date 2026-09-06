@@ -30,7 +30,7 @@ import { findReplBlocks } from "../text/parsing.ts";
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
 import { compactHistory, elideOldToolPayloads, rebaseWithState, shouldCompact } from "./compaction.ts";
-import { applyStatePatches, freshRunState, runStateTurnBlock, type RunStateMode } from "./run-state.ts";
+import { applyStatePatches, freshRunState, runStateTurnBlock, type RunState, type RunStateMode } from "./run-state.ts";
 import { findStatePatches } from "../text/parsing.ts";
 import { complete1, completeDeps } from "../bridge/handlers/completion.ts";
 import type { SubcallHandlerDeps } from "../bridge/handlers/types.ts";
@@ -86,6 +86,10 @@ export interface EngineDeps {
   /** SKILL.state (Workstream B): session-scoped distilled-knowledge store. Omitted ⇒ no Ξ
    *  harvest, no leaf grounding, no skill_search — zero behavior change. */
   readonly skillStore?: SkillStore;
+  /** Root Σ (WS-4): observer for the FINAL Σ of accepted runs — the root session tracker
+   *  mirrors it (one source, two sinks: the SkillStore harvest below + the tracker). Fires
+   *  for child engines (depth > 0) too; the tracker's dedup keeps the volume bounded. */
+  readonly onRunState?: (state: RunState) => void;
 }
 
 /** Build a `runRlm` bound to the given deps. The returned function is reused for recursion. */
@@ -211,8 +215,11 @@ export function createEngine(deps: EngineDeps): RunRlm {
     // Deterministic harvest is free (Σ is already structured); the opt-in A-Mem phrasing is
     // ONE cheap leaf call. Fail-soft: a distill failure must never damage a finished run.
     const harvestSkillNotes = async (): Promise<void> => {
-      if (skillStore === undefined || !deps.config.enableSkillState) return;
       if (runStateMode.kind !== "active") return;
+      // Root Σ WS-4 mirror FIRST — the tracker absorbs the final Σ even when the store is
+      // off (one source, two sinks; never a second harvest implementation).
+      deps.onRunState?.(runStateMode.state);
+      if (skillStore === undefined || !deps.config.enableSkillState) return;
       skillStore.merge(notesFromRunState(runStateMode.state));
       if (!deps.config.enableSkillStateDistill || deps.signal?.aborted === true) return;
       try {

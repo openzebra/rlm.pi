@@ -18,6 +18,7 @@ import { type Result, err, formatError, ok } from "../util/errors.ts";
 import { isRecord } from "../util/type-guards.ts";
 import type { StateFenceResult } from "../text/parsing.ts";
 import type { RlmConfig } from "./types.ts";
+import { SKILL_RECALL_LINE } from "../prompts/glossary.ts";
 
 /** Outcome of a tried approach — closed union, no boolean flags. */
 export type ApproachOutcome =
@@ -82,8 +83,9 @@ export type RunStateMode =
     }
   | { readonly kind: "degraded"; readonly reason: string };
 
-/** Mutable working shape — the runtime draft patches apply to before capping/freezing. */
-interface MutableState {
+/** Mutable working shape — the runtime draft patches apply to before capping/freezing.
+ *  Exported so the root tracker (core/root-state.ts) builds on the exact same shape. */
+export interface MutableState {
   task: string;
   nextStep: string;
   updatedAt: number;
@@ -164,7 +166,8 @@ function claimKey(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function dedupStrings(list: readonly string[]): string[] {
+/** Order-preserving dedup by claim key — shared by the engine caps path and the root tracker. */
+export function dedupStrings(list: readonly string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const s of list) {
@@ -231,8 +234,9 @@ function mutableArrayOf(draft: MutableState, field: string): string[] | undefine
   return undefined;
 }
 
-/** Deterministic caps enforcement — arrays → records → bytesTotal cascade (§6.1). */
-function enforceCaps(draft: MutableState): Result<RunState, PatchError> {
+/** Deterministic caps enforcement — arrays → records → bytesTotal cascade (§6.1).
+ *  Shared by the engine patch path and the root tracker (one implementation, DRY). */
+export function enforceCaps(draft: MutableState): Result<RunState, PatchError> {
   const findings = dedupStrings(draft.findings);
   const verifiedFacts = dedupStrings(draft.verifiedFacts);
   const openQuestions = dedupStrings(draft.openQuestions);
@@ -551,4 +555,15 @@ export const STATE_FENCE_INSTRUCTION: string =
 /** The per-turn A_t block: the fence contract + the current Σ (paper A_t = (P, Σ_t, O_t)). */
 export function runStateTurnBlock(state: RunState): string {
   return `${STATE_FENCE_INSTRUCTION}\n\n[Σ] ${compactJSON(state)}`;
+}
+
+/**
+ * Root Σ (WS-3b): the ROOT's A_t block — the snapshot WITHOUT the patch-fence contract (the
+ * root answers through Pi, not the engine's fence parser; WS-4.2 teaches fences separately
+ * when enabled). Recall line comes from the glossary (one wording source).
+ */
+export function runStateRootBlock(state: RunState): string {
+  return `[Σ] ${compactJSON(state)}\n` +
+    "Fresh tool results outrank Σ when they disagree.\n" +
+    `[Project facts recall: skill_search()] — ${SKILL_RECALL_LINE}`;
 }

@@ -66,4 +66,15 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   skillStateLeafTokens: 200,
   skillStateMinScore: 4.0,
   skillStateNotesPerProject: 128,
+  // Root Σ integration (WS-2..WS-4): digest compaction ON (it only swaps the summarizer for
+  // a deterministic digest — zero tokens, strictly less latency); the context transform and
+  // model-proposed fences soak with flags OFF until the A/B says otherwise.
+  enableRootDigestCompaction: true,
+  rootDigestKeepRecentChars: 12_000,
+  rootDigestMaxChars: 8_000,
+  enableRootContextTransform: false,
+  rootContextKeepTurns: 2,
+  rootContextElideChars: 1_500,
+  rootContextSnapshot: true,
+  enableRootStateFences: false,
 });

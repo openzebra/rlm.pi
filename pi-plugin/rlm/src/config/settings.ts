@@ -155,6 +155,23 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (skillStateMinScore !== undefined) out.skillStateMinScore = skillStateMinScore;
   const skillStateNotesPerProject = validateNumber(r.skillStateNotesPerProject, 1);
   if (skillStateNotesPerProject !== undefined) out.skillStateNotesPerProject = skillStateNotesPerProject;
+  // Root Σ integration (WS-2..WS-4)
+  const enableRootDigestCompaction = validateBoolean(r.enableRootDigestCompaction);
+  if (enableRootDigestCompaction !== undefined) out.enableRootDigestCompaction = enableRootDigestCompaction;
+  const rootDigestKeepRecentChars = validateNumber(r.rootDigestKeepRecentChars, 200);
+  if (rootDigestKeepRecentChars !== undefined) out.rootDigestKeepRecentChars = rootDigestKeepRecentChars;
+  const rootDigestMaxChars = validateNumber(r.rootDigestMaxChars, 200);
+  if (rootDigestMaxChars !== undefined) out.rootDigestMaxChars = rootDigestMaxChars;
+  const enableRootContextTransform = validateBoolean(r.enableRootContextTransform);
+  if (enableRootContextTransform !== undefined) out.enableRootContextTransform = enableRootContextTransform;
+  const rootContextKeepTurns = validateNumber(r.rootContextKeepTurns, 0);
+  if (rootContextKeepTurns !== undefined) out.rootContextKeepTurns = rootContextKeepTurns;
+  const rootContextElideChars = validateNumber(r.rootContextElideChars, 100);
+  if (rootContextElideChars !== undefined) out.rootContextElideChars = rootContextElideChars;
+  const rootContextSnapshot = validateBoolean(r.rootContextSnapshot);
+  if (rootContextSnapshot !== undefined) out.rootContextSnapshot = rootContextSnapshot;
+  const enableRootStateFences = validateBoolean(r.enableRootStateFences);
+  if (enableRootStateFences !== undefined) out.enableRootStateFences = enableRootStateFences;
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
     const ss = r.subSampling as Record<string, unknown>;
     const sampling: { maxTokens?: number; temperature?: number; reasoning?: ThinkingLevel } = {};

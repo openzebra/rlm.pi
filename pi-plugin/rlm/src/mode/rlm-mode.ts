@@ -17,6 +17,7 @@ import { RlmEmitter } from "../tool/rlm-events.ts";
 import { formatError } from "../util/errors.ts";
 import { cheapestModel } from "./llm-model.ts";
 import type { SkillStore } from "../config/skillstate.ts";
+import type { RunState } from "../core/run-state.ts";
 import type { RunRlm } from "../core/types.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
 
@@ -43,6 +44,8 @@ export class RlmController {
   /** SKILL.state (Workstream B): the session store — hydrated by index.ts at session_start.
    *  Undefined ⇒ no Ξ composition, no harvest: the headless path runs exactly as built. */
   skillStore: SkillStore | undefined;
+  /** Root Σ (WS-4): set by the extension — engine-finalize Σ flows to the root tracker. */
+  onRunState: ((state: RunState) => void) | undefined;
   /** Set by applyRlmSelection when the user explicitly picks "(follow session model)". */
   explicitClearRlmPin = false;
   private active: AbortController | null = null;
@@ -143,6 +146,7 @@ export class RlmController {
       limits: limitsFromConfig(this.config),
       gates: this.sessionGates?.(),
       skillStore: this.skillStore,
+      onRunState: this.onRunState,
     });
   }
 

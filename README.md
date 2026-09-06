@@ -43,6 +43,13 @@ models, recursively. Same Pi session, same tools, same keys — toggle `/rlm` an
 Modeled on the method in the [RLM paper](https://arxiv.org/abs/2512.24601); details in
 **How it works** below.
 
+Native (non-`/rlm`) sessions get the **Root Σ** layer: Ξ project-facts are re-ranked against
+every live prompt (WS-1), `/compact` produces a deterministic structural digest instead of an
+LLM prose summary (WS-2), and — opt-in — each LLM call gets discard semantics on stale tool
+payloads plus a fresh Σ snapshot (WS-3), while a session tracker harvests durable facts into
+the cross-session SkillState store (WS-4). All of it rides public Pi plugin seams; the
+transcript on disk stays complete, only what the model sees is managed.
+
 ## Benchmarks
 
 **OOLONG (oolong-synth)** — paper-tier long-context suite; latest journal per model,
@@ -195,6 +202,9 @@ These functions are injected into the model's Python namespace inside the REPL:
 | Sandbox init timeout | `30000` ms | how long to wait for the Python worker to start |
 | Context loader | on | expose `add_context()` for external dirs/files/documents/git repos |
 | Auto-seed cwd | on | seed the working directory into `context` on the first `repl()` |
+| Root digest compaction | on | `/compact` yields a deterministic Σ-style digest — no summarizer LLM call |
+| Root context transform | off | per-call elision of stale tool payloads + one Σ snapshot (soak flag) |
+| Root state fences | off | model-proposed ΔΣ_t patches from the native session (fence-tax guard) |
 
 > **Concurrency note:** each `rlm_query` child spawns its own `python3` worker (~50–150 ms
 > cold start). Children are bounded separately (`maxConcurrentChildren`, default 6) because

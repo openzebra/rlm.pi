@@ -10,7 +10,6 @@ import type { RlmConfig } from "./core/types.ts";
 import { createRlmTool } from "./tool/rlm-tool.ts";
 import { createReplTool } from "./tool/repl-tool.ts";
 import { loadSettings, mergeConfig, resolveModelId } from "./config/settings.ts";
-import { isRecord } from "./util/type-guards.ts";
 import { RlmController } from "./mode/rlm-mode.ts";
 import { cheapestModel } from "./mode/llm-model.ts";
 import { postRlmGuide } from "./ui/intro.ts";
@@ -28,7 +27,12 @@ import { formatContextListing } from "./context/listing.ts";
 import { extractEditPaths, readDiskFile } from "./context/refresh.ts";
 import type { AddContextHandlerBundle } from "./bridge/add-context.ts";
 import { buildNativeSystemPrompt } from "./prompts/native.ts";
-import { SkillStore } from "./config/skillstate.ts";
+import { SkillStore, notesFromRunState, xiQuery } from "./config/skillstate.ts";
+import { buildRootDigestCompaction } from "./core/root-digest.ts";
+import { RootStateTracker } from "./core/root-state.ts";
+import { elideStalePayloads, spliceSigmaSnapshot } from "./core/root-context.ts";
+import { agentMessageText, firstLine, textContentOf } from "./text/agent-text.ts";
+import { findStatePatches } from "./text/parsing.ts";
 import { capToolResultText } from "./mode/native-guards.ts";
 import {
   isSubagentChildBypass,
@@ -69,6 +73,9 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // Init synchronously with defaults — ensures commands/tools/handlers register before session_start
   const config = mergeConfig({});
   const controller = new RlmController(config);
+  // Root Σ WS-4: engine-finalize Σ flows into the root tracker (assigned once; buildEngine
+  // reads it per run, so /rlm-config and session resets never stale this wire).
+  controller.onRunState = (state) => { rootTracker?.absorbEngineState(state); };
   let onSandboxDiscardExtra: (() => void) | undefined;
   const sandboxManager = new SandboxManager({
     execTimeoutS: config.execTimeoutS,
@@ -103,6 +110,14 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   let treePanelInstalled = false;
   /** SKILL.state (Workstream B): session store — hydrated at session_start, flushed at shutdown. */
   let skillStore: SkillStore | undefined;
+  /** Root Σ (WS-3/4): the native session's digest-level Σ_t — runtime-derived (tool outcomes,
+   *  engine mirrors, prompts); lazily born on the first prompt, harvested + dropped at shutdown. */
+  let rootTracker: RootStateTracker | undefined;
+  // Root Σ WS-5.1 telemetry — journal counters (trace lines only; no TUI surface by design).
+  let xiCompositions = 0;
+  let rootDigests = 0;
+  let elidedMessages = 0;
+  let sigmaSplices = 0;
   // A detached child works in its OWN sandbox, so this one sees no frames and its request
   // watchdog would fire mid-await and SIGKILL a healthy worker, taking the REPL namespace
   // with it. Keep it alive while detached work is genuinely in flight.
@@ -155,28 +170,14 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // ── Message renderers ──
   // Markdown themes are derived from the injected `theme`, never pi's module-global
   // `getMarkdownTheme()` — under jiti that global can be undefined inside a plugin.
-  
-/** Text payload of a pi message: string content as-is, text blocks joined - never "[object Object]". */
-function messageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  const parts = new Array<string>(content.length);
-  let n = 0;
-  for (const block of content) {
-    if (isRecord(block) && typeof block.text === "string") parts[n++] = block.text;
-  }
-  parts.length = n;
-  return parts.join("");
-}
-
-pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
-    new Markdown(messageText(message.content), 1, 0, markdownTheme(theme)),
+  pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
+    new Markdown(textContentOf(message.content), 1, 0, markdownTheme(theme)),
   );
   pi.registerMessageRenderer("rlm-question", (message, _options, theme) =>
-    new Markdown(`**RLM question**\n\n${messageText(message.content)}`, 1, 0, markdownTheme(theme)),
+    new Markdown(`**RLM question**\n\n${textContentOf(message.content)}`, 1, 0, markdownTheme(theme)),
   );
   pi.registerMessageRenderer("rlm-intro", (message, _options, theme) =>
-    new Markdown(messageText(message.content), 1, 0, markdownTheme(theme)),
+    new Markdown(textContentOf(message.content), 1, 0, markdownTheme(theme)),
   );
 
   // ── CLI flag: `pi --rlm` / `pi --rlm=false` overrides the persisted mode for this run ──
@@ -311,6 +312,7 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
           background,
           runRegistry,
           skillStore,
+          onRunState: (state) => { rootTracker?.absorbEngineState(state); },
           getSkillBlock: composeSkillBlock,
           registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
           registerContextBundle: (bundle) => {
@@ -357,14 +359,72 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
       activeToolNames: typeof pi.getActiveTools === "function" ? pi.getActiveTools() : undefined,
     });
 
+  /** Root Σ WS-3 gate: config flag AND the bench A/B toggle (RLM_BENCH_NO_ROOTCONTEXT=1 skips). */
+  const rootContextActive = (): boolean =>
+    controller.config.enableRootContextTransform && process.env.RLM_BENCH_NO_ROOTCONTEXT !== "1";
+
   // ── System prompt: native RLM mode addendum (only when the trade holds) ──
   pi.on("before_agent_start", async (event) => {
     if (!nativeTradeHolds()) return;
-    // Ξ (Workstream C): the session skill block is PER-SESSION text — concatenated here, so
-    // NATIVE_PROMPT_STATIC (the module-load snapshot) and its budget math stay untouched.
-    const xi = composeSkillBlock(event.systemPrompt.slice(0, 2_000));
+    // Root Σ: lazy tracker birth on the session's first prompt (the task IS that prompt).
+    rootTracker ??= RootStateTracker.fresh(event.prompt, controller.config.runStateRetryMax);
+    // Ξ (Workstream C / Root Σ WS-1): the block is PER-PROMPT text — BM25 ranks the store
+    // against the live user prompt (mid-session harvests surface immediately), falling back
+    // to the static slice when the prompt is empty. Concatenated here, so NATIVE_PROMPT_STATIC
+    // (the module-load snapshot) and its budget math stay untouched.
+    const xi = composeSkillBlock(xiQuery(event.prompt, event.systemPrompt.slice(0, 2_000)));
+    if (xi !== undefined) {
+      xiCompositions += 1;
+      if (traceEnabled) trace("root-xi.compose", { total: xiCompositions, chars: xi.length });
+    }
     const xiPart = xi === undefined ? "" : `${xi}\n\n`;
-    return { systemPrompt: event.systemPrompt + "\n\n" + xiPart + buildNativeSystemPrompt() };
+    // Root Σ WS-4: the user's latest ask IS the next step by definition; feed the tracker
+    // before the turn so the Σ snapshot in this turn's context carries it.
+    rootTracker?.setNextStep(event.prompt);
+    // Root Σ WS-4.2 (enableRootStateFences): a rejected ΔΣ_t from the previous turn surfaces
+    // as an observation message — the same error-as-observation retry ladder engine runs use.
+    const observation = rootTracker?.takePendingObservation();
+    const message = observation === undefined
+      ? undefined
+      : { customType: "rlm-sigma-observation", content: observation, display: false, details: undefined };
+    return {
+      ...(message === undefined ? {} : { message }),
+      systemPrompt: event.systemPrompt + "\n\n" + xiPart + buildNativeSystemPrompt(),
+    };
+  });
+
+  // Root Σ WS-4.2 (default OFF): capture model-proposed ΔΣ_t fences from finalized assistant
+  // replies and run them through the ONE patch validator (run-state.ts applyPatch).
+  pi.on("message_end", async (event) => {
+    const tracker = rootTracker;
+    if (tracker === undefined || !controller.config.enableRootStateFences) return;
+    if (event.message.role !== "assistant") return;
+    const text = agentMessageText(event.message);
+    if (text === "") return;
+    tracker.applyFences(findStatePatches(text));
+  });
+
+  // ── Root Σ WS-2: deterministic root compaction (no summary LLM call) ──
+  pi.on("session_before_compact", async (event) => {
+    if (!controller.config.enableRootDigestCompaction) return undefined;
+    if (!nativeTradeHolds() && !controller.enabled) return undefined;
+    try {
+      const result = buildRootDigestCompaction({
+        preparation: event.preparation,
+        branchEntries: event.branchEntries,
+        config: controller.config,
+        store: skillStore,
+      });
+      if (result !== undefined) {
+        rootDigests += 1;
+        if (traceEnabled) trace("root-digest.built", { count: rootDigests, chars: result.compaction.summary.length });
+      }
+      return result;
+    } catch (err) {
+      // Fail-soft by contract (packages/agent/src/types.ts:191): Pi falls back to its summarizer.
+      if (traceEnabled) trace("root-digest.fail", { error: errorMessage(err) });
+      return undefined;
+    }
   });
 
   // ── Context injection: listing of whatever is currently loaded ──
@@ -377,6 +437,29 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
 
     );
     if (!nativeTradeHolds()) return { messages: filtered };
+
+    // Root Σ WS-3: per-call A_t on the clone Pi hands us (runner.ts structuredClone — the last
+    // returned array wins; the disk transcript is untouched). Elide stale payloads (§5.3),
+    // then splice exactly one fresh Σ snapshot. Fail-soft: a throw here must never break a turn.
+    if (rootContextActive()) {
+      try {
+        const elided = elideStalePayloads(filtered, {
+          keepTurns: controller.config.rootContextKeepTurns,
+          elideChars: controller.config.rootContextElideChars,
+        });
+        elidedMessages += elided;
+        const tracker = rootTracker;
+        if (controller.config.rootContextSnapshot && tracker !== undefined && !tracker.isEmpty) {
+          spliceSigmaSnapshot(filtered, tracker.snapshot(), tracker.rectifyHint());
+          sigmaSplices += 1;
+        }
+        if (traceEnabled && (elided > 0 || sigmaSplices > 0)) {
+          trace("root-context.transform", { elided, total: elidedMessages, splices: sigmaSplices });
+        }
+      } catch (err) {
+        if (traceEnabled) trace("root-context.fail", { error: errorMessage(err) });
+      }
+    }
 
     type PiMessage = (typeof filtered)[number];
 
@@ -409,6 +492,17 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
   const MUTATING_FILE_TOOLS = Object.freeze(new Set(["edit", "write"]));
 
   pi.on("tool_result", async (event, ctx) => {
+    // Root Σ WS-4: the tracker learns the session's shape from outcomes — deterministic, zero
+    // model cooperation; fresh results always outrank Σ (paper §5.3 observation override).
+    const tracker = rootTracker;
+    if (tracker !== undefined) {
+      tracker.observeToolResult(
+        event.toolName,
+        event.isError,
+        event.isError ? firstLine(textContentOf(event.content)) : "",
+      );
+    }
+
     // ── Keep RLM context fresh after native file mutations ──
     if (
       nativeTradeHolds()
@@ -420,6 +514,7 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
       for (const p of paths) {
         const body = await readDiskFile(p, cwd);
         if (body === null) continue;
+        rootTracker?.noteFact(`edited ${p}`); // WS-4: the tracker learns the session's file shape
         try {
           await sandboxManager.refreshFileFromDisk(p, body, cwd);
           // Listing must re-inject if we rewrote payload identity
@@ -446,6 +541,17 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
 
   // ── Session shutdown: cleanup ──
   pi.on("session_shutdown", async () => {
+    // Root Σ WS-4 harvest symmetry: the root tracker teaches the store exactly like engine
+    // runs — the ONE notesFromRunState path — then the existing flush persists everything.
+    const tracker = rootTracker;
+    if (skillStore !== undefined && tracker !== undefined && tracker.dirty && controller.config.enableSkillState) {
+      try {
+        skillStore.merge(notesFromRunState(tracker.snapshot()));
+        if (traceEnabled) trace("root-harvest.merged", { notes: tracker.snapshot().verifiedFacts.length });
+      } catch (err) {
+        if (traceEnabled) trace("root-harvest.fail", { error: errorMessage(err) });
+      }
+    }
     await skillStore?.flush(); // SKILL.state (Workstream B): persist distilled notes
     controller.abort();
     clearInterval(watchdogHeartbeat);
@@ -457,6 +563,7 @@ pi.registerMessageRenderer("rlm-answer", (message, _options, theme) =>
     listingPayloadRef = undefined;
     listingInjected = false;
     skillStore = undefined;
+    rootTracker = undefined;
     sandboxManager.contextPayload = [];
   });
 }

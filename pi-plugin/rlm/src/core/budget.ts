@@ -157,7 +157,8 @@ const FINDINGS_MAX = 6;
 const FINDINGS_MIN_CHARS = 20;
 const STATE_MAX = 8;
 const STATE_NEEDLE = "REPL stdout";
-const NEXT_STEP_RE = /next|then|will |todo/i;
+/** Next-step probe shared by the engine handoff and the root digest (one wording source). */
+export const NEXT_STEP_RE = /next|then|will |todo/i;
 
 /**
  * Deterministic trajectory → handoff (v5 `distill_trajectory`). No LLM call: the model was

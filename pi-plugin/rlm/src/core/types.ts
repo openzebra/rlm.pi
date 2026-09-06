@@ -121,6 +121,29 @@ export interface RlmConfig {
   readonly skillStateMinScore: number;
   /** Per-project note cap; LRU by ts with the top-hits quartile pinned (Workstream B). */
   readonly skillStateNotesPerProject: number;
+
+  // ── Root Σ integration (Root Σ plan WS-2..WS-4) ──
+  /** Deterministic root compaction: when the Pi session compacts, supply a no-LLM structural
+   *  digest ([Task]/[Findings]/[State]/[Next]/[Project facts]) instead of Pi's LLM prose
+  *  summarizer. Fail-soft: any error falls back to the host path. */
+  readonly enableRootDigestCompaction: boolean;
+  /** Verbatim tail (chars) the root digest keeps out of the digest span — entries after the
+   *  chosen cut stay byte-identical in context (never summarized). */
+  readonly rootDigestKeepRecentChars: number;
+  /** Cap for the generated digest string; over-cap drops sections in continuity order. */
+  readonly rootDigestMaxChars: number;
+  /** Per-LLM-call root A_t assembly via the `context` event (WS-3): elide stale tool
+   *  payloads (paper §5.3 discard) + splice the fresh Σ snapshot. Default OFF until soak. */
+  readonly enableRootContextTransform: boolean;
+  /** Newest assistant turns kept verbatim by the root elision (mirrors engine keepTurns). */
+  readonly rootContextKeepTurns: number;
+  /** Tool-result payloads older than the keep window are preview-capped at this many chars. */
+  readonly rootContextElideChars: number;
+  /** Splice the RootStateTracker Σ snapshot before the last user message each call. */
+  readonly rootContextSnapshot: boolean;
+  /** WS-4.2 (default OFF, paper §5.7 fence tax): the root may commit ΔΣ_t via a ```state
+   *  fence in a normal reply; patches ride the same V(ΔΣ_t,Σ_t) ladder as engine runs. */
+  readonly enableRootStateFences: boolean;
 }
 
 /** Input to a (headless) RLM run. */

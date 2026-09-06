@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Root Σ integration (WS-1..WS-4)** — SKILL.state reaches the native Pi harness
+  orchestrator through public plugin seams only:
+  - **WS-1, per-prompt Ξ refresh**: `before_agent_start` now BM25-ranks the SkillState store
+    against the LIVE user prompt (`xiQuery`) instead of a frozen system-prompt slice —
+    mid-session harvests surface in the very next prompt.
+  - **WS-2, deterministic root compaction** (`enableRootDigestCompaction`, default ON):
+    `session_before_compact` supplies a structural `[Task]/[Findings]/[State]/[Next]/[Project
+    facts]` digest (`core/root-digest.ts`) in place of Pi's LLM prose summarizer — zero
+    summary tokens, reproducible. Cut points only tighten Pi's boundary; the verbatim tail
+    budget is `rootDigestKeepRecentChars` (12 000 chars), the digest cap `rootDigestMaxChars`
+    (8 000 chars) with section drop order facts → state → findings.
+  - **WS-3, per-call A_t on the root** (`enableRootContextTransform`, default OFF until
+    soak): the `context` event elides stale tool payloads (paper §5.3 discard,
+    `rootContextKeepTurns`/`rootContextElideChars`) and splices exactly one fresh Σ snapshot
+    (`customType: "rlm-sigma"`, `rootContextSnapshot`) before the last user message — on the
+    clone only, the disk transcript stays complete. A/B via `RLM_BENCH_NO_ROOTCONTEXT=1`.
+  - **WS-4, RootStateTracker + harvest symmetry** (`core/root-state.ts`): a digest-level Σ
+    for the session, fed by tool outcomes, the user's latest prompt, and engine-finalize
+    mirrors (the ONE `EngineDeps.onRunState` seam); at `session_shutdown` it teaches the
+    SkillState store through the same `notesFromRunState` path engine runs use. Rectify
+    parity: two consecutive failed outcomes on one key inject a MAS2-style narrow-the-
+    approach hint. Optional model-proposed ΔΣ_t fences (`enableRootStateFences`, default
+    OFF per the §5.7 fence tax) ride the existing validator with the retry/degrade ladder.
 - **SKILL.state integration** (commit `41c989c`): Σ_t execution state with fenced
   `state_patch` protocol (paper §3.2 — dotted paths, `[+]` append, `[N]` slot, `null`
   delete), deterministic structural compaction `[P, Σ_t, window(O)]` in place of the LLM

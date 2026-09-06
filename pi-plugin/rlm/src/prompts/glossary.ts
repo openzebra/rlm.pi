@@ -58,13 +58,25 @@ const SKILL_SEARCH_GLOSSARY_LINES: readonly string[] = Object.freeze([
 
 /** Single source of wording for the injected SkillState block (headless + native, Workstream C).
  *  Takes the dynamic body as an argument — the glossary itself stays static-only. */
+/** One wording source for the skill_search recall hint (Ξ block + root Σ snapshot). */
+export const SKILL_RECALL_LINE =
+  "Recall more anytime inside repl: `skill_search(query, k=8)` → [{id, text, tags, score}].";
+
 export function skillStateLines(noteCount: number, body: string): string {
   return [
     `[Project facts — SkillState, ${noteCount} note${noteCount === 1 ? "" : "s"}, distilled from prior sessions]`,
     body,
-    "Recall more anytime inside repl: `skill_search(query, k=8)` → [{id, text, tags, score}].",
+    SKILL_RECALL_LINE,
   ].join("\n");
 }
+
+/** Root Σ WS-2 digest wording — the single source for the header and section labels. */
+export const ROOT_DIGEST_HEADER =
+  "[Root digest — deterministic structural compaction (no model call). Older turns are " +
+  "superseded by this digest plus the verbatim tail that follows; fresh tool results " +
+  "outrank the digest when they disagree.]";
+export const ROOT_DIGEST_SECTIONS: Readonly<Record<"task" | "findings" | "state" | "next" | "facts", string>> =
+  Object.freeze({ task: "Task", findings: "Findings", state: "State", next: "Next", facts: "Project facts" });
 
 /** One-line delegation helpers — orchestrating must be cheaper than solving. */
 const DELEGATION_GLOSSARY_LINES: readonly string[] = Object.freeze([

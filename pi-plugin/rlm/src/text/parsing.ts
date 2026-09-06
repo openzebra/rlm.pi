@@ -70,11 +70,13 @@ export function findStatePatches(text: string): readonly StateFenceResult[] {
   return out;
 }
 
-/** Truncate REPL stdout for the model's context window (head + tail, with an elision note). */
-export function truncateOutput(text: string, limit = 20_000): string {
+/** Truncate REPL stdout for the model's context window (head + tail, with an elision note).
+ *  `mark` lets callers specialize the wording (root elision cites the session log) while the
+ *  head/tail math stays the one implementation. */
+export function truncateOutput(text: string, limit = 20_000, mark = "chars elided"): string {
   if (text.length <= limit) return text;
   const head = Math.floor(limit * 0.7);
   const tail = limit - head;
   const cut = text.length - head - tail;
-  return `${text.slice(0, head)}\n... [${cut} chars elided] ...\n${text.slice(-tail)}`;
+  return `${text.slice(0, head)}\n... [${cut} ${mark}] ...\n${text.slice(-tail)}`;
 }

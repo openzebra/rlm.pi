@@ -170,6 +170,37 @@ in these workstreams obeys the standards above PLUS:
   `guards.py`/`worker.py`, glossary line. Model-visible surface grows only when the profit is
   proven.
 
+## Root Σ Integration Conventions (WS-1..WS-4)
+
+The Root Σ plan (`/tmp/ROOT_SKILL_STATE_PLAN.md`) brings SKILL.state to the native Pi harness
+orchestrator through public plugin seams only — no host modifications. Conventions on top of
+the SKILL.state rules above:
+
+- **RootStateTracker** (`core/root-state.ts`) is runtime-derived (tool outcomes, engine-run
+  mirrors via the ONE `EngineDeps.onRunState` seam, the user's latest prompt). The root's Σ is
+  a digest, never model-authored by default; the fence protocol (`enableRootStateFences`)
+  is the only model-proposed input, is OFF by default (paper §5.7 fence tax), and rides the
+  same `V(ΔΣ_t,Σ_t)` ladder + retry/degrade semantics as engine runs (cites §3, §5.3, §5.7).
+- **`session_before_compact` seam** (WS-2): `core/root-digest.ts` supplies a deterministic
+  no-LLM digest. Cut points only ever TIGHTEN Pi's boundary (never extend) and every
+  displaced message folds into the digest inputs — nothing is dropped unaccounted. Never
+  return `cancel: true` (overflow recovery depends on compaction happening).
+- **`context`-event discipline** (WS-3): handlers receive a `structuredClone` — mutate it in
+  place (zero extra allocations), return `{ messages }`; the disk transcript is never touched
+  (context is the query channel, the session log is the archive). Every handler body is
+  wrapped fail-soft: a throw must return the identity, never break the turn (host contract
+  `packages/agent/src/types.ts:191`). The Σ snapshot self-identifies via
+  `customType: "rlm-sigma"` and elision must keep it immune.
+- **"No session state at module load" also covers event handlers**: per-session state
+  (`rootTracker`, telemetry counters, the skill store) lives in the `rlmExtension` closure —
+  module-level consts stay frozen import-time snapshots.
+- **One wording source**: digest header/section labels and the skill_search recall line live
+  in `prompts/glossary.ts` (`ROOT_DIGEST_*`, `SKILL_RECALL_LINE`); `runStateRootBlock` composes
+  from them instead of re-wording.
+- **Bench A/B**: `RLM_BENCH_NO_ROOTCONTEXT=1` skips the WS-3 transform at the gate
+  (`rootContextActive()` in index.ts); telemetry is journal-only (`trace` + closure counters:
+  `xiCompositions`, `rootDigests`, `elidedMessages`, `sigmaSplices`).
+
 ## Testing
 - Tests live in `pi-plugin/rlm/test/`
 - Phase-based tests: `phase1.ts` … `phase-*.ts`; `test/smoke.ts` runs every suite and boots a real sandbox

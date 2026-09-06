@@ -6,6 +6,10 @@
 
 import { buildMetadataLine, buildRlmSystemPrompt } from "../src/prompts/system.ts";
 import { NATIVE_PROMPT_BUDGET, NATIVE_PROMPT_STATIC } from "../src/prompts/native.ts";
+import { SkillStore, xiQuery } from "../src/config/skillstate.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { check, finish } from "./helpers.ts";
 
 const META_LINE_NEEDLE = "Your context is";
@@ -56,6 +60,37 @@ const BLOCK = [
     `${NATIVE_PROMPT_STATIC.length} <= ${NATIVE_PROMPT_BUDGET}`);
   check("native static snapshot has no Ξ", !NATIVE_PROMPT_STATIC.includes("SkillState"));
   check("native budget untouched", NATIVE_PROMPT_BUDGET === 9_500);
+}
+
+// ── Root Σ WS-1: per-prompt Ξ query + relevance + mid-session freshness ─────────────
+{
+  check("xiQuery: live prompt wins", xiQuery("  how does the retry policy handle 429s?  ", "fallback") === "how does the retry policy handle 429s?");
+  check("xiQuery: empty prompt ⇒ fallback", xiQuery("", "static slice") === "static slice");
+  check("xiQuery: whitespace prompt ⇒ fallback", xiQuery("   ", "static slice") === "static slice");
+}
+{
+  const tmp = mkdtempSync(join(tmpdir(), "rlm-xi-query-"));
+  try {
+    const store = await SkillStore.hydrate(16, tmp);
+    store.merge([
+      { text: "retry policy: 15 attempts, 500ms→15s backoff, 429s park on a per-provider cooldown", keywords: ["retry", "cooldown"], tags: ["config"] },
+      { text: "gardening: tomatoes want compost and six hours of sun", keywords: ["tomatoes", "compost"], tags: ["gotcha"] },
+    ]);
+    const onTopic = store.blockFor("how does the retry policy handle 429s?", 1_200);
+    check("on-topic prompt selects the retry note", onTopic.includes("retry policy"));
+    check("on-topic prompt skips the garden note", !onTopic.includes("tomatoes"));
+    const offTopic = store.blockFor("gardening soil tomatoes compost schedule", 1_200);
+    check("other prompt selects the other note", offTopic.includes("tomatoes") && !offTopic.includes("retry policy"));
+
+    // Mid-session freshness: a harvest landing between prompts is visible in the next Ξ.
+    store.merge([{ text: "sandbox scaffold now exports stateHarness for tests", keywords: ["stateharness"], tags: ["symbol"] }]);
+    check(
+      "mid-session merge is visible immediately",
+      store.blockFor("where is stateHarness defined?", 1_200).includes("stateHarness"),
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 finish();

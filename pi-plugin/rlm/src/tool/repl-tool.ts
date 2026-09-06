@@ -37,6 +37,7 @@ import { SubcallStore } from "./subcall-store.ts";
 import type { ReplDetails } from "./repl-details.ts";
 import type { RlmSubcall } from "./rlm-details.ts";
 import { createEngine } from "../core/engine.ts";
+import type { RunState } from "../core/run-state.ts";
 import { modelRef } from "../config/settings.ts";
 import { spinnerFrame } from "../ui/theme.ts";
 import { CALL_PREVIEW_CHARS, previewText } from "../text/preview.ts";
@@ -122,6 +123,8 @@ interface ReplToolDeps {
   readonly background: BackgroundTasks;
   /** SKILL.state (Workstream B): session store — leaf grounding, skill_search, child Ξ. */
   readonly skillStore?: SkillStore;
+  /** Root Σ (WS-4): engine-finalize Σ observer, forwarded to createEngine (one seam). */
+  readonly onRunState?: (state: RunState) => void;
   /** Ξ composer for repl()-spawned child engines (first hop; deeper hops copy via childRun). */
   readonly getSkillBlock?: (task: string) => string | undefined;
   /** Session tree panel index; omitted → runs don't appear in the widget. */
@@ -183,6 +186,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       onUsage: onUsage === undefined ? undefined : (usage: Usage) => onUsage(usage, "sub"),
       limits: limitsFromConfig(getConfig()),
       skillStore: deps.skillStore,
+      onRunState: deps.onRunState,
     })(childInput);
   };
 
