@@ -12,6 +12,7 @@
 // incompatible copy of the Model/ModelRegistry types from the repo-root package.
 import { createEngine, type EngineDeps } from "../pi-plugin/rlm/src/core/engine.ts";
 import { DEFAULT_CONFIG } from "../pi-plugin/rlm/src/config/defaults.ts";
+import type { SkillStore } from "../pi-plugin/rlm/src/config/skillstate.ts";
 import { RlmEmitter } from "../pi-plugin/rlm/src/tool/rlm-events.ts";
 import type { RlmConfig, RunRlm, Sampling } from "../pi-plugin/rlm/src/core/types.ts";
 
@@ -100,6 +101,9 @@ export interface BenchRunOpts {
   readonly reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   /** Real USD-per-token prices (see fetchPricing); default zeros (only listings run without). */
   readonly pricing?: BenchPricing;
+  /** Hydrated SkillState store — without it the ON arm's SkillState features are inert
+   *  (engine runs as-built whenever deps.skillStore is undefined). Wire from run.ts. */
+  readonly skillStore?: SkillStore;
 }
 
 /**
@@ -186,5 +190,6 @@ export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts
     registry,
     config,
     emitter: new RlmEmitter(),
+    ...(opts?.skillStore === undefined ? {} : { skillStore: opts.skillStore }),
   });
 }
