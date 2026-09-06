@@ -427,7 +427,10 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           });
         }
       }
-      return result?.compaction;
+      // SessionBeforeCompactResult SHAPE: the host consumes `result.compaction` — return the
+      // WRAPPER, never the bare CompactionResult (a bare one reads as `compaction: undefined`
+      // host-side and silently falls back to the LLM summarizer).
+      return result === undefined ? undefined : { compaction: result.compaction };
     } catch (err) {
       // Fail-soft by contract (packages/agent/src/types.ts:191): Pi falls back to its summarizer.
       if (traceEnabled) trace("root-digest.fail", { error: errorMessage(err) });

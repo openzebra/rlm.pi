@@ -10,9 +10,9 @@
 		"typescript": "^5.0.0"
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-ai": "^0.84.1",
-		"@earendil-works/pi-coding-agent": "^0.84.1",
-		"@earendil-works/pi-tui": "^0.84.1",
+		"@earendil-works/pi-ai": "^0.85.1",
+		"@earendil-works/pi-coding-agent": "^0.85.1",
+		"@earendil-works/pi-tui": "^0.85.1",
 		"typebox": "*"
 	},
 	"bugs": {
@@ -52,7 +52,7 @@
 		"node": ">=20"
 	},
 	"dependencies": {
-		"@earendil-works/pi-agent-core": "^0.84.1",
+		"@earendil-works/pi-agent-core": "^0.85.1",
 		"@firecrawl/anydoc": "^0.2.4"
 	}
 }
