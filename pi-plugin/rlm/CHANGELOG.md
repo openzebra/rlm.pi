@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **SKILL.state integration** (commit `41c989c`): Σ_t execution state with fenced
+  `state_patch` protocol (paper §3.2 — dotted paths, `[+]` append, `[N]` slot, `null`
+  delete), deterministic structural compaction `[P, Σ_t, window(O)]` in place of the LLM
+  prose summarizer, a persistent cross-session SkillState store
+  (`~/.pi/agent/rlm-skillstate.json`, A-Mem-style notes, per-project sections), BM25 leaf
+  grounding, and `skill_search()` in the REPL sandbox.
+- **Per-turn patch byte cap** (`RUN_STATE_LIMITS.patchBytes` = 1500, bench campaign rec #1):
+  an oversized `state_patch` is rejected whole with error-as-observation feedback, before
+  the draft clone. Targets the oolong ×5.4 output tax from verbose whole-record patches.
+- **Delta-discipline fence instruction** (rec #1): `STATE_FENCE_INSTRUCTION` now demands
+  deltas ("never restate unchanged records or arrays") and ships a compact few-shot example.
+- **Idle auto-degrade** (rec #2): after `RUN_STATE_IDLE_DEGRADE_TURNS` (4) consecutive
+  fence-requested turns with zero accepted deltas, the run degrades to as-built — the
+  weak-model fence tax (gemma-3-27b: input ×5.5 at flat accuracy) now self-extinguishes.
+  Accepted deltas reset the streak; unrequested turns are unaffected.
+
+### Changed
+
+- `enableSkillStateDistill` now defaults **true** (rec #3): harvest is deterministic — one
+  cheap distill leaf per finalize replaces the stochastic fence-emission harvest (0 vs 4
+  notes across identical ON arms). Opt out via `rlm.json`.
+- Retry parks are observable (rec #5): one `[rlm]` warn line per provider-cooldown park and
+  per backoff retry whenever the caller does not pass `onPark` — a stall can no longer
+  masquerade as a hang (15 attempts × 15 cooldown windows went unlogged in the campaign).
+
+### Fixed
+
+- All 16 eslint errors: 7 × `no-dynamic-delete` scoped-disabled in the ⊕ merge/eviction
+  paths (dynamic delete is intrinsic to null-deletion semantics), 6 ×
+  `no-unnecessary-boolean-literal-compare` simplified, 3 × floating `main()` promises in
+  tests made explicit (`void`).
+
+### Removed
+
+- The `childSurface` config axis (delegation child surface) was removed from the runtime
+  earlier; release notes ≤ 0.3.8 still described it. Legacy `rlm.json` keys (`worker`,
+  `libraryLoader`) are silently dropped per doctrine — now documented here.
+
 ## [0.3.16] — 2026-08-31
 
 ### Added

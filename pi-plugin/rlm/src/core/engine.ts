@@ -162,8 +162,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
     // behaves exactly as built. History-as-deliverable runs (narrative) keep their archive
     // as the product — RunState never activates there (§12.1).
     let runStateMode: RunStateMode =
-      deps.config.enableRunState === true && input.narrative !== true
-        ? { kind: "active", state: freshRunState(input.rootPrompt.slice(0, 200)), retries: 0 }
+      deps.config.enableRunState && input.narrative !== true
+        ? { kind: "active", state: freshRunState(input.rootPrompt.slice(0, 200)), retries: 0, idle: 0 }
         : { kind: "degraded", reason: input.narrative === true ? "narrative" : "disabled" };
 
     // Workstream F: a rectified continuation may shrink leaf admission for THIS run only —
@@ -214,7 +214,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
       if (skillStore === undefined || !deps.config.enableSkillState) return;
       if (runStateMode.kind !== "active") return;
       skillStore.merge(notesFromRunState(runStateMode.state));
-      if (deps.config.enableSkillStateDistill !== true || deps.signal?.aborted === true) return;
+      if (!deps.config.enableSkillStateDistill || deps.signal?.aborted === true) return;
       try {
         const raw = await complete1(
           invocation,
@@ -471,7 +471,13 @@ export function createEngine(deps: EngineDeps): RunRlm {
         // back and lead the next observation (error-as-observation retry); retries exhausted
         // ⇒ degrade to as-built for the rest of the run.
         if (runStateMode.kind === "active") {
-          const applied = applyStatePatches(runStateMode, findStatePatches(turn.response), i + 1, deps.config);
+          const applied = applyStatePatches(
+            runStateMode,
+            findStatePatches(turn.response),
+            i + 1,
+            deps.config,
+            i >= 2, // the fence was requested this turn → empty turns count as idle (bench rec #2)
+          );
           runStateMode = applied.mode;
           if (applied.observation !== undefined) {
             pendingReplOutputs = `${applied.observation}\n\n${pendingReplOutputs}`;

@@ -76,4 +76,4 @@ async function main(): Promise<void> {
   finish();
 }
 
-main();
+void main(); // explicit: fire-and-forget, no floating promise

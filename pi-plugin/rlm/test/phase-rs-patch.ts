@@ -10,6 +10,7 @@ import {
   compactJSON,
   freshRunState,
   isRunState,
+  RUN_STATE_IDLE_DEGRADE_TURNS,
   RUN_STATE_LIMITS,
   type RunStateMode,
 } from "../src/core/run-state.ts";
@@ -161,10 +162,17 @@ function base() {
   for (let i = 0; i < RUN_STATE_LIMITS.artifacts + 3; i++) keys[`artifact_${i}`] = `var_${i}`;
   const r2 = applyPatch(base(), { state_patch: { artifacts: keys } }, 1);
   check("artifacts capped", r2.ok && Object.keys(r2.value.artifacts).length === RUN_STATE_LIMITS.artifacts);
-  // bytesTotal: flood findings with giant strings until the cascade must evict everything.
-  const giant = Array.from({ length: 40 }, (_, i) => `f${i}: ${"x".repeat(2000)}`);
-  const r3 = applyPatch(base(), { state_patch: { findings: giant } }, 1);
-  check("bytesTotal enforced", r3.ok && JSON.stringify(r3.value).length <= RUN_STATE_LIMITS.bytesTotal);
+  // bytesTotal: many SUB-CAP deltas cannot push Σ past κ_Σ — the cascade evicts
+  // oldest-first. (A single patch over patchBytes is rejected whole — rec #1 checks below.)
+  let st = base();
+  let crossed = false;
+  for (let i = 0; i < 40; i++) {
+    const rr = applyPatch(st, { state_patch: { "verifiedFacts[+]": `f${i}: ${"x".repeat(1200)}` } }, i + 1);
+    if (!rr.ok) break;
+    st = rr.value;
+    if (JSON.stringify(st).length > RUN_STATE_LIMITS.bytesTotal) crossed = true;
+  }
+  check("bytesTotal enforced", !crossed && JSON.stringify(st).length <= RUN_STATE_LIMITS.bytesTotal);
 }
 
 // ── compact JSON round-trip + guard ─────────────────────────────────────────────
@@ -192,14 +200,14 @@ function base() {
   ].join("\n");
   const parsed = findStatePatches(text);
   check("two fences found", parsed.length === 2);
-  const mode: RunStateMode = { kind: "active", state: base(), retries: 0 };
+  const mode: RunStateMode = { kind: "active", state: base(), retries: 0, idle: 0 };
   const out = applyStatePatches(mode, parsed, 3, DEFAULT_CONFIG);
   check("good fence applied before bad rolled back", out.mode.kind === "active" && out.mode.state.verifiedFacts.includes("committed fact"));
   check("rejection observed", out.observation !== undefined && out.observation.includes("state patch rejected"));
   check("retry counted", out.mode.kind === "active" && out.mode.retries === 1);
   // retries exhausted ⇒ degrade
   const degraded = applyStatePatches(
-    { kind: "active", state: base(), retries: DEFAULT_CONFIG.runStateRetryMax },
+    { kind: "active", state: base(), retries: DEFAULT_CONFIG.runStateRetryMax, idle: 0 },
     findStatePatches("```state\n{\"state_patch\": {\"bogus\": 1}}\n```"),
     4,
     DEFAULT_CONFIG,
@@ -208,6 +216,54 @@ function base() {
   // clean turn: no fences, no observation, mode untouched
   const clean = applyStatePatches(mode, findStatePatches("```repl\nprint(2)\n```"), 5, DEFAULT_CONFIG);
   check("fence-free turn is a no-op", clean.mode === mode && clean.observation === undefined);
+}
+
+// ── bench rec #2: idle auto-degrade · rec #1: per-patch byte cap ────────────────
+{
+  const noFence = findStatePatches("```repl\nprint(1)\n```");
+  const idleOne = applyStatePatches(
+    { kind: "active", state: base(), retries: 0, idle: 0 },
+    noFence,
+    3,
+    DEFAULT_CONFIG,
+    true,
+  );
+  check("requested fence-free turn counts idle", idleOne.mode.kind === "active" && idleOne.mode.idle === 1);
+  const idleHit = applyStatePatches(
+    { kind: "active", state: base(), retries: 0, idle: RUN_STATE_IDLE_DEGRADE_TURNS - 1 },
+    noFence,
+    4,
+    DEFAULT_CONFIG,
+    true,
+  );
+  check("idle threshold degrades", idleHit.mode.kind === "degraded" && idleHit.mode.reason.includes("idle"));
+  const unrequested = applyStatePatches(
+    { kind: "active", state: base(), retries: 0, idle: 99 },
+    noFence,
+    4,
+    DEFAULT_CONFIG,
+  );
+  check("unrequested fence-free turn is still a no-op", unrequested.mode.kind === "active" && unrequested.mode.idle === 99);
+  const accepted = applyStatePatches(
+    { kind: "active", state: base(), retries: 0, idle: 3 },
+    findStatePatches("```state\n{\"state_patch\": {\"findings[+]\": \"delta resets idle\"}}\n```"),
+    5,
+    DEFAULT_CONFIG,
+    true,
+  );
+  check("accepted delta resets idle", accepted.mode.kind === "active" && accepted.mode.idle === 0);
+  const big = applyPatch(
+    base(),
+    { state_patch: { "verifiedFacts[+]": "x".repeat(RUN_STATE_LIMITS.patchBytes + 1) } },
+    1,
+  );
+  check("oversized patch rejected whole", !big.ok && big.error.kind === "cap" && big.error.field === "patchBytes");
+  const under = applyPatch(
+    base(),
+    { state_patch: { "verifiedFacts[+]": "y".repeat(64) } },
+    1,
+  );
+  check("normal patch under byte cap applies", under.ok);
 }
 
 finish();

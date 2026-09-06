@@ -21,6 +21,7 @@ export function deepMergeWithNullDeletion(base: unknown, patch: unknown): unknow
   const out: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {
+      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- ⊕ explicit null = delete (paper §3.2 +)
       delete out[key]; // explicit null = delete (paper §3.2)
       continue;
     }

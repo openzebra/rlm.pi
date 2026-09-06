@@ -202,7 +202,7 @@ export function notesFromRunState(state: RunState): readonly SkillNoteInput[] {
   return notes;
 }
 
-/** Opt-in A-Mem phrasing prompt (Hook 1, LLM half — enableSkillStateDistill). */
+/** A-Mem phrasing prompt (Hook 1, LLM half — enableSkillStateDistill, default ON). */
 export function distillPromptFor(state: RunState): string {
   return [
     "Distill AT MOST 6 durable, reusable project facts from this run. One per line, exactly:",

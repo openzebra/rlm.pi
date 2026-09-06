@@ -144,7 +144,16 @@ export async function completeWithRetry<T>(
     readonly onRelease?: () => void;
   },
 ): Promise<T> {
-  const { policy, provider, signal, onPark, onRelease } = opts;
+  const { policy, provider, signal } = opts;
+  // Bench rec #5: a silent park is indistinguishable from a hang (the campaign watched 15
+  // attempts × 15 cooldown windows with zero output). Callers may own observability via
+  // opts.onPark; otherwise one [rlm]-prefixed warn fires per park — fail-soft, never throws.
+  const onPark =
+    opts.onPark ??
+    ((ms: number): void => {
+      console.warn(`[rlm] ${provider} parked ${Math.round(ms)}ms on provider cooldown`);
+    });
+  const { onRelease } = opts;
   const cooldown = policy.cooldown ?? sharedCooldown;
   let status: number | undefined;
   let headers: Record<string, string> | undefined;
@@ -176,10 +185,14 @@ export async function completeWithRetry<T>(
       }
       if (tries + 1 >= policy.maxAttempts) throw err;
       if (!retryableError(status, msg)) throw err;
-      await sleepMs(
-        Math.min(retryAfterMs(headers) ?? backoffMs(tries, policy.baseDelayMs, policy.maxDelayMs), policy.maxDelayMs),
-        signal,
+      const delay = Math.min(
+        retryAfterMs(headers) ?? backoffMs(tries, policy.baseDelayMs, policy.maxDelayMs),
+        policy.maxDelayMs,
       );
+      console.warn(
+        `[rlm] ${provider} attempt ${tries + 1}/${policy.maxAttempts} failed (${msg.slice(0, 140)}) — retrying in ${delay}ms`,
+      );
+      await sleepMs(delay, signal);
     }
   }
 }

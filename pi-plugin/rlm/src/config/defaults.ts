@@ -59,7 +59,9 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   enableRunState: true,
   runStateRetryMax: 2,
   enableSkillState: true,
-  enableSkillStateDistill: false, // opt-in: one leaf call to phrase A-Mem-style notes
+  // Default ON (bench rec #3): deterministic harvest — one cheap distill leaf per finalize
+  // replaces the stochastic fence-emission harvest (0 vs 4 notes across identical ON arms).
+  enableSkillStateDistill: true,
   skillStateMaxTokens: 1_200,
   skillStateLeafTokens: 200,
   skillStateMinScore: 4.0,

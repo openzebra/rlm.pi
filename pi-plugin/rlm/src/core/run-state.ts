@@ -53,7 +53,16 @@ export const RUN_STATE_LIMITS = Object.freeze({
   artifacts: 8,
   openQuestions: 8,
   bytesTotal: 12_000,
+  /** Per-turn patch byte cap (bench campaign rec #1): oversized `state_patch` fences are
+   *  rejected whole with error-as-observation feedback — the model must commit deltas,
+   *  not restate Σ. Quantifies the oolong ×5.4 output tax from verbose patches. */
+  patchBytes: 1_500,
 });
+
+/** Bench campaign rec #2: after this many consecutive fence-requested turns with zero
+ *  accepted deltas the run auto-degrades to as-built — an idle Σ is pure input tax on
+ *  every prompt (weak-model fence tax, paper §5.7, live-confirmed by the bench). */
+export const RUN_STATE_IDLE_DEGRADE_TURNS = 4;
 
 export type PatchError =
   | { readonly kind: "schema"; readonly detail: string }
@@ -61,9 +70,16 @@ export type PatchError =
   | { readonly kind: "implicit-drop"; readonly path: string } // small-model guard (§5.7)
   | { readonly kind: "cap"; readonly field: string };
 
-/** Degradation state machine (§6.6) — discriminated union, no boolean flags. */
+/** Degradation state machine (§6.6) — discriminated union, no boolean flags. `retries`
+ *  counts rejected patches (retry-cap degrade); `idle` counts consecutive fence-requested
+ *  turns with zero accepted deltas (idle degrade, bench rec #2). */
 export type RunStateMode =
-  | { readonly kind: "active"; readonly state: RunState; readonly retries: number }
+  | {
+      readonly kind: "active";
+      readonly state: RunState;
+      readonly retries: number;
+      readonly idle: number;
+    }
   | { readonly kind: "degraded"; readonly reason: string };
 
 /** Mutable working shape — the runtime draft patches apply to before capping/freezing. */
@@ -182,6 +198,7 @@ function strictMergeRecord(
   const out: Record<string, unknown> = { ...prev };
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {
+      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- ⊕ explicit null = delete (paper §3.2)
       delete out[key]; // explicit delete
       continue;
     }
@@ -202,6 +219,7 @@ function dropOldestRecord(record: Record<string, unknown>, cap: number): void {
   while (Object.keys(record).length > cap) {
     const oldest = firstKey(record);
     if (oldest === undefined) return;
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- deterministic oldest-inserted eviction (§6.1)
     delete record[oldest];
   }
 }
@@ -251,6 +269,7 @@ function enforceCaps(draft: MutableState): Result<RunState, PatchError> {
     const approach = firstKey(capped.testedApproaches);
     if (approach !== undefined) {
       const rest = { ...capped.testedApproaches };
+      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- cap eviction (§6.1)
       delete rest[approach];
       capped.testedApproaches = rest;
       continue;
@@ -258,6 +277,7 @@ function enforceCaps(draft: MutableState): Result<RunState, PatchError> {
     const artifact = firstKey(capped.artifacts);
     if (artifact !== undefined) {
       const rest = { ...capped.artifacts };
+      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- cap eviction (§6.1)
       delete rest[artifact];
       capped.artifacts = rest;
       continue;
@@ -376,6 +396,7 @@ function applyKey(draft: MutableState, rawKey: string, value: unknown): Result<n
   }
   const leaf = middles[middles.length - 1];
   if (value === null) {
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- ⊕ null = delete (paper §3.2)
     delete cursor[leaf];
     commitRecord(draft, root, record);
     return ok(null);
@@ -413,6 +434,7 @@ function commitRecord(draft: MutableState, root: "testedApproaches" | "artifacts
 
 /** Rewrite a record entry so its insertion order reflects the latest mention. */
 function refreshOrder(record: Record<string, unknown>, key: string, value: unknown): void {
+  // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- last-mention insertion-order refresh (§6.1)
   delete record[key];
   record[key] = value;
 }
@@ -428,6 +450,11 @@ export function applyPatch(prev: RunState, patch: unknown, t: number): Result<Ru
   }
   const ops = Object.entries(patch.state_patch);
   if (ops.length === 0) return err({ kind: "schema", detail: "empty state_patch" });
+  // Per-turn byte cap (bench rec #1): reject BEFORE the draft clone — a verbose restatement
+  // must come back as an error observation, never silently eat output tokens.
+  if (JSON.stringify(patch).length > RUN_STATE_LIMITS.patchBytes) {
+    return err({ kind: "cap", field: "patchBytes" });
+  }
   // JSON round-trip clone: RunState is JSON-safe by construction and stays well under κ_Σ.
   const draft = JSON.parse(JSON.stringify(prev)) as MutableState;
   for (const [key, value] of ops) {
@@ -456,16 +483,24 @@ export function patchErrorText(error: PatchError): string {
  * Apply every ```state fence found in a turn response, in document order, to an ACTIVE mode.
  * Rejections accumulate into one observation (the next O_t prefix); once failures exceed
  * `runStateRetryMax` the mode DEGRADES — the engine then behaves exactly as built.
+ *
+ * Idle degrade (bench rec #2): when `fenceRequested` is true (the turn conditioned on Σ)
+ * and zero patches were accepted, the turn is IDLE — Σ inflated the prompt for nothing.
+ * `RUN_STATE_IDLE_DEGRADE_TURNS` consecutive idle turns degrade, same as-built outcome.
  */
 export function applyStatePatches(
   mode: Extract<RunStateMode, { kind: "active" }>,
   parsed: readonly StateFenceResult[],
   iteration: number,
   config: Pick<RlmConfig, "runStateRetryMax">,
+  fenceRequested = false,
 ): { readonly mode: RunStateMode; readonly observation: string | undefined } {
-  if (parsed.length === 0) return { mode, observation: undefined };
+  // Identity fast-path: a fence-free turn on a run that never asked for fences changes
+  // nothing — keep the same mode object (callers may compare identity).
+  if (parsed.length === 0 && !fenceRequested) return { mode, observation: undefined };
   let state = mode.state;
   let retries = mode.retries;
+  let accepted = 0;
   const problems: string[] = [];
   for (const fence of parsed) {
     if (!fence.ok) {
@@ -476,16 +511,24 @@ export function applyStatePatches(
     const result = applyPatch(state, fence.value, iteration);
     if (result.ok) {
       state = result.value;
+      accepted += 1;
     } else {
       retries += 1;
       problems.push(patchErrorText(result.error));
     }
   }
-  let nextMode: RunStateMode = { kind: "active", state, retries };
+  // Bench rec #2: accepted deltas reset the idle streak; a requested-but-empty turn grows it.
+  const idle = accepted > 0 || !fenceRequested ? 0 : mode.idle + 1;
+  let nextMode: RunStateMode = { kind: "active", state, retries, idle };
   if (retries > config.runStateRetryMax) {
     nextMode = {
       kind: "degraded",
       reason: `runStateRetryMax exceeded (${retries} rejected state patches)`,
+    };
+  } else if (idle >= RUN_STATE_IDLE_DEGRADE_TURNS) {
+    nextMode = {
+      kind: "degraded",
+      reason: `idle degrade — ${idle} consecutive fence-requested turns with zero accepted deltas`,
     };
   }
   const observation =
@@ -498,10 +541,11 @@ export function applyStatePatches(
 
 export const STATE_FENCE_INSTRUCTION: string =
   "[state] Alongside your ```repl block(s), commit durable progress to Σ with a ```state fence:\n" +
-  '{"state_patch": {"verifiedFacts[+]": "src/x.ts — fact", "testedApproaches.h1": ' +
-  '{"status": "failed", "reason": "…"}, "openQuestions[0]": null}}\n' +
+  '{"state_patch": {"verifiedFacts[+]": "src/x.ts — fact", "testedApproaches.h1.status": "failed"}}\n' +
   "Keys: dotted paths write record leaves; [+] appends; [N] sets an array slot; null deletes.\n" +
-  "Whole-record values must restate EVERY kept key — implicit key drops are rejected.\n" +
+  "Commit DELTAS only — never restate unchanged records or arrays; touch single dotted keys " +
+  `or append with [+]. Whole-record restatements must keep EVERY key (implicit drops are ` +
+  `rejected), and a patch over ${RUN_STATE_LIMITS.patchBytes} bytes is rejected whole.\n` +
   "Commit anything possibly relevant NOW; the raw observation will not be shown again.";
 
 /** The per-turn A_t block: the fence contract + the current Σ (paper A_t = (P, Σ_t, O_t)). */

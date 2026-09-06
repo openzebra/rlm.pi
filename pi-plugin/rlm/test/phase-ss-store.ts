@@ -42,7 +42,7 @@ try {
 
   store.merge([{ text: "config/settings.ts:22 — settingsPath() joins getAgentDir()", tags: ["config"] }]);
   check("duplicate bumps hits, not count", store.noteCount === 2);
-  check("reinforcement counted", store.snapshot().projects[store.projectKey]?.some((n) => n.hits === 2) === true);
+  check("reinforcement counted", store.snapshot().projects[store.projectKey]?.some((n) => n.hits === 2) ?? false);
 
   // ── eviction: cap 3, reinforced note pinned ──
   store.merge([
@@ -62,8 +62,8 @@ try {
   );
 
   // ── flush + reload (cross-"session" persistence) ──
-  check("flush writes", (await store.flush()) === true);
-  check("flush is idempotent when clean", (await store.flush()) === true);
+  check("flush writes", await store.flush());
+  check("flush is idempotent when clean", await store.flush());
   const reloaded = await SkillStore.hydrate(3, tmp);
   check("reload sees the same notes", reloaded.noteCount === 3);
   check("project key stable across stores", reloaded.projectKey === store.projectKey);
@@ -88,7 +88,7 @@ try {
 
   // ── direct save/load round-trip ──
   const snap = reloaded.snapshot();
-  check("saveSkillState writes", (await saveSkillState(snap, tmp)) === true);
+  check("saveSkillState writes", await saveSkillState(snap, tmp));
   check("loadSkillState reads back", (await loadSkillState(tmp)).projects[reloaded.projectKey]?.length === 3);
   check("path helper nests the file name", skillStatePath(tmp).endsWith("rlm-skillstate.json"));
 } finally {
