@@ -19,7 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     facts]` digest (`core/root-digest.ts`) in place of Pi's LLM prose summarizer — zero
     summary tokens, reproducible. Cut points only tighten Pi's boundary; the verbatim tail
     budget is `rootDigestKeepRecentChars` (12 000 chars), the digest cap `rootDigestMaxChars`
-    (8 000 chars) with section drop order facts → state → findings.
+    (8 000 chars) with section drop order facts → state → findings. Section caps are the
+    engine's own (`budget.ts` exports — one source, no drift). Soak probe (V1): the
+    `root-digest.built` trace carries `tokensBefore` (host-consumed) vs
+    `tokensBeforeRecomputed` (`estimateMessageTokens` over the same span) — the first real
+    `/compact` confirms host token handling in one JSONL look.
   - **WS-3, per-call A_t on the root** (`enableRootContextTransform`, default OFF until
     soak): the `context` event elides stale tool payloads (paper §5.3 discard,
     `rootContextKeepTurns`/`rootContextElideChars`) and splices exactly one fresh Σ snapshot
@@ -31,7 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     SkillState store through the same `notesFromRunState` path engine runs use. Rectify
     parity: two consecutive failed outcomes on one key inject a MAS2-style narrow-the-
     approach hint. Optional model-proposed ΔΣ_t fences (`enableRootStateFences`, default
-    OFF per the §5.7 fence tax) ride the existing validator with the retry/degrade ladder.
+    OFF per the §5.7 fence tax) ride the existing validator with the SAME ladder as engine
+    runs: every fence processed, accepted deltas land even in a partially-failing batch,
+    ALL problems accumulate into ONE observation, degrade keys on the accumulated rejection
+    count. Observation wording is shared with the engine — `statePatchObservation()` /
+    `malformedFenceProblem()` / `patchErrorText()` exported from `core/run-state.ts`.
 - **SKILL.state integration** (commit `41c989c`): Σ_t execution state with fenced
   `state_patch` protocol (paper §3.2 — dotted paths, `[+]` append, `[N]` slot, `null`
   delete), deterministic structural compaction `[P, Σ_t, window(O)]` in place of the LLM
