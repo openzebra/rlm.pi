@@ -417,9 +417,17 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       });
       if (result !== undefined) {
         rootDigests += 1;
-        if (traceEnabled) trace("root-digest.built", { count: rootDigests, chars: result.compaction.summary.length });
+        if (traceEnabled) {
+          // V1 soak probe: host-consumed tokensBefore vs our recomputation over the same span.
+          trace("root-digest.built", {
+            count: rootDigests,
+            chars: result.compaction.summary.length,
+            tokensBefore: result.compaction.tokensBefore,
+            tokensBeforeRecomputed: result.tokensBeforeRecomputed,
+          });
+        }
       }
-      return result;
+      return result?.compaction;
     } catch (err) {
       // Fail-soft by contract (packages/agent/src/types.ts:191): Pi falls back to its summarizer.
       if (traceEnabled) trace("root-digest.fail", { error: errorMessage(err) });

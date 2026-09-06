@@ -509,7 +509,7 @@ export function applyStatePatches(
   for (const fence of parsed) {
     if (!fence.ok) {
       retries += 1;
-      problems.push(`malformed \`\`\`state fence (${fence.error})`);
+      problems.push(malformedFenceProblem(fence.error));
       continue;
     }
     const result = applyPatch(state, fence.value, iteration);
@@ -535,12 +535,20 @@ export function applyStatePatches(
       reason: `idle degrade — ${idle} consecutive fence-requested turns with zero accepted deltas`,
     };
   }
-  const observation =
-    problems.length === 0
-      ? undefined
-      : `${formatError(`state patch rejected — rolled back (${problems.join("; ")})`)}\n` +
-        "Fix the ```state fence and re-commit; the raw observation will not be shown again.";
-  return { mode: nextMode, observation };
+  return { mode: nextMode, observation: statePatchObservation(problems) };
+}
+
+/** Problem entry for an unparsable fence body — shared by both fence loops (one wording). */
+export function malformedFenceProblem(error: string): string {
+  return `malformed \`\`\`state fence (${error})`;
+}
+
+/** ONE wording source for patch-rejection observations — engine turns AND root fences. */
+export function statePatchObservation(problems: readonly string[]): string | undefined {
+  return problems.length === 0
+    ? undefined
+    : `${formatError(`state patch rejected — rolled back (${problems.join("; ")})`)}\n` +
+      "Fix the ```state fence and re-commit; the raw observation will not be shown again.";
 }
 
 export const STATE_FENCE_INSTRUCTION: string =

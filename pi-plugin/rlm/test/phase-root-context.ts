@@ -116,27 +116,35 @@ const BIG = "y".repeat(4_000);
 }
 
 {
-  // WS-4.2 fences: valid patch applies; malformed rejects + surfaces observation; retry cap degrades
+  // WS-4.2 fences: valid patch applies; malformed rejects + surfaces observation; retry cap
+  // degrades. Ladder parity with the engine (N3): ALL problems accumulate into ONE
+  // observation, accepted deltas in a partially-failing batch still land, wording is the
+  // shared run-state.ts source (N1).
   const ok = RootStateTracker.fresh("fence ok");
   ok.applyFences([{ ok: true, value: { state_patch: { "verifiedFacts[+]": "src/x.ts — fence fact" } } }]);
   check("valid fence applied", ok.snapshot().verifiedFacts.includes("src/x.ts — fence fact"));
   check("accepted fence clears observation", ok.takePendingObservation() === undefined);
 
-  const strict = RootStateTracker.fresh("fence strict", 1);
-  strict.applyFences([{ ok: false, error: "Unexpected token } in JSON" }]);
-  check("malformed fence sets observation", strict.takePendingObservation()?.includes("malformed state fence") === true);
-  check("observation consumed once", strict.takePendingObservation() === undefined);
-  strict.applyFences([{ ok: false, error: "still garbage" }]);
-  check("retry-cap degrade fires", strict.takePendingObservation() === undefined);
+  const strict = RootStateTracker.fresh("fence strict", 3);
+  strict.applyFences([
+    { ok: false, error: "Unexpected token } in JSON" },
+    { ok: true, value: { state_patch: { "verifiedFacts[+]": "good fence in a mixed batch" } } },
+    { ok: true, value: { state_patch: { nonexistentField: "x" } } },
+  ]);
+  const observation = strict.takePendingObservation() ?? "";
+  check(
+    "mixed batch: both problems in ONE observation (engine parity)",
+    observation.includes("malformed ```state fence") && observation.includes("unknown state field"),
+    observation.split("\n")[0] ?? "",
+  );
+  check("observation is the shared wording source", observation.includes("state patch rejected — rolled back"));
+  check("good fence in the batch still landed", strict.snapshot().verifiedFacts.includes("good fence in a mixed batch"));
+  check("rejections counted, tracker still active", strict.takePendingObservation() === undefined);
+
+  strict.applyFences([{ ok: false, error: "still garbage 1" }, { ok: false, error: "still garbage 2" }]);
+  check("retry-cap degrade fires on accumulated count", strict.takePendingObservation() !== undefined);
   strict.applyFences([{ ok: true, value: { state_patch: { "verifiedFacts[+]": "after degrade — ignored" } } }]);
   check("degraded tracker ignores fences", !strict.snapshot().verifiedFacts.includes("after degrade — ignored"));
-
-  const bad = RootStateTracker.fresh("fence invalid patch", 2);
-  bad.applyFences([{ ok: true, value: { state_patch: { nonexistentField: "x" } } }]);
-  check(
-    "validator rejection surfaces as observation",
-    bad.takePendingObservation()?.includes("state patch rejected") === true,
-  );
 }
 
 {

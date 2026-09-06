@@ -23,7 +23,8 @@
 
 import type { CompactionResult, SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { RlmConfig } from "./types.ts";
-import { DEFAULT_NEXT_STEP, NEXT_STEP_RE, truncateMid } from "./budget.ts";
+import { DEFAULT_NEXT_STEP, FINDINGS_MAX, FINDINGS_MIN_CHARS, NEXT_STEP_RE, STATE_MAX, truncateMid } from "./budget.ts";
+import { estimateMessageTokens } from "../text/tokens.ts";
 import { agentMessageText } from "../text/agent-text.ts";
 import { isRecord } from "../util/type-guards.ts";
 import { ROOT_DIGEST_HEADER, ROOT_DIGEST_SECTIONS } from "../prompts/glossary.ts";
@@ -55,10 +56,7 @@ export interface RootDigestArgs {
   readonly store: DigestFactSource | undefined;
 }
 
-/** Digest section caps — ported from budget.ts distillTrajectory (findings ≤6, states ≤8). */
-const FINDINGS_MAX = 6;
-const FINDINGS_MIN_CHARS = 20;
-const STATE_MAX = 8;
+/** Section caps come from budget.ts (ONE source — N2); only digest-local shapes live here. */
 const BULLET_CHARS = 400;
 const TASK_FRACTION = 0.3;
 const FACTS_FRACTION = 4; // facts budget = maxChars / FACTS_FRACTION, tokens at 4 chars/token
@@ -139,10 +137,18 @@ function stateSection(messages: readonly unknown[]): readonly string[] {
 /**
  * Build the digest compaction. Returns undefined when Pi should keep its own path:
  * split turns (our flat summary would double-count the turn prefix) or an empty span.
+ *
+ * `tokensBeforeRecomputed` is our own estimateMessageTokens pass over the same span —
+ * V1 soak probe: the host consumes `compaction.tokensBefore` (Pi's own preparation number)
+ * as-is; one trace line carries both so the first real /compact confirms whether the host
+ * ever diverges (status-line truth check) without touching the persisted CompactionResult.
  */
 export function buildRootDigestCompaction(
   args: RootDigestArgs,
-): { readonly compaction: CompactionResult<RootDigestDetails> } | undefined {
+): {
+  readonly compaction: CompactionResult<RootDigestDetails>;
+  readonly tokensBeforeRecomputed: number;
+} | undefined {
   const prep = args.preparation;
   if (prep.isSplitTurn) return undefined;
 
@@ -201,5 +207,7 @@ export function buildRootDigestCompaction(
       tokensBefore: prep.tokensBefore,
       details: { kind: "root-digest", version: 1 },
     },
+    // Same CHAR_PER_TOKEN=4 (+8/message) math as the engine budgets — comparable numbers.
+    tokensBeforeRecomputed: estimateMessageTokens(messages.map((m) => ({ content: agentMessageText(m) }))),
   };
 }

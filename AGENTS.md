@@ -184,7 +184,12 @@ the SKILL.state rules above:
 - **`session_before_compact` seam** (WS-2): `core/root-digest.ts` supplies a deterministic
   no-LLM digest. Cut points only ever TIGHTEN Pi's boundary (never extend) and every
   displaced message folds into the digest inputs — nothing is dropped unaccounted. Never
-  return `cancel: true` (overflow recovery depends on compaction happening).
+  return `cancel: true` (overflow recovery depends on compaction happening). The gate
+  (`nativeTradeHolds() || controller.enabled`) intentionally covers pure-headless sessions
+  too — when the plugin is enabled at all, the digest replaces the summarizer, which is
+  strictly better (same facts, zero tokens). INTENT, not an accident. V1 soak probe:
+  `root-digest.built` traces `tokensBefore` (host-consumed) vs `tokensBeforeRecomputed` —
+  confirm at the first real `/compact` that the host never diverges blindly.
 - **`context`-event discipline** (WS-3): handlers receive a `structuredClone` — mutate it in
   place (zero extra allocations), return `{ messages }`; the disk transcript is never touched
   (context is the query channel, the session log is the archive). Every handler body is

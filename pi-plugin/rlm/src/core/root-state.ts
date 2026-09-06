@@ -18,14 +18,16 @@ import {
   dedupStrings,
   enforceCaps,
   freshRunState,
+  malformedFenceProblem,
+  patchErrorText,
   RUN_STATE_LIMITS,
+  statePatchObservation,
   type ApproachOutcome,
   type MutableState,
   type PatchError,
   type RunState,
 } from "./run-state.ts";
 import type { Result } from "../util/errors.ts";
-import { formatError } from "../util/errors.ts";
 import type { StateFenceResult } from "../text/parsing.ts";
 
 /** Consecutive failed outcomes on one key before the rectify hint fires (MAS2 Eq. 5 parity). */
@@ -153,28 +155,45 @@ export class RootStateTracker {
   }
 
   /**
-   * WS-4.2 (default OFF): model-proposed ΔΣ_t fences through the ONE validator. Rejections
-   * roll back structurally (draft untouched) and surface as the next turn's observation —
-   * error-as-observation, same ladder as the engine; past `runStateRetryMax` the tracker
-   * degrades and fences stop being applied.
+   * WS-4.2 (default OFF): model-proposed ΔΣ_t fences through the ONE validator. EXACT ladder
+   * parity with the engine's `applyStatePatches` (N3): every fence is processed — accepted
+   * deltas land sequentially, ALL problems accumulate into ONE observation (error-as-
+   * observation), and only past `runStateRetryMax` total rejections the tracker degrades and
+   * fences stop being applied. Wording delegates to run-state.ts (N1) — one source.
    */
   applyFences(fences: readonly StateFenceResult[]): void {
     if (this.mode.kind !== "active" || fences.length === 0) return;
+    let state = this.snapshot();
+    const problems: string[] = [];
     for (const fence of fences) {
       if (!fence.ok) {
-        this.recordRejection(`malformed state fence — ${fence.error}`);
-        return;
+        problems.push(malformedFenceProblem(fence.error));
+        continue;
       }
-      const next: Result<RunState, PatchError> = applyPatch(this.snapshot(), fence.value, ++this.opCounter);
+      const next: Result<RunState, PatchError> = applyPatch(state, fence.value, ++this.opCounter);
       if (next.ok) {
-        this.mode = { kind: "active", retries: 0 };
-        this.pendingObservation = undefined;
-        this.draft = this.toMutable(next.value);
-        this.touch();
+        state = next.value;
       } else {
-        this.recordRejection(formatError(`state patch rejected — ${patchErrorText(next.error)}`));
-        return;
+        problems.push(patchErrorText(next.error));
       }
+    }
+    if (problems.length === 0) {
+      this.mode = { kind: "active", retries: 0 };
+      this.pendingObservation = undefined;
+      this.draft = this.toMutable(state);
+      this.touch();
+      return;
+    }
+    const retries = this.mode.retries + problems.length;
+    this.pendingObservation = statePatchObservation(problems);
+    // Accepted deltas in a partially-failing batch still land — engine parity: real work is
+    // never rolled back just because a sibling fence was malformed.
+    this.draft = this.toMutable(state);
+    this.touch();
+    if (retries > this.retryMax) {
+      this.mode = { kind: "degraded", reason: `state-patch retry cap exceeded (${retries} rejected)` };
+    } else {
+      this.mode = { kind: "active", retries };
     }
   }
 
@@ -200,18 +219,6 @@ export class RootStateTracker {
     return undefined;
   }
 
-  private recordRejection(observation: string): void {
-    const retries = this.mode.kind === "active" ? this.mode.retries + 1 : 0;
-    this.pendingObservation = `${observation}\n` +
-      "Commit a corrected ```state fence next turn (deltas only), or continue without one.";
-    if (retries > this.retryMax) {
-      this.mode = { kind: "degraded", reason: `state-patch retry cap (${this.retryMax})` };
-      this.pendingObservation = undefined;
-    } else {
-      this.mode = { kind: "active", retries };
-    }
-  }
-
   private toMutable(state: RunState): MutableState {
     return {
       task: state.task,
@@ -229,19 +236,5 @@ export class RootStateTracker {
     this.opCounter += 1;
     this.draft.updatedAt = this.opCounter;
     this.dirtyFlag = true;
-  }
-}
-
-/** Human text for a PatchError — the tracker's observation wording (one place). */
-function patchErrorText(error: PatchError): string {
-  switch (error.kind) {
-    case "schema":
-      return `schema: ${error.detail}`;
-    case "type":
-      return `'${error.path}' expected ${error.expected}`;
-    case "implicit-drop":
-      return `'${error.path}' would be implicitly dropped — whole-record patches must keep EVERY key`;
-    case "cap":
-      return `'${error.field}' exceeds its cap`;
   }
 }

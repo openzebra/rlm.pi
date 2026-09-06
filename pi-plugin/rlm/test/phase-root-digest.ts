@@ -107,6 +107,8 @@ const BIG = "x".repeat(3_000);
     check("[Next] mirrors distillTrajectory probe", compaction.summary.includes("[Next]"));
     check("details marker", (compaction.details as { kind?: string }).kind === "root-digest");
     check("tokensBefore passes through", compaction.tokensBefore === 1234);
+    check("V1 probe: recomputed token estimate is positive", result.tokensBeforeRecomputed > 0,
+      String(result.tokensBeforeRecomputed));
     // Tail fits the 12K budget ⇒ Pi's own cut stands (never extend).
     check("no tighten when tail fits", compaction.firstKeptEntryId === piCutId);
   }

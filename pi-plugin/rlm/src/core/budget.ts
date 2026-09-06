@@ -152,10 +152,12 @@ export function truncateMid(text: string, maxChars: number): string {
   return text.slice(0, half) + ELISION_MARK.replace("N", String(elided)) + text.slice(text.length - half);
 }
 
+/** Digest/handoff section caps — ONE source: budget.ts's handoff distillation and the root
+ *  digest (core/root-digest.ts) must never drift apart on the same trajectory heuristics. */
+export const FINDINGS_MAX = 6;
+export const FINDINGS_MIN_CHARS = 20;
+export const STATE_MAX = 8;
 const QUERY_CHARS = 800;
-const FINDINGS_MAX = 6;
-const FINDINGS_MIN_CHARS = 20;
-const STATE_MAX = 8;
 const STATE_NEEDLE = "REPL stdout";
 /** Next-step probe shared by the engine handoff and the root digest (one wording source). */
 export const NEXT_STEP_RE = /next|then|will |todo/i;
