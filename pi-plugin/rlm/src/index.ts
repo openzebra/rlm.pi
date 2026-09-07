@@ -13,7 +13,7 @@ import { loadSettings, mergeConfig, resolveModelId } from "./config/settings.ts"
 import { RlmController } from "./mode/rlm-mode.ts";
 import { cheapestModel } from "./mode/llm-model.ts";
 import { postRlmGuide } from "./ui/intro.ts";
-import { setRlmModeStatus } from "./ui/status.ts";
+import { setRlmModeStatus, type RootSigmaTelemetry } from "./ui/status.ts";
 import { RunRegistry } from "./ui/panel/run-registry.ts";
 import { installTreePanel } from "./ui/panel/tree-panel.ts";
 import { markdownTheme } from "./ui/theme-adapter.ts";
@@ -113,11 +113,20 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   /** Root Σ (WS-3/4): the native session's digest-level Σ_t — runtime-derived (tool outcomes,
    *  engine mirrors, prompts); lazily born on the first prompt, harvested + dropped at shutdown. */
   let rootTracker: RootStateTracker | undefined;
-  // Root Σ WS-5.1 telemetry — journal counters (trace lines only; no TUI surface by design).
+  // Root Σ WS-5.1 telemetry — journal counters (trace lines + status widget when tracing).
   let xiCompositions = 0;
   let rootDigests = 0;
   let elidedMessages = 0;
   let sigmaSplices = 0;
+  let idleDegrades = 0;
+  /** R6: Σ counter snapshot for the status line — a fresh readonly object per render. */
+  const sigmaTelemetry = (): RootSigmaTelemetry => ({
+    xiCompositions,
+    rootDigests,
+    elidedMessages,
+    sigmaSplices,
+    idleDegrades,
+  });
   // A detached child works in its OWN sandbox, so this one sees no frames and its request
   // watchdog would fire mid-await and SIGKILL a healthy worker, taking the REPL namespace
   // with it. Keep it alive while detached work is genuinely in flight.
@@ -162,7 +171,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   /** Ξ (Workstream C): BM25 slice of the SkillState store for a query; undefined when off. */
   const composeSkillBlock = (query: string): string | undefined => {
     const cfg = controller.config;
-    if (!cfg.enableSkillState || skillStore === undefined) return undefined;
+    // R0: enableSkillState is enforced (validateEnforcedOn) — no config check remains.
+    if (skillStore === undefined) return undefined;
     const block = skillStore.blockFor(query, cfg.skillStateMaxTokens);
     return block === "" ? undefined : block;
   };
@@ -204,10 +214,10 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     controller.savedLlmRef = persisted.llm ?? undefined;
     controller.savedRlmRef = persisted.rlm ?? undefined;
 
-    // SKILL.state (Workstream B): hydrate the cross-session note store (fail-soft).
-    skillStore = controller.config.enableSkillState
-      ? await SkillStore.hydrate(controller.config.skillStateNotesPerProject)
-      : undefined;
+    // SKILL.state (Workstream B / R0): hydrate the cross-session note store UNCONDITIONALLY —
+    // the SkillStore is operating law; no rlm.json, command, or UI path can prevent its birth
+    // (hostile configs are traced + ignored at the validateEnforcedOn seam; fail-soft).
+    skillStore = await SkillStore.hydrate(controller.config.skillStateNotesPerProject);
     controller.skillStore = skillStore;
 
     // An explicit --rlm flag wins over the persisted setting for this session.
@@ -336,7 +346,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       }
     }
 
-    setRlmModeStatus(ctx, controller, ctx.getContextUsage());
+    setRlmModeStatus(ctx, controller, ctx.getContextUsage(), sigmaTelemetry());
     if (!treePanelInstalled) {
       treePanelInstalled = true;
       installTreePanel(ctx, runRegistry);
@@ -349,7 +359,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
 
   // ── Keep the footer's context reading live (RLM exists to shrink this number) ──
   pi.on("turn_end", async (_event, ctx) => {
-    setRlmModeStatus(ctx, controller, ctx.getContextUsage());
+    setRlmModeStatus(ctx, controller, ctx.getContextUsage(), sigmaTelemetry());
   });
 
   /** True when the native-mode trade holds: enabled AND repl is in the active tool set. */
@@ -389,19 +399,33 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       : { customType: "rlm-sigma-observation", content: observation, display: false, details: undefined };
     return {
       ...(message === undefined ? {} : { message }),
-      systemPrompt: event.systemPrompt + "\n\n" + xiPart + buildNativeSystemPrompt(),
+      systemPrompt: event.systemPrompt + "\n\n" + xiPart +
+        // R1 (G1): the fence contract rides the prompt when fences are enabled — the ONE
+        // STATE_FENCE_INSTRUCTION wording, appended at call time (static snapshot untouched).
+        buildNativeSystemPrompt({ stateFences: controller.config.enableRootStateFences }),
     };
   });
 
-  // Root Σ WS-4.2 (default OFF): capture model-proposed ΔΣ_t fences from finalized assistant
-  // replies and run them through the ONE patch validator (run-state.ts applyPatch).
+  // Root Σ WS-4.2 + v2 R4: capture model-proposed ΔΣ_t fences from finalized assistant
+  // replies and run them through the ONE patch validator (run-state.ts applyPatch). EVERY
+  // assistant turn feeds the ladder — a fence-free turn grows the idle streak, and
+  // RUN_STATE_IDLE_DEGRADE_TURNS consecutive idle turns degrade the tracker (G6 parity).
   pi.on("message_end", async (event) => {
     const tracker = rootTracker;
     if (tracker === undefined || !controller.config.enableRootStateFences) return;
     if (event.message.role !== "assistant") return;
-    const text = agentMessageText(event.message);
-    if (text === "") return;
-    tracker.applyFences(findStatePatches(text));
+    const wasActive = tracker.isActive;
+    tracker.applyFences(findStatePatches(agentMessageText(event.message)));
+    if (wasActive && !tracker.isActive) {
+      idleDegrades += 1;
+      if (traceEnabled) {
+        const reason = tracker.degradeReason ?? "unknown";
+        trace(reason.startsWith("idle") ? "root-state.idle-degrade" : "root-state.degrade", {
+          idleTurns: tracker.idleTurns,
+          reason,
+        });
+      }
+    }
   });
 
   // ── Root Σ WS-2: deterministic root compaction (no summary LLM call) ──
@@ -460,8 +484,14 @@ export default function rlmExtension(pi: ExtensionAPI): void {
         });
         elidedMessages += elided;
         const tracker = rootTracker;
-        if (controller.config.rootContextSnapshot && tracker !== undefined && !tracker.isEmpty) {
-          spliceSigmaSnapshot(filtered, tracker.snapshot(), tracker.rectifyHint());
+        // R4: a DEGRADED tracker stops splicing Σ (isActive gate) — pure input tax otherwise.
+        if (
+          controller.config.rootContextSnapshot && tracker !== undefined &&
+          tracker.isActive && !tracker.isEmpty
+        ) {
+          spliceSigmaSnapshot(filtered, tracker.snapshot(), tracker.rectifyHint(), {
+            withContract: controller.config.enableRootStateFences,
+          });
           sigmaSplices += 1;
         }
         if (traceEnabled && (elided > 0 || sigmaSplices > 0)) {
@@ -554,8 +584,9 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     // Root Σ WS-4 harvest symmetry: the root tracker teaches the store exactly like engine
     // runs — the ONE notesFromRunState path — then the existing flush persists everything.
+    // R0: enableSkillState is enforced; no config check remains on this path.
     const tracker = rootTracker;
-    if (skillStore !== undefined && tracker !== undefined && tracker.dirty && controller.config.enableSkillState) {
+    if (skillStore !== undefined && tracker !== undefined && tracker.dirty) {
       try {
         skillStore.merge(notesFromRunState(tracker.snapshot()));
         if (traceEnabled) trace("root-harvest.merged", { notes: tracker.snapshot().verifiedFacts.length });

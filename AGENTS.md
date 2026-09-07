@@ -181,6 +181,17 @@ the SKILL.state rules above:
   a digest, never model-authored by default; the fence protocol (`enableRootStateFences`)
   is the only model-proposed input, is OFF by default (paper §5.7 fence tax), and rides the
   same `V(ΔΣ_t,Σ_t)` ladder + retry/degrade semantics as engine runs (cites §3, §5.3, §5.7).
+  > **Amendment 2025-09-08 (Root Σ v2, R0/R1/R2/R4 — `/tmp/ROOT_FULL_SKILLSTATE_PLAN.md`):**
+  > the "OFF by default" sentence above is superseded. The paradigm flags (`enableRunState`,
+  > `enableSkillState`, `enableSkillStateDistill`, `enableRootContextTransform`,
+  > `enableRootStateFences`, `enableRootDigestCompaction`) are ENFORCED via
+  > `validateEnforcedOn` (config/settings.ts) — always true; explicit `false` in rlm.json is
+  > traced (`skillstate.override-ignored`) and ignored. The fence contract rides the native
+  > system prompt (`buildNativeSystemPrompt({ stateFences })`, R1) and the Σ splice carries it
+  > (`runStateRootBlock(state, { withContract })`, R2). Idle-degrade is native-parity (R4):
+  > `RUN_STATE_IDLE_DEGRADE_TURNS` fence-eligible turns with zero accepted deltas degrade the
+  > tracker (`isActive` gate stops splices; `observeToolResult` stays the Σ floor).
+  > `RLM_BENCH_NO_ROOTCONTEXT=1` remains the DEV-ONLY measurement hatch — never a disable path.
 - **`session_before_compact` seam** (WS-2): `core/root-digest.ts` supplies a deterministic
   no-LLM digest. Cut points only ever TIGHTEN Pi's boundary (never extend) and every
   displaced message folds into the digest inputs — nothing is dropped unaccounted. Never
@@ -199,12 +210,15 @@ the SKILL.state rules above:
 - **"No session state at module load" also covers event handlers**: per-session state
   (`rootTracker`, telemetry counters, the skill store) lives in the `rlmExtension` closure —
   module-level consts stay frozen import-time snapshots.
-- **One wording source**: digest header/section labels and the skill_search recall line live
-  in `prompts/glossary.ts` (`ROOT_DIGEST_*`, `SKILL_RECALL_LINE`); `runStateRootBlock` composes
-  from them instead of re-wording.
+- **One wording source**: digest header/section labels, the skill_search recall line, and the
+  R5 turn-elision stub live in `prompts/glossary.ts` (`ROOT_DIGEST_*`, `SKILL_RECALL_LINE`,
+  `ROOT_TURN_ELIDED_LINE`); `runStateRootBlock` composes from them instead of re-wording.
 - **Bench A/B**: `RLM_BENCH_NO_ROOTCONTEXT=1` skips the WS-3 transform at the gate
   (`rootContextActive()` in index.ts); telemetry is journal-only (`trace` + closure counters:
-  `xiCompositions`, `rootDigests`, `elidedMessages`, `sigmaSplices`).
+  `xiCompositions`, `rootDigests`, `elidedMessages`, `sigmaSplices`, `idleDegrades`) and
+  surfaces in the status widget only under trace mode (R6). Two-tier elision (R6 outcome):
+  stale toolResults get the §5.3 preview only within a `max(keepTurns, 1)`-turn ring; deeper
+  staleness collapses to the glossary stub — previews per stale turn would re-create O(T).
 
 ## Testing
 - Tests live in `pi-plugin/rlm/test/`

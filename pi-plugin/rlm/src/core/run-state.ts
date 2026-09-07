@@ -560,18 +560,28 @@ export const STATE_FENCE_INSTRUCTION: string =
   `rejected), and a patch over ${RUN_STATE_LIMITS.patchBytes} bytes is rejected whole.\n` +
   "Commit anything possibly relevant NOW; the raw observation will not be shown again.";
 
+/** ONE Σ-block composer (R2): the engine turn block and the root splice both delegate here —
+ *  never duplicate the contract + Σ assembly. `withContract` is paper A.4 authoring mode;
+ *  without it, observation-only mode. */
+function sigmaBlock(state: RunState, withContract: boolean): string {
+  const sigma = `[Σ] ${compactJSON(state)}`;
+  return withContract ? `${STATE_FENCE_INSTRUCTION}\n\n${sigma}` : sigma;
+}
+
 /** The per-turn A_t block: the fence contract + the current Σ (paper A_t = (P, Σ_t, O_t)). */
 export function runStateTurnBlock(state: RunState): string {
-  return `${STATE_FENCE_INSTRUCTION}\n\n[Σ] ${compactJSON(state)}`;
+  return sigmaBlock(state, true);
 }
 
 /**
- * Root Σ (WS-3b): the ROOT's A_t block — the snapshot WITHOUT the patch-fence contract (the
- * root answers through Pi, not the engine's fence parser; WS-4.2 teaches fences separately
- * when enabled). Recall line comes from the glossary (one wording source).
+ * Root Σ (WS-3b): the ROOT's A_t block. R2 (G2): with `withContract` the splice carries the
+ * SAME fence contract (delegating to the one composer above — no re-wording), making the
+ * splice paper-faithful A.4 authoring mode; without it, byte-identical to the v1
+ * observation-only snapshot. Recall line comes from the glossary (one wording source).
  */
-export function runStateRootBlock(state: RunState): string {
-  return `[Σ] ${compactJSON(state)}\n` +
+export function runStateRootBlock(state: RunState, opts?: { readonly withContract?: boolean }): string {
+  return sigmaBlock(state, opts?.withContract === true) +
+    "\n" +
     "Fresh tool results outrank Σ when they disagree.\n" +
     `[Project facts recall: skill_search()] — ${SKILL_RECALL_LINE}`;
 }

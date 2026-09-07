@@ -68,6 +68,18 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
       "Allow add_context() to pull an external dir, file, document, or git repo into context."),
     item("autoSeedCwd", "Auto-seed cwd", config.autoSeedCwd ? "on" : "off", CHOICES.autoSeedCwd,
       "Seed the working directory into context on the first repl() call (otherwise starts empty)."),
+    // R0 (/tmp/ROOT_FULL_SKILLSTATE_PLAN.md): the SKILL.state / Root Σ paradigm flags are
+    // ENFORCED — rendered as a read-only badge so the truth is visible instead of hidden.
+    // No toggle exists: applySetting has no case for them and the validator forces true.
+    item("__sigma_enforced__", "SKILL.state / Root Σ", "enforced", ["enforced"],
+      "ENFORCED (no opt-out): run state, skill state + distill, root context transform, state fences, digest compaction. " +
+        "Override attempts in rlm.json are traced (skillstate.override-ignored) and ignored; RLM_BENCH_NO_ROOTCONTEXT=1 is the dev-only measurement hatch."),
+    // R5: the window calibrations are rlm.json-only knobs — shown read-only with live values.
+    item("__sigma_window__", "Root Σ window (calibration)",
+      `keepTurns=${config.rootContextKeepTurns} · elide=${config.rootContextElideChars} · snapshot=${config.rootContextSnapshot ? "on" : "off"}`,
+      ["rlm.json"],
+      "Query-time window calibrations, rlm.json only: rootContextKeepTurns (1 = strict: Σ + current turn; 2 = default), rootContextElideChars, rootContextSnapshot. " +
+        "Session resume/fork: the tracker is reborn lazily and Σ re-grows from live observations — the first call after a resume has an empty Σ by design."),
     item("__save__", "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
   ];
 

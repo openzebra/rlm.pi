@@ -44,11 +44,21 @@ Modeled on the method in the [RLM paper](https://arxiv.org/abs/2512.24601); deta
 **How it works** below.
 
 Native (non-`/rlm`) sessions get the **Root Σ** layer: Ξ project-facts are re-ranked against
-every live prompt (WS-1), `/compact` produces a deterministic structural digest instead of an
-LLM prose summary (WS-2), and — opt-in — each LLM call gets discard semantics on stale tool
-payloads plus a fresh Σ snapshot (WS-3), while a session tracker harvests durable facts into
-the cross-session SkillState store (WS-4). All of it rides public Pi plugin seams; the
-transcript on disk stays complete, only what the model sees is managed.
+every live prompt, `/compact` produces a deterministic structural digest instead of an LLM
+prose summary, and each LLM call assembles **A_t = (P, Σ_t, O_t)** (SKILL.state paper §3):
+stale turns outside the keep window collapse to one-line session-log stubs (§5.3 discard
+semantics — recent payloads keep head+tail previews, deeper ones collapse fully), exactly one
+Σ snapshot rides before the last user message, and the model commits durable progress through
+Σ_t `state` fences validated by the same deterministic ladder as headless runs. The session
+tracker harvests durable facts into the cross-session SkillState store. **The paradigm is
+enforced** — no `rlm.json`, command, or panel toggle can disable it (override attempts are
+traced and ignored); `rlm.json` tunes calibrations only (`rootContextKeepTurns` — 1 = strict
+"Σ + current turn", `rootContextElideChars`, byte budgets). `RLM_BENCH_NO_ROOTCONTEXT=1` is a
+dev-only measurement hatch. Lifecycle: the tracker is born lazily on the first prompt; across
+resume/fork it re-grows from live observations (the first call after a resume has an empty Σ —
+by design, self-healing). Elision bounds what the model SEES per call; digest compaction bounds
+the archive-derived context on overflow — both coexist. All of it rides public Pi plugin seams;
+the transcript on disk stays complete, only what the model sees is managed.
 
 ## Benchmarks
 

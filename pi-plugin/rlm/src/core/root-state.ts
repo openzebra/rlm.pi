@@ -6,7 +6,8 @@
  * controller/sandboxManager. It is runtime-derived — tool outcomes, engine-run mirrors,
  * the user's latest prompt — zero model cooperation required (paper §5.3: observation
  * override; §5.7: small models must not be the state's author by default). The optional
- * fence protocol (enableRootStateFences, default OFF) is the only model-proposed input and
+ * fence protocol (enableRootStateFences — ENFORCED ON since Root Σ v2 R0) is the only
+ * model-proposed input and
  * rides the SAME V(ΔΣ_t,Σ_t) validator + retry/degrade ladder as engine runs.
  *
  * Caps/dedup/serialization are the engine's own machinery: RUN_STATE_LIMITS, dedupStrings,
@@ -20,6 +21,7 @@ import {
   freshRunState,
   malformedFenceProblem,
   patchErrorText,
+  RUN_STATE_IDLE_DEGRADE_TURNS,
   RUN_STATE_LIMITS,
   statePatchObservation,
   type ApproachOutcome,
@@ -45,6 +47,8 @@ export class RootStateTracker {
   private mode: RootStateMode = { kind: "active", retries: 0 };
   private opCounter = 0;
   private dirtyFlag = false;
+  /** R4: consecutive fence-eligible turns with zero accepted deltas (idle streak). */
+  private idleFenceTurns = 0;
   private readonly failures = new Map<string, number>();
   private pendingObservation: string | undefined;
   private readonly retryMax: number;
@@ -80,6 +84,21 @@ export class RootStateTracker {
 
   get dirty(): boolean {
     return this.dirtyFlag;
+  }
+
+  /** R4: true while the tracker accepts fences and the context transform may splice Σ. */
+  get isActive(): boolean {
+    return this.mode.kind === "active";
+  }
+
+  /** R4 telemetry: consecutive fence-eligible turns with zero accepted deltas. */
+  get idleTurns(): number {
+    return this.idleFenceTurns;
+  }
+
+  /** R4 telemetry: the degrade reason while degraded; undefined while active. */
+  get degradeReason(): string | undefined {
+    return this.mode.kind === "degraded" ? this.mode.reason : undefined;
   }
 
   snapshot(): RunState {
@@ -160,11 +179,27 @@ export class RootStateTracker {
    * deltas land sequentially, ALL problems accumulate into ONE observation (error-as-
    * observation), and only past `runStateRetryMax` total rejections the tracker degrades and
    * fences stop being applied. Wording delegates to run-state.ts (N1) — one source.
+   *
+   * R4 (G6, /tmp/ROOT_FULL_SKILLSTATE_PLAN.md): idle-degrade parity with the engine — once
+   * the native prompt teaches the fence contract, EVERY finalized assistant turn is
+   * fence-eligible; a turn with zero accepted deltas grows `idleFenceTurns` and
+   * `RUN_STATE_IDLE_DEGRADE_TURNS` consecutive idle turns degrade the tracker (an idle Σ is
+   * pure input tax — bench rec #2, paper §5.7). Any accepted delta resets the streak. In
+   * degraded mode fences stop applying and the context transform stops splicing (`isActive`),
+   * while runtime `observeToolResult` remains the Σ floor (degrade, never crash).
    */
   applyFences(fences: readonly StateFenceResult[]): void {
-    if (this.mode.kind !== "active" || fences.length === 0) return;
+    if (this.mode.kind !== "active") return;
+    if (fences.length === 0) {
+      // R4 (G6): a fence-free turn on a conditioned loop is IDLE — the contract rode the
+      // prompt for nothing. Grow the streak; degrade at the engine's threshold.
+      this.idleFenceTurns += 1;
+      this.degradeIfIdle();
+      return;
+    }
     let state = this.snapshot();
     const problems: string[] = [];
+    let accepted = 0;
     for (const fence of fences) {
       if (!fence.ok) {
         problems.push(malformedFenceProblem(fence.error));
@@ -173,10 +208,15 @@ export class RootStateTracker {
       const next: Result<RunState, PatchError> = applyPatch(state, fence.value, ++this.opCounter);
       if (next.ok) {
         state = next.value;
+        accepted += 1;
       } else {
         problems.push(patchErrorText(next.error));
       }
     }
+    // Accepted deltas reset the idle streak — even in a partially-failing batch (engine
+    // parity: real work is never punished for a sibling's malformed fence).
+    this.idleFenceTurns = accepted > 0 ? 0 : this.idleFenceTurns + 1;
+    this.degradeIfIdle();
     if (problems.length === 0) {
       this.mode = { kind: "active", retries: 0 };
       this.pendingObservation = undefined;
@@ -192,8 +232,20 @@ export class RootStateTracker {
     this.touch();
     if (retries > this.retryMax) {
       this.mode = { kind: "degraded", reason: `state-patch retry cap exceeded (${retries} rejected)` };
-    } else {
+    } else if (this.mode.kind === "active") {
+      // An idle degrade fired earlier in this call wins over re-activating — degrade is
+      // sticky; the runtime observation floor keeps Σ alive until the session ends.
       this.mode = { kind: "active", retries };
+    }
+  }
+
+  /** R4: fire the idle degrade at the engine's threshold (active trackers only). */
+  private degradeIfIdle(): void {
+    if (this.mode.kind === "active" && this.idleFenceTurns >= RUN_STATE_IDLE_DEGRADE_TURNS) {
+      this.mode = {
+        kind: "degraded",
+        reason: `idle degrade — ${this.idleFenceTurns} consecutive turns with zero accepted deltas`,
+      };
     }
   }
 

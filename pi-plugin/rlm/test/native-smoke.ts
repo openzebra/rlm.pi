@@ -16,7 +16,7 @@ import { SandboxManager } from "../src/sandbox/sandbox-manager.ts";
 import { resolveSource } from "../src/context/resolve.ts";
 import { formatContextListing } from "../src/context/listing.ts";
 import { buildRlmSystemPrompt } from "../src/prompts/system.ts";
-import { buildNativeSystemPrompt, NATIVE_PROMPT_BUDGET } from "../src/prompts/native.ts";
+import { buildNativeSystemPrompt, NATIVE_PROMPT_BUDGET, NATIVE_PROMPT_STATIC } from "../src/prompts/native.ts";
 import { contextLength, contextTypeLabel } from "../src/text/tokens.ts";
 
 
@@ -174,6 +174,14 @@ check("native prompt — includes the decomposition doctrine", nativeOnly.includ
 check("native prompt — includes worked examples", nativeOnly.includes("E1 multi-area study"));
 check("native prompt — includes tool table", nativeOnly.includes("Always-spawn fan-out"));
 check("native prompt — guides native edit/write", nativeOnly.includes("edit") && nativeOnly.includes("write"));
+
+// ── 8b. Root Σ v2 R1: the fence contract rides the prompt only when the flag says so ──
+
+const fenced = buildNativeSystemPrompt({ stateFences: true });
+check("R1: fence contract appended on demand", fenced.startsWith(nativeOnly) && fenced.includes("[state] Alongside your ```repl block(s)"));
+check("R1: contract is the ONE shared wording (STATE_FENCE_INSTRUCTION verbatim)", fenced.includes('"state_patch": {"verifiedFacts[+]"'));
+check("R1: static module-load snapshot stays contract-free (no session state at module load)", !NATIVE_PROMPT_STATIC.includes("[state] Alongside"));
+check("R1: explicit false is byte-identical to the static snapshot", buildNativeSystemPrompt({ stateFences: false }) === NATIVE_PROMPT_STATIC);
 
 // ── Results ──
 

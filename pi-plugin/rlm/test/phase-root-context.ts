@@ -7,6 +7,7 @@
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 import { elideStalePayloads, spliceSigmaSnapshot, type RootMessage } from "../src/core/root-context.ts";
 import { RootStateTracker } from "../src/core/root-state.ts";
+import { runStateRootBlock, STATE_FENCE_INSTRUCTION } from "../src/core/run-state.ts";
 import { check, finish } from "./helpers.ts";
 
 type Msg = ContextEvent["messages"][number];
@@ -165,6 +166,63 @@ const BIG = "y".repeat(4_000);
   check("engine findings merged", snap.findings.includes("engine finding A"));
   check("facts deduped across mirror", snap.verifiedFacts.filter((f) => f === "shared fact from root observations").length === 1);
   check("engine approaches merged", snap.testedApproaches.h1?.status === "succeeded");
+}
+
+{
+  // R2 (G2): contract-carrying splice — paper A.4 authoring mode. ON: the spliced text starts
+  // with the EXACT STATE_FENCE_INSTRUCTION (one wording source). OFF: byte-identical to the
+  // v1 observation-only runStateRootBlock.
+  const tracker = RootStateTracker.fresh("contract splice");
+  tracker.noteFact("facts/contract.ts — a verified fact");
+  const state = tracker.snapshot();
+  const withContract: RootMessage[] = [user("first"), assistant("mid"), user("latest")];
+  spliceSigmaSnapshot(withContract, state, undefined, { withContract: true });
+  const contractSigmas = withContract.filter((m) => (m as { customType?: string }).customType === "rlm-sigma");
+  check("R2: exactly one sigma with contract ON", contractSigmas.length === 1);
+  const contractBody = (contractSigmas[0] as { content: string }).content;
+  check("R2: spliced text starts with the exact fence contract", contractBody.startsWith(STATE_FENCE_INSTRUCTION));
+  check("R2: contract splice still carries Σ + recall line", contractBody.includes("[Σ] {") && contractBody.includes("skill_search()"));
+
+  const plain: RootMessage[] = [user("only")];
+  spliceSigmaSnapshot(plain, state, undefined);
+  const plainBody = (plain[0] as { content: string }).content;
+  check("R2: OFF splice byte-identical to runStateRootBlock", plainBody === runStateRootBlock(state));
+  check("R2: OFF splice carries no contract", !plainBody.includes("[state] Alongside"));
+}
+
+{
+  // R5 (G4): honest strict mode — keepTurns 1/0 stub older assistant prose (not only tool
+  // payloads); Σ customs, the intro, and the final user message are immune.
+  const strict: RootMessage[] = [
+    user("old ask"),
+    assistant(`old prose ${BIG}`),
+    toolResult("read", `OLD-PAYLOAD ${BIG}`),
+    { role: "custom", customType: "rlm-sigma-observation", content: "rejected patch obs", display: false, timestamp: 1 } as Msg,
+    { role: "custom", customType: "rlm-intro", content: "intro text", display: false, timestamp: 1 } as Msg,
+    assistant("current turn response"),
+    user("latest ask"),
+  ];
+  const elided = elideStalePayloads(strict, { keepTurns: 1, elideChars: 1_500 });
+  const texts = strict.map((m) => JSON.stringify(m));
+  check("R5: prose stub + payload preview elided", elided === 2, String(elided));
+  check("R5: old assistant prose → one-line Σ stub", texts[1].includes("turn elided — durable facts live in Σ"));
+  check("R5: stub replaces the prose wholesale", !texts[1].includes("old prose"));
+  check("R5: old payload → head+tail preview", texts[2].includes("chars elided"));
+  check("R5: rlm-sigma-observation immune", texts[3].includes("rejected patch obs"));
+  check("R5: rlm-intro immune", texts[4].includes("intro text"));
+  check("R5: last assistant turn verbatim", texts[5].includes("current turn response") && !texts[5].includes("turn elided"));
+  check("R5: final user message immune", texts[6].includes("latest ask"));
+
+  const strict0: RootMessage[] = [
+    user("u1"),
+    assistant(`prose ${BIG}`),
+    toolResult("bash", `PAYLOAD ${BIG}`),
+    user("latest"),
+  ];
+  const elided0 = elideStalePayloads(strict0, { keepTurns: 0, elideChars: 1_500 });
+  check("R5: keepTurns=0 elides all assistant turns + stale payloads", elided0 === 2, String(elided0));
+  check("R5: keepTurns=0 keeps the final user verbatim", JSON.stringify(strict0[3]).includes("latest"));
+  check("R5: keepTurns=0 stubs the prose", JSON.stringify(strict0[1]).includes("turn elided"));
 }
 
 finish();

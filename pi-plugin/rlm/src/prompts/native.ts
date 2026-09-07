@@ -12,6 +12,7 @@ import {
   DEFAULT_PROMPT_CAP,
   promptCapTokensK,
 } from "./glossary.ts";
+import { STATE_FENCE_INSTRUCTION } from "../core/run-state.ts";
 
 /** Adapts the REPL glossary for native mode — agent calls `repl({code})` instead of writing ```repl``` blocks. */
 function nativeReplGlossary(): string {
@@ -67,8 +68,15 @@ function nativeReplGlossary(): string {
   ].join("\n");
 }
 
-/** Build the native-mode system prompt for the main Pi agent. */
-export function buildNativeSystemPrompt(): string {
+/** Build the native-mode system prompt for the main Pi agent.
+ *
+ *  R1 (G1, /tmp/ROOT_FULL_SKILLSTATE_PLAN.md): `stateFences` appends the ONE Σ fence contract
+ *  (STATE_FENCE_INSTRUCTION verbatim — one wording source, engine and native share it) so the
+ *  native model can author ΔΣ_t through ```state fences. The fence text is STATIC, so it may
+ *  ride call-time composition; the FLAG decision happens at the call site — NATIVE_PROMPT_STATIC
+ *  (the frozen module-load snapshot) is composed with no options and stays contract-free.
+ */
+export function buildNativeSystemPrompt(opts?: { readonly stateFences?: boolean }): string {
   return [
     "╔══════════════════════════════════════════════════════════════════╗",
     "║  NATIVE RLM MODE — YOU ARE AN ORCHESTRATOR, NOT A READER      ║",
@@ -162,6 +170,7 @@ export function buildNativeSystemPrompt(): string {
     "</rules>",
     "",
     nativeReplGlossary(),
+    ...(opts?.stateFences === true ? ["", STATE_FENCE_INSTRUCTION] : []),
   ].join("\n");
 }
 

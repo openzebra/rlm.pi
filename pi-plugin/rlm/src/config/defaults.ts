@@ -56,25 +56,29 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   // bare-number finalize gets one coached redo instead of being accepted. Opt-in via rlm.json.
   enableVerificationNudge: false,
   // SKILL.state integration: Σ_t execution state + cross-session distilled knowledge.
-  enableRunState: true,
+  // Paradigm flags are ENFORCED (R0, /tmp/ROOT_FULL_SKILLSTATE_PLAN.md) — validateEnforcedOn
+  // forces true whatever rlm.json carries; only calibrations are tunable.
+  enableRunState: true, // ENFORCED — see /tmp/ROOT_FULL_SKILLSTATE_PLAN.md R0
   runStateRetryMax: 2,
-  enableSkillState: true,
+  enableSkillState: true, // ENFORCED — see /tmp/ROOT_FULL_SKILLSTATE_PLAN.md R0
   // Default ON (bench rec #3): deterministic harvest — one cheap distill leaf per finalize
   // replaces the stochastic fence-emission harvest (0 vs 4 notes across identical ON arms).
-  enableSkillStateDistill: true,
+  enableSkillStateDistill: true, // ENFORCED — see /tmp/ROOT_FULL_SKILLSTATE_PLAN.md R0
   skillStateMaxTokens: 1_200,
   skillStateLeafTokens: 200,
   skillStateMinScore: 4.0,
   skillStateNotesPerProject: 128,
-  // Root Σ integration (WS-2..WS-4): digest compaction ON (it only swaps the summarizer for
-  // a deterministic digest — zero tokens, strictly less latency); the context transform and
-  // model-proposed fences soak with flags OFF until the A/B says otherwise.
-  enableRootDigestCompaction: true,
+  // Root Σ integration (WS-2..WS-4): every LLM call assembles A_t = (P, Σ_t, O_t) — discard
+  // semantics on stale payloads + exactly one Σ snapshot splice, and model-proposed ΔΣ_t
+  // fences taught in the native prompt (v2 R1/R2). Digest compaction swaps Pi's summarizer
+  // for a deterministic digest. Flags are ENFORCED (R0); RLM_BENCH_NO_ROOTCONTEXT=1 remains
+  // the dev-only A/B measurement hatch — it alters measurement, never ships as a disable path.
+  enableRootDigestCompaction: true, // ENFORCED — see /tmp/ROOT_FULL_SKILLSTATE_PLAN.md R0
   rootDigestKeepRecentChars: 12_000,
   rootDigestMaxChars: 8_000,
-  enableRootContextTransform: false,
+  enableRootContextTransform: true, // ENFORCED — see /tmp/ROOT_FULL_SKILLSTATE_PLAN.md R0 (was soak-OFF pre-v2)
   rootContextKeepTurns: 2,
   rootContextElideChars: 1_500,
   rootContextSnapshot: true,
-  enableRootStateFences: false,
+  enableRootStateFences: true, // ENFORCED — see /tmp/ROOT_FULL_SKILLSTATE_PLAN.md R0 (was soak-OFF pre-v2)
 });

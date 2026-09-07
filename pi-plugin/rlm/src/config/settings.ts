@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { RlmConfig } from "../core/types.ts";
+import { trace, traceEnabled } from "../util/trace.ts";
 import { DEFAULT_CONFIG } from "./defaults.ts";
 
 interface PersistedSettings {
@@ -29,6 +30,21 @@ function validateNumber(v: unknown, min: number): number | undefined {
 
 function validateBoolean(v: unknown): boolean | undefined {
   return typeof v === "boolean" ? v : undefined;
+}
+
+/**
+ * R0 enforcement (/tmp/ROOT_FULL_SKILLSTATE_PLAN.md): the SKILL.state paradigm flags are
+ * operating law — they ALWAYS resolve to `true`, whatever rlm.json says. An explicit `false`
+ * is not an error (fail-soft by contract): it is traced (`skillstate.override-ignored`) and
+ * ignored, so a hostile or typo'd config loses visibly instead of crashing the load or
+ * silently unbounding the root context. Calibrations (window sizes, budgets) stay tunable —
+ * the PARADIGM is enforced, the calibrations are not.
+ */
+function validateEnforcedOn(value: unknown, flag: string): true {
+  if (value === false && traceEnabled) {
+    trace("skillstate.override-ignored", { flag, value });
+  }
+  return true;
 }
 
 function validateString(v: unknown): string | undefined {
@@ -138,15 +154,13 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   // Verification-discipline nudge (default OFF).
   const enableVerificationNudge = validateBoolean(r.enableVerificationNudge);
   if (enableVerificationNudge !== undefined) out.enableVerificationNudge = enableVerificationNudge;
-  // SKILL.state integration (Workstreams A–F)
-  const enableRunState = validateBoolean(r.enableRunState);
-  if (enableRunState !== undefined) out.enableRunState = enableRunState;
+  // SKILL.state integration (Workstreams A–F) — paradigm flags ENFORCED (R0); runStateRetryMax
+  // is a calibration and stays tunable.
+  out.enableRunState = validateEnforcedOn(r.enableRunState, "enableRunState");
   const runStateRetryMax = validateNumber(r.runStateRetryMax, 0);
   if (runStateRetryMax !== undefined) out.runStateRetryMax = runStateRetryMax;
-  const enableSkillState = validateBoolean(r.enableSkillState);
-  if (enableSkillState !== undefined) out.enableSkillState = enableSkillState;
-  const enableSkillStateDistill = validateBoolean(r.enableSkillStateDistill);
-  if (enableSkillStateDistill !== undefined) out.enableSkillStateDistill = enableSkillStateDistill;
+  out.enableSkillState = validateEnforcedOn(r.enableSkillState, "enableSkillState");
+  out.enableSkillStateDistill = validateEnforcedOn(r.enableSkillStateDistill, "enableSkillStateDistill");
   const skillStateMaxTokens = validateNumber(r.skillStateMaxTokens, 50);
   if (skillStateMaxTokens !== undefined) out.skillStateMaxTokens = skillStateMaxTokens;
   const skillStateLeafTokens = validateNumber(r.skillStateLeafTokens, 0);
@@ -155,23 +169,21 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (skillStateMinScore !== undefined) out.skillStateMinScore = skillStateMinScore;
   const skillStateNotesPerProject = validateNumber(r.skillStateNotesPerProject, 1);
   if (skillStateNotesPerProject !== undefined) out.skillStateNotesPerProject = skillStateNotesPerProject;
-  // Root Σ integration (WS-2..WS-4)
-  const enableRootDigestCompaction = validateBoolean(r.enableRootDigestCompaction);
-  if (enableRootDigestCompaction !== undefined) out.enableRootDigestCompaction = enableRootDigestCompaction;
+  // Root Σ integration (WS-2..WS-4) — paradigm flags ENFORCED (R0); the window/byte knobs
+  // below are calibrations and stay tunable.
+  out.enableRootDigestCompaction = validateEnforcedOn(r.enableRootDigestCompaction, "enableRootDigestCompaction");
   const rootDigestKeepRecentChars = validateNumber(r.rootDigestKeepRecentChars, 200);
   if (rootDigestKeepRecentChars !== undefined) out.rootDigestKeepRecentChars = rootDigestKeepRecentChars;
   const rootDigestMaxChars = validateNumber(r.rootDigestMaxChars, 200);
   if (rootDigestMaxChars !== undefined) out.rootDigestMaxChars = rootDigestMaxChars;
-  const enableRootContextTransform = validateBoolean(r.enableRootContextTransform);
-  if (enableRootContextTransform !== undefined) out.enableRootContextTransform = enableRootContextTransform;
+  out.enableRootContextTransform = validateEnforcedOn(r.enableRootContextTransform, "enableRootContextTransform");
   const rootContextKeepTurns = validateNumber(r.rootContextKeepTurns, 0);
   if (rootContextKeepTurns !== undefined) out.rootContextKeepTurns = rootContextKeepTurns;
   const rootContextElideChars = validateNumber(r.rootContextElideChars, 100);
   if (rootContextElideChars !== undefined) out.rootContextElideChars = rootContextElideChars;
   const rootContextSnapshot = validateBoolean(r.rootContextSnapshot);
   if (rootContextSnapshot !== undefined) out.rootContextSnapshot = rootContextSnapshot;
-  const enableRootStateFences = validateBoolean(r.enableRootStateFences);
-  if (enableRootStateFences !== undefined) out.enableRootStateFences = enableRootStateFences;
+  out.enableRootStateFences = validateEnforcedOn(r.enableRootStateFences, "enableRootStateFences");
   if (typeof r.subSampling === "object" && r.subSampling !== null) {
     const ss = r.subSampling as Record<string, unknown>;
     const sampling: { maxTokens?: number; temperature?: number; reasoning?: ThinkingLevel } = {};

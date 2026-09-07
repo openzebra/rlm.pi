@@ -109,6 +109,15 @@ const BIG = "x".repeat(3_000);
     check("tokensBefore passes through", compaction.tokensBefore === 1234);
     check("V1 probe: recomputed token estimate is positive", result.tokensBeforeRecomputed > 0,
       String(result.tokensBeforeRecomputed));
+    // G8 soak probe (/tmp/ROOT_FULL_SKILLSTATE_PLAN.md): the recomputation must TRACK the host
+    // estimate — blind divergence here would mean elision/compaction decisions are made
+    // against a fantasy token count. Tolerant band: same order of magnitude, not equal
+    // (estimators differ); a 4×+ skew is the alarm the trace exists to catch.
+    {
+      const host = Math.max(1, compaction.tokensBefore);
+      const ratio = result.tokensBeforeRecomputed / host;
+      check("G8: recomputed tokens track the host estimate (no blind divergence)", ratio > 0.25 && ratio < 4, ratio.toFixed(2));
+    }
     // Tail fits the 12K budget ⇒ Pi's own cut stands (never extend).
     check("no tighten when tail fits", compaction.firstKeptEntryId === piCutId);
   }

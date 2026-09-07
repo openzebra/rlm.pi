@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Root Σ v2 (R0..R7, `/tmp/ROOT_FULL_SKILLSTATE_PLAN.md`)
+
+- **R0 — SKILL.state enforced**: the six paradigm flags (`enableRunState`, `enableSkillState`,
+  `enableSkillStateDistill`, `enableRootContextTransform`, `enableRootStateFences`,
+  `enableRootDigestCompaction`) are operating law — `validateEnforcedOn` resolves them to
+  `true` whatever rlm.json carries; explicit `false` emits `skillstate.override-ignored` and
+  loses. SkillStore hydrates unconditionally at `session_start`; the config panel renders the
+  paradigm as a read-only enforced badge. `RLM_BENCH_NO_ROOTCONTEXT=1` remains the dev-only
+  measurement hatch (never a disable path).
+- **R1 — fence protocol taught natively (G1)**: `buildNativeSystemPrompt({ stateFences })`
+  appends the ONE `STATE_FENCE_INSTRUCTION` (verbatim, shared with the engine) at call time;
+  `NATIVE_PROMPT_STATIC` stays contract-free (no session state at module load).
+- **R2 — contract-carrying Σ splice (G2)**: `runStateRootBlock(state, { withContract })` +
+  `spliceSigmaSnapshot(..., opts)` — paper A.4 authoring mode reuses one private composer with
+  `runStateTurnBlock` (no duplication); OFF stays byte-identical to the v1 snapshot.
+- **R4 — idle-degrade parity on native (G6)**: every finalized assistant turn feeds the
+  ladder; `RUN_STATE_IDLE_DEGRADE_TURNS` consecutive fence-idle turns degrade the tracker
+  (`root-state.idle-degrade` trace, `idleDegrades` counter); `isActive` stops Σ splices while
+  degraded; `observeToolResult` remains the Σ floor. Accepted deltas reset the streak.
+- **R5 — honest strict mode (G4)**: `tailStart <= 0` guard fixed — `keepTurns: 0/1` now elide
+  older assistant PROSE too (glossary stub `ROOT_TURN_ELIDED_LINE`); `rlm-sigma`,
+  `rlm-sigma-observation`, `rlm-intro` and the final user message are immune.
+- **R6 — O(T) proof (G5)**: new `phase-root-tokens.ts` — OFF grows monotonically (O(T²)
+  cumulative), ON is flat past the window (24K vs 96K chars at t=12; 2.4× cumulative); two-tier
+  elision (preview ring `max(keepTurns,1)`, stub beyond) keeps per-call context bounded; Σ
+  counters surface in the status widget under trace mode; `/tmp` bench summary fail-soft.
+- **R7 — docs**: README Root Σ section rewritten (A_t, enforcement, lifecycle across
+  resume/fork, compaction interplay); AGENTS.md carries the dated R0 amendment.
+- **G8**: `phase-root-digest.ts` now asserts the `tokensBeforeRecomputed` soak probe tracks
+  the host estimate (no blind divergence).
+
+### Tests
+
+- New: `phase-root-fences.ts`, `phase-root-tokens.ts`, `phase-skillstate-enforced.ts`
+  (registered in `smoke.ts`).
+- Extended: `phase-root-context.ts` (R2 contract splice, R5 strict stubs + immunity set),
+  `phase-root-digest.ts` (G8 divergence probe), `native-smoke.ts` (R1 prompt contract legs).
+
 ## [0.3.17] — 2026-09-07
 
 ### Added

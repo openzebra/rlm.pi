@@ -19,6 +19,7 @@
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 import type { RunState } from "./run-state.ts";
 import { runStateRootBlock } from "./run-state.ts";
+import { ROOT_TURN_ELIDED_LINE } from "../prompts/glossary.ts";
 import { truncateOutput } from "../text/parsing.ts";
 import { textContentOf } from "../text/agent-text.ts";
 
@@ -33,15 +34,29 @@ export interface ElideOptions {
 const ELIDE_MARK = "chars elided — full result in session log";
 
 /**
- * WS-3a: elide stale tool payloads. The newest `keepTurns` assistant turns and the final
- * user message stay verbatim; older toolResult content over `elideChars` becomes a
- * head+tail preview (same truncation shape as repl stdout). `role:"custom"` messages with
- * `customType: "rlm-sigma"` are immune (WS-3b owns them). Mutates the array in place;
- * returns the number of messages elided (telemetry), for zero-cost counters at the seam.
+ * WS-3a: elide stale turns. The newest `keepTurns` assistant turns and the final user message
+ * stay verbatim. Older turns collapse in two tiers (§5.3 discard semantics + R5/G4 honest
+ * strictness, and the only way the R6 acceptance bound — per-call ≤ Σ + window — can hold):
+ *   - recent stale ring (the last `max(keepTurns, 1)` stale turns): toolResult payloads over
+ *     `elideChars` become head+tail previews (same truncation shape as repl stdout); assistant
+ *     prose always collapses to the one-line stub.
+ *   - older still: EVERYTHING (payloads included) becomes the one-line session-log stub —
+ *     a stale preview per turn would itself accumulate linearly and re-create O(T).
+ * `role:"custom"` messages of the Σ/intro kinds are immune (WS-3b owns them). Mutates the
+ * array in place; returns the number of messages elided (telemetry), for zero-cost counters.
  */
 export function elideStalePayloads(messages: RootMessage[], opts: ElideOptions): number {
   const keepTurns = Math.max(0, Math.floor(opts.keepTurns));
-  if (keepTurns === 0 || messages.length === 0) return 0;
+  if (messages.length === 0) return 0;
+  // Preview ring: stale turns recent enough to deserve the §5.3 head+tail preview. Scales with
+  // the window knob — one calibration, two tiers (preview ring, then stub) — and never zero,
+  // so keepTurns=0 still previews the single closest stale payload instead of stubbing blind.
+  const previewRing = Math.max(keepTurns, 1);
+  if (keepTurns === 0) {
+    // R5 strict-0: nothing inside the window — Σ + immune customs + the final user message
+    // are all that survive verbatim.
+    return elideRange(messages, 0, messages.length, opts, previewRing);
+  }
 
   // Index of the assistant message that opens the keepTurns-th-from-last turn — everything
   // from there on is the protected tail (same walk as core/compaction.ts elideOldToolPayloads).
@@ -57,15 +72,55 @@ export function elideStalePayloads(messages: RootMessage[], opts: ElideOptions):
     }
   }
   if (tailStart <= 0) return 0; // fewer turns than the window — nothing to elide
+  return elideRange(messages, 0, tailStart, opts, previewRing);
+}
 
+/** Custom messages the elision never touches — the Σ snapshot/observation and the intro. */
+const IMMUNE_CUSTOM_TYPES: ReadonlySet<string> = new Set(["rlm-sigma", "rlm-sigma-observation", "rlm-intro"]);
+
+function isImmuneCustom(m: RootMessage): boolean {
+  if (m.role !== "custom") return false;
+  const customType: unknown = (m as { customType?: unknown }).customType;
+  return typeof customType === "string" && IMMUNE_CUSTOM_TYPES.has(customType);
+}
+
+/** R5: elide [from, to) — stale assistant prose always becomes the one-line Σ stub; stale
+ *  toolResults get the §5.3 preview while `assistantsAfter < previewRing` and the stub beyond
+ *  (two-tier elision — previews must not accumulate linearly). Immune customs and the final
+ *  user message are never touched. Mutates in place; returns the elided count. */
+function elideRange(
+  messages: RootMessage[],
+  from: number,
+  to: number,
+  opts: ElideOptions,
+  previewRing: number,
+): number {
   const lastUser = lastIndexOfRole(messages, "user");
+  // Pre-pass: stale assistant indices in [from, to) — a payload's recency is measured by the
+  // stale turns AFTER it (pre-allocated walk, no per-message allocation).
+  let staleAssistants = 0;
+  for (let i = from; i < to; i++) {
+    if (messages[i]?.role === "assistant") staleAssistants += 1;
+  }
   let elided = 0;
-  for (let i = 0; i < tailStart; i++) {
+  for (let i = from; i < to; i++) {
     const m = messages[i];
-    if (m === undefined || m.role !== "toolResult") continue;
+    if (m === undefined || isImmuneCustom(m)) continue;
     if (i === lastUser) continue; // paranoia: the final user message is never touched
-    const total = totalTextLength(m);
-    if (total <= opts.elideChars) continue;
+    if (m.role === "assistant") {
+      staleAssistants -= 1; // turns AFTER this one = count minus itself
+      messages[i] = { ...m, content: [{ type: "text", text: ROOT_TURN_ELIDED_LINE }] } as RootMessage;
+      elided += 1;
+      continue;
+    }
+    if (m.role !== "toolResult") continue;
+    if (staleAssistants >= previewRing) {
+      // Deep-stale payload: even the preview would accumulate — collapse to the stub.
+      messages[i] = { ...m, content: [{ type: "text", text: ROOT_TURN_ELIDED_LINE }] } as RootMessage;
+      elided += 1;
+      continue;
+    }
+    if (totalTextLength(m) <= opts.elideChars) continue;
     messages[i] = {
       ...m,
       content: [{ type: "text", text: previewToolText(m, opts.elideChars) }],
@@ -75,13 +130,16 @@ export function elideStalePayloads(messages: RootMessage[], opts: ElideOptions):
   return elided;
 }
 
-/** WS-3b: exactly one live Σ snapshot, immediately before the LAST user message. */
+/** WS-3b: exactly one live Σ snapshot, immediately before the LAST user message.
+ *  R2 (G2): `withContract` makes the splice carry the fence contract (A.4 authoring mode) —
+ *  pass-through to runStateRootBlock; without it, the v1 observation-only block. */
 export function spliceSigmaSnapshot(
   messages: RootMessage[],
   state: RunState,
   rectifyHint: string | undefined,
+  opts?: { readonly withContract?: boolean },
 ): void {
-  const block = runStateRootBlock(state);
+  const block = runStateRootBlock(state, opts);
   const text = rectifyHint === undefined ? block : `${block}\n${rectifyHint}`;
   // Remove any previous instance (only one lives at a time — idempotent across calls).
   for (let i = messages.length - 1; i >= 0; i--) {
