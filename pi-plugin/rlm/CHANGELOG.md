@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.18] — 2026-09-08
+
 ### Added — Root Σ v2 (R0..R7, `/tmp/ROOT_FULL_SKILLSTATE_PLAN.md`)
 
 - **R0 — SKILL.state enforced**: the six paradigm flags (`enableRunState`, `enableSkillState`,
@@ -1333,7 +1335,9 @@ for the Pi coding agent.
   budget ceiling, max consecutive errors, per-REPL-block timeout, max concurrent sub-calls,
   trajectory compaction, and toggles for `ask_user_question` and `todo`.
 
-[Unreleased]: https://github.com/openzebra/rlm.pi/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/openzebra/rlm.pi/compare/v0.3.18...HEAD
+[0.3.18]: https://github.com/openzebra/rlm.pi/releases/tag/v0.3.18
+[0.3.17]: https://github.com/openzebra/rlm.pi/releases/tag/v0.3.17
 [0.3.0]: https://github.com/openzebra/rlm.pi/releases/tag/v0.3.0
 [0.2.2]: https://github.com/openzebra/rlm.pi/releases/tag/v0.2.2
 [0.2.1]: https://github.com/openzebra/rlm.pi/releases/tag/v0.2.1
