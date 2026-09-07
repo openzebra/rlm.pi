@@ -37,6 +37,13 @@ const RECTIFY_FAILURE_THRESHOLD = 2;
 /** Task restatement cap — mirrors run-state.ts TASK_MAX_CHARS (kept in sync by comment). */
 const ROOT_TASK_MAX_CHARS = 200;
 
+/** R3 soak observability: per-turn fence outcome, returned by applyFences. */
+export interface FenceOutcome {
+  readonly fences: number;
+  readonly accepted: number;
+  readonly problems: number;
+}
+
 /** Root Σ mode — same discriminated union shape as the engine's (active | degraded). */
 type RootStateMode =
   | { readonly kind: "active"; readonly retries: number }
@@ -188,14 +195,14 @@ export class RootStateTracker {
    * degraded mode fences stop applying and the context transform stops splicing (`isActive`),
    * while runtime `observeToolResult` remains the Σ floor (degrade, never crash).
    */
-  applyFences(fences: readonly StateFenceResult[]): void {
-    if (this.mode.kind !== "active") return;
+  applyFences(fences: readonly StateFenceResult[]): FenceOutcome {
+    if (this.mode.kind !== "active") return { fences: fences.length, accepted: 0, problems: 0 };
     if (fences.length === 0) {
       // R4 (G6): a fence-free turn on a conditioned loop is IDLE — the contract rode the
       // prompt for nothing. Grow the streak; degrade at the engine's threshold.
       this.idleFenceTurns += 1;
       this.degradeIfIdle();
-      return;
+      return { fences: 0, accepted: 0, problems: 0 };
     }
     let state = this.snapshot();
     const problems: string[] = [];
@@ -222,7 +229,7 @@ export class RootStateTracker {
       this.pendingObservation = undefined;
       this.draft = this.toMutable(state);
       this.touch();
-      return;
+      return { fences: fences.length, accepted, problems: 0 };
     }
     const retries = this.mode.retries + problems.length;
     this.pendingObservation = statePatchObservation(problems);
@@ -237,6 +244,7 @@ export class RootStateTracker {
       // sticky; the runtime observation floor keeps Σ alive until the session ends.
       this.mode = { kind: "active", retries };
     }
+    return { fences: fences.length, accepted, problems: problems.length };
   }
 
   /** R4: fire the idle degrade at the engine's threshold (active trackers only). */

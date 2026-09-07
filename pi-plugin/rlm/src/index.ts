@@ -415,7 +415,17 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     if (tracker === undefined || !controller.config.enableRootStateFences) return;
     if (event.message.role !== "assistant") return;
     const wasActive = tracker.isActive;
-    tracker.applyFences(findStatePatches(agentMessageText(event.message)));
+    const outcome = tracker.applyFences(findStatePatches(agentMessageText(event.message)));
+    // R3 soak observability: per-turn fence outcomes — the soak-B bars (≥50% of turns commit
+    // ≥1 accepted delta, rejection storms <10%) are computed from these journal lines.
+    if (traceEnabled) {
+      trace("root-state.turn", {
+        ...outcome,
+        idle: tracker.idleTurns,
+        active: tracker.isActive,
+        degraded: wasActive && !tracker.isActive,
+      });
+    }
     if (wasActive && !tracker.isActive) {
       idleDegrades += 1;
       if (traceEnabled) {
