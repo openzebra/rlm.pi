@@ -170,7 +170,22 @@ export function buildNativeSystemPrompt(opts?: { readonly stateFences?: boolean 
     "</rules>",
     "",
     nativeReplGlossary(),
-    ...(opts?.stateFences === true ? ["", STATE_FENCE_INSTRUCTION] : []),
+    ...(opts?.stateFences === true
+      ? [
+          "",
+          STATE_FENCE_INSTRUCTION,
+          // Soak-B finding (R3): models ignore the contract when it only speaks headless
+          // \u201c```repl block(s)\u201d \u2014 in native mode those are repl({code}) TOOL calls. The engine
+          // wording above stays byte-identical (one source); this line maps it 1:1 onto the
+          // native tool-call loop so the fence obligation is unambiguous.
+          "NATIVE MODE: you emit repl({code}) as TOOL calls, not ```repl text blocks \u2014 the " +
+            "contract above maps 1:1 onto this loop. In ANY reply where you learned something " +
+            "durable (a path, a fact, a failed approach, the next step), ALSO emit a ```state " +
+            'fenced block in that same reply: {"state_patch": {"verifiedFacts[+]": ' +
+            '"src/x.ts \u2014 what you just verified"}}. Deltas only; one small patch per turn; ' +
+            "never restate unchanged keys.",
+        ]
+      : []),
   ].join("\n");
 }
 

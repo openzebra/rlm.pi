@@ -180,6 +180,7 @@ check("native prompt — guides native edit/write", nativeOnly.includes("edit") 
 const fenced = buildNativeSystemPrompt({ stateFences: true });
 check("R1: fence contract appended on demand", fenced.startsWith(nativeOnly) && fenced.includes("[state] Alongside your ```repl block(s)"));
 check("R1: contract is the ONE shared wording (STATE_FENCE_INSTRUCTION verbatim)", fenced.includes('"state_patch": {"verifiedFacts[+]"'));
+check("R1: native bridge maps the contract onto tool-call mode (soak-B finding)", fenced.includes("NATIVE MODE: you emit repl({code}) as TOOL calls"));
 check("R1: static module-load snapshot stays contract-free (no session state at module load)", !NATIVE_PROMPT_STATIC.includes("[state] Alongside"));
 check("R1: explicit false is byte-identical to the static snapshot", buildNativeSystemPrompt({ stateFences: false }) === NATIVE_PROMPT_STATIC);
 

@@ -189,7 +189,9 @@ the SKILL.state rules above:
   > traced (`skillstate.override-ignored`) and ignored. The fence contract rides the native
   > system prompt (`buildNativeSystemPrompt({ stateFences })`, R1) and the Σ splice carries it
   > (`runStateRootBlock(state, { withContract })`, R2). Idle-degrade is native-parity (R4):
-  > `RUN_STATE_IDLE_DEGRADE_TURNS` fence-eligible turns with zero accepted deltas degrade the
+  > `ROOT_IDLE_DEGRADE_TURNS` (6 — root-specific; the engine keeps its bench-tuned 4 — soak
+  > found native cold-start fences land at turn 3–6, so 4 amputated before first commit)
+  > fence-eligible turns with zero accepted deltas degrade the
   > tracker (`isActive` gate stops splices; `observeToolResult` stays the Σ floor).
   > `RLM_BENCH_NO_ROOTCONTEXT=1` remains the DEV-ONLY measurement hatch — never a disable path.
 - **`session_before_compact` seam** (WS-2): `core/root-digest.ts` supplies a deterministic

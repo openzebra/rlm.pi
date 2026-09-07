@@ -21,7 +21,6 @@ import {
   freshRunState,
   malformedFenceProblem,
   patchErrorText,
-  RUN_STATE_IDLE_DEGRADE_TURNS,
   RUN_STATE_LIMITS,
   statePatchObservation,
   type ApproachOutcome,
@@ -36,6 +35,16 @@ import type { StateFenceResult } from "../text/parsing.ts";
 const RECTIFY_FAILURE_THRESHOLD = 2;
 /** Task restatement cap — mirrors run-state.ts TASK_MAX_CHARS (kept in sync by comment). */
 const ROOT_TASK_MAX_CHARS = 200;
+
+/** R4: idle-degrade threshold for the NATIVE root tracker — deliberately ROOT-SPECIFIC
+ *  (soak finding, 2025-09-08 live sessions: qwen3.8-27b ×3, qwen3-30b/32b, gemini-flash).
+ *  The engine's `RUN_STATE_IDLE_DEGRADE_TURNS = 4` is bench-tuned for runs conditioned on Σ
+ *  from turn 1; NATIVE sessions have a cold-start ramp — first fences land on turn 3 (short
+ *  tasks) or turn 5–6 (study tasks), so 4 amputated exactly before the first commit (2/2
+ *  study sessions degraded at 4, then fenced at 5). 6 clears the observed ramp while still
+ *  bounding the fence tax. The engine const and its tuning are untouched.
+ */
+export const ROOT_IDLE_DEGRADE_TURNS = 6;
 
 /** R3 soak observability: per-turn fence outcome, returned by applyFences. */
 export interface FenceOutcome {
@@ -190,8 +199,9 @@ export class RootStateTracker {
    * R4 (G6, /tmp/ROOT_FULL_SKILLSTATE_PLAN.md): idle-degrade parity with the engine — once
    * the native prompt teaches the fence contract, EVERY finalized assistant turn is
    * fence-eligible; a turn with zero accepted deltas grows `idleFenceTurns` and
-   * `RUN_STATE_IDLE_DEGRADE_TURNS` consecutive idle turns degrade the tracker (an idle Σ is
-   * pure input tax — bench rec #2, paper §5.7). Any accepted delta resets the streak. In
+   * `ROOT_IDLE_DEGRADE_TURNS` consecutive idle turns degrade the tracker (an idle Σ is
+   * pure input tax — bench rec #2, paper §5.7; root threshold is 6, not the engine's 4 —
+   * see the const's soak citation). Any accepted delta resets the streak. In
    * degraded mode fences stop applying and the context transform stops splicing (`isActive`),
    * while runtime `observeToolResult` remains the Σ floor (degrade, never crash).
    */
@@ -247,9 +257,9 @@ export class RootStateTracker {
     return { fences: fences.length, accepted, problems: problems.length };
   }
 
-  /** R4: fire the idle degrade at the engine's threshold (active trackers only). */
+  /** R4: fire the idle degrade at the root threshold (active trackers only). */
   private degradeIfIdle(): void {
-    if (this.mode.kind === "active" && this.idleFenceTurns >= RUN_STATE_IDLE_DEGRADE_TURNS) {
+    if (this.mode.kind === "active" && this.idleFenceTurns >= ROOT_IDLE_DEGRADE_TURNS) {
       this.mode = {
         kind: "degraded",
         reason: `idle degrade — ${this.idleFenceTurns} consecutive turns with zero accepted deltas`,

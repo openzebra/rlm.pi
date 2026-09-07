@@ -10,8 +10,7 @@
  */
 
 import { check, finish } from "./helpers.ts";
-import { RootStateTracker } from "../src/core/root-state.ts";
-import { RUN_STATE_IDLE_DEGRADE_TURNS } from "../src/core/run-state.ts";
+import { ROOT_IDLE_DEGRADE_TURNS, RootStateTracker } from "../src/core/root-state.ts";
 import { findStatePatches } from "../src/text/parsing.ts";
 
 /** An assistant reply carrying one ```state fence — exactly what message_end parses. */
@@ -32,17 +31,18 @@ const WIRE = '{"state_patch": {"verifiedFacts[+]": "src/f.ts — fence wired"}}'
 }
 
 {
-  // ── R4: the idle ladder — fence-free turns degrade at the engine threshold ──
+  // ── R4: the idle ladder — fence-free turns degrade at the ROOT threshold (6; the engine's
+  // 4 amputated before native cold-start fences land — see ROOT_IDLE_DEGRADE_TURNS) ──
   const t = RootStateTracker.fresh("idle ladder", 99); // retry cap deliberately out of the way
   t.observeToolResult("bash", false, ""); // the runtime floor flows before and after degrade
-  for (let i = 1; i < RUN_STATE_IDLE_DEGRADE_TURNS; i++) {
+  for (let i = 1; i < ROOT_IDLE_DEGRADE_TURNS; i++) {
     t.applyFences(findStatePatches(`turn ${i} replied with prose, no fence`));
-    check(`idle turn ${i}/${RUN_STATE_IDLE_DEGRADE_TURNS} — still active`, t.isActive);
+    check(`idle turn ${i}/${ROOT_IDLE_DEGRADE_TURNS} — still active`, t.isActive);
   }
   t.applyFences(findStatePatches("")); // an empty assistant text counts too (message_end feeds it verbatim)
-  check(`idle turn ${RUN_STATE_IDLE_DEGRADE_TURNS} — degraded`, !t.isActive);
+  check(`idle turn ${ROOT_IDLE_DEGRADE_TURNS} — degraded`, !t.isActive);
   check("degrade reason names the idle streak", (t.degradeReason ?? "").includes("idle degrade"));
-  check("idle streak counted at the engine threshold", t.idleTurns >= RUN_STATE_IDLE_DEGRADE_TURNS);
+  check("idle streak counted at the root threshold", t.idleTurns >= ROOT_IDLE_DEGRADE_TURNS);
 
   // degraded: fences are ignored, splices would stop (isActive false), the floor keeps writing
   const factsBefore = t.snapshot().verifiedFacts.length;
@@ -56,12 +56,12 @@ const WIRE = '{"state_patch": {"verifiedFacts[+]": "src/f.ts — fence wired"}}'
 {
   // ── R4: one accepted delta BEFORE the threshold resets the streak — no degrade ──
   const r = RootStateTracker.fresh("idle reset", 99);
-  for (let i = 0; i < RUN_STATE_IDLE_DEGRADE_TURNS - 1; i++) r.applyFences([]);
-  check("streak warms to threshold − 1", r.idleTurns === RUN_STATE_IDLE_DEGRADE_TURNS - 1 && r.isActive);
+  for (let i = 0; i < ROOT_IDLE_DEGRADE_TURNS - 1; i++) r.applyFences([]);
+  check("streak warms to threshold − 1", r.idleTurns === ROOT_IDLE_DEGRADE_TURNS - 1 && r.isActive);
   r.applyFences(findStatePatches(fenceText('{"state_patch": {"verifiedFacts[+]": "reset"}}')));
   check("accepted delta resets the streak", r.idleTurns === 0 && r.isActive);
-  for (let i = 0; i < RUN_STATE_IDLE_DEGRADE_TURNS - 1; i++) r.applyFences([]);
-  check("streak rebuilds without carrying the old count", r.idleTurns === RUN_STATE_IDLE_DEGRADE_TURNS - 1 && r.isActive);
+  for (let i = 0; i < ROOT_IDLE_DEGRADE_TURNS - 1; i++) r.applyFences([]);
+  check("streak rebuilds without carrying the old count", r.idleTurns === ROOT_IDLE_DEGRADE_TURNS - 1 && r.isActive);
   r.applyFences([]); // rebuilt streak (3) + this one = the 4th consecutive idle turn
   check("the rebuilt streak degrades exactly at the threshold", !r.isActive);
 }

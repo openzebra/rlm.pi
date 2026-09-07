@@ -397,12 +397,21 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const message = observation === undefined
       ? undefined
       : { customType: "rlm-sigma-observation", content: observation, display: false, details: undefined };
+    // R1 + R3 soak instrumentation: what the plugin RETURNS as the system prompt — the host
+    // applies result.systemPrompt verbatim (agent-session.js), so this line + the journal
+    // decide "wiring bug vs model non-compliance" for the fence contract.
+    const nativePrompt = buildNativeSystemPrompt({ stateFences: controller.config.enableRootStateFences });
+    if (traceEnabled) {
+      trace("root-prompt.composed", {
+        chars: nativePrompt.length,
+        fences: controller.config.enableRootStateFences,
+        contract: nativePrompt.includes("[state] Alongside"),
+        xi: xi !== undefined,
+      });
+    }
     return {
       ...(message === undefined ? {} : { message }),
-      systemPrompt: event.systemPrompt + "\n\n" + xiPart +
-        // R1 (G1): the fence contract rides the prompt when fences are enabled — the ONE
-        // STATE_FENCE_INSTRUCTION wording, appended at call time (static snapshot untouched).
-        buildNativeSystemPrompt({ stateFences: controller.config.enableRootStateFences }),
+      systemPrompt: event.systemPrompt + "\n\n" + xiPart + nativePrompt,
     };
   });
 

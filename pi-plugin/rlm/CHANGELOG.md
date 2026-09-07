@@ -37,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resume/fork, compaction interplay); AGENTS.md carries the dated R0 amendment.
 - **G8**: `phase-root-digest.ts` now asserts the `tokensBeforeRecomputed` soak probe tracks
   the host estimate (no blind divergence).
+- **R3 soak (live sessions, OpenRouter)**: 7 instrumented sessions (qwen3.8-27b ×4,
+  qwen3-30b-a3b, qwen3-32b, gemini-2.5-flash). Findings: (1) the fence contract needs a
+  native bridge line — models ignore headless "```repl block(s)" phrasing in tool-call mode
+  (fixed in R1 delivery); (2) native cold-start fences land on turn 3–6, so the root tracker
+  gets its own idle threshold, `ROOT_IDLE_DEGRADE_TURNS = 6` (engine keeps 4) — after the
+  fix a turn-5 study fence is ACCEPTED and the idle ladder contained every weak-model session
+  without a single crash; (3) `root-prompt.composed` + `root-state.turn` journal lines make
+  the soak bars measurable (`root-harvest.merged` confirms Σ→SkillState flow).
 
 ### Tests
 
