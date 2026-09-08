@@ -433,6 +433,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
         idle: tracker.idleTurns,
         active: tracker.isActive,
         degraded: wasActive && !tracker.isActive,
+        // R7-fix: recovery observability — a degraded tracker that accepted a clean batch.
+        recovered: !wasActive && tracker.isActive,
       });
     }
     if (wasActive && !tracker.isActive) {
@@ -514,7 +516,10 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           !tracker.isEmpty
         ) {
           spliceSigmaSnapshot(filtered, tracker.snapshot(), tracker.rectifyHint(), {
-            withContract: controller.config.enableRootStateFences && tracker.isActive,
+            // R7-fix: teach the contract while DEGRADED too — it is the only road back.
+            // Recovery is a clean fence; hiding the notation after degrade made the
+            // amnesia window permanent (the fence turns that taught it get elided).
+            withContract: controller.config.enableRootStateFences,
           });
           sigmaSplices += 1;
         }

@@ -144,8 +144,10 @@ const BIG = "y".repeat(4_000);
 
   strict.applyFences([{ ok: false, error: "still garbage 1" }, { ok: false, error: "still garbage 2" }]);
   check("retry-cap degrade fires on accumulated count", strict.takePendingObservation() !== undefined);
-  strict.applyFences([{ ok: true, value: { state_patch: { "verifiedFacts[+]": "after degrade — ignored" } } }]);
-  check("degraded tracker ignores fences", !strict.snapshot().verifiedFacts.includes("after degrade — ignored"));
+  // R7-fix (recoverable degrade): a clean fence re-activates instead of being ignored
+  strict.applyFences([{ ok: true, value: { state_patch: { "verifiedFacts[+]": "after degrade — recovery" } } }]);
+  check("degraded tracker recovers on a clean fence", strict.isActive);
+  check("recovery fence lands in Σ", strict.snapshot().verifiedFacts.includes("after degrade — recovery"));
 }
 
 {

@@ -28,8 +28,13 @@ const RESP0 = [
 ].join("\n");
 
 // Turn 1: a deliberately rejected patch (unknown field) — must roll back + observe.
+// Padded past the ABSOLUTE COMPACTION_CEILING_TOKENS (256k tok ≈ 1.02M chars @ 4 ch/tok,
+// LO rule 2025-09-09): shouldCompact no longer reads compactionThresholdPct, so the rebase
+// arm of this suite must reach the ceiling by mass instead of by config.
+const PAD = "filler ".repeat(220_000); // ≈1.1M chars ≈ 275k tokens
 const RESP1 = [
   repl("print(2)"),
+  PAD,
   "```state",
   JSON.stringify({ state_patch: { bogus: 1 } }),
   "```",

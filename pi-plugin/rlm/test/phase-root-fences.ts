@@ -44,13 +44,24 @@ const WIRE = '{"state_patch": {"verifiedFacts[+]": "src/f.ts — fence wired"}}'
   check("degrade reason names the idle streak", (t.degradeReason ?? "").includes("idle degrade"));
   check("idle streak counted at the root threshold", t.idleTurns >= ROOT_IDLE_DEGRADE_TURNS);
 
-  // degraded: fences are ignored, splices would stop (isActive false), the floor keeps writing
-  const factsBefore = t.snapshot().verifiedFacts.length;
-  t.applyFences(findStatePatches(fenceText('{"state_patch": {"verifiedFacts[+]": "after degrade — must be ignored"}}')));
-  check("degraded tracker ignores fences", t.snapshot().verifiedFacts.length === factsBefore);
+  // R7-fix (recoverable degrade): a CLEAN fence re-activates a degraded tracker — the old
+  // early-return made degrade a one-way amnesia valve (later fences dropped forever).
+  t.applyFences(findStatePatches(fenceText('{"state_patch": {"verifiedFacts[+]": "after degrade — recovery fence"}}')));
+  check("clean fence recovers the degraded tracker", t.isActive);
+  check("recovery fence lands in Σ", t.snapshot().verifiedFacts.includes("after degrade — recovery fence"));
+  check("recovery resets the idle streak", t.idleTurns === 0);
   t.observeToolResult("read", true, "ENOENT: no such file or directory");
-  check("degraded tracker keeps the observation floor", t.snapshot().testedApproaches["tool:read"]?.status === "failed");
-  check("degraded tracker never throws on later turns", t.degradeReason !== undefined);
+  check("observation floor keeps flowing after recovery", t.snapshot().testedApproaches["tool:read"]?.status === "failed");
+  // (the degrade reason itself was already asserted right after the degrade fired above —
+  //  recovery legitimately clears it, so nothing to check here anymore)
+
+  // a GARBAGE batch in degraded mode stays degraded (sticky against zero-progress storms)
+  const g = RootStateTracker.fresh("degraded garbage", 99);
+  for (let i = 0; i < ROOT_IDLE_DEGRADE_TURNS; i++) g.applyFences([]);
+  check("garbage-arm degraded", !g.isActive);
+  g.applyFences(findStatePatches("```state\n{not json}\n```"));
+  check("malformed batch in degraded mode keeps it degraded", !g.isActive);
+  check("the garbage still surfaces its observation", (g.takePendingObservation() ?? "").includes("malformed"));
 }
 
 {
@@ -64,6 +75,8 @@ const WIRE = '{"state_patch": {"verifiedFacts[+]": "src/f.ts — fence wired"}}'
   check("streak rebuilds without carrying the old count", r.idleTurns === ROOT_IDLE_DEGRADE_TURNS - 1 && r.isActive);
   r.applyFences([]); // rebuilt streak (3) + this one = the 4th consecutive idle turn
   check("the rebuilt streak degrades exactly at the threshold", !r.isActive);
+  r.applyFences(findStatePatches(fenceText(WIRE)));
+  check("degrade is recoverable — the next clean fence re-activates", r.isActive);
 }
 
 {

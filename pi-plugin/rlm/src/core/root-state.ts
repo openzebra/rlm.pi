@@ -206,7 +206,11 @@ export class RootStateTracker {
    * while runtime `observeToolResult` remains the Σ floor (degrade, never crash).
    */
   applyFences(fences: readonly StateFenceResult[]): FenceOutcome {
-    if (this.mode.kind !== "active") return { fences: fences.length, accepted: 0, problems: 0 };
+    // R7-fix (recoverable degrade): a DEGRADED tracker no longer drops fences on the floor.
+    // The old early-return turned idle degrade into a one-way amnesia valve — every later
+    // fence vanished silently while the context transform kept eliding turns. Now the same
+    // validation ladder runs in degraded mode, and a CLEAN batch re-activates compensation.
+    // Degrade stays sticky only against zero-progress storms (all-malformed batches).
     if (fences.length === 0) {
       // R4 (G6): a fence-free turn on a conditioned loop is IDLE — the contract rode the
       // prompt for nothing. Grow the streak; degrade at the engine's threshold.
@@ -235,24 +239,29 @@ export class RootStateTracker {
     this.idleFenceTurns = accepted > 0 ? 0 : this.idleFenceTurns + 1;
     this.degradeIfIdle();
     if (problems.length === 0) {
+      // Recovery seam: a clean batch re-activates a degraded tracker, so one honest fence
+      // ends the amnesia window instead of requiring a session restart.
       this.mode = { kind: "active", retries: 0 };
       this.pendingObservation = undefined;
       this.draft = this.toMutable(state);
       this.touch();
       return { fences: fences.length, accepted, problems: 0 };
     }
-    const retries = this.mode.retries + problems.length;
+    // Degraded variant carries `reason`, not `retries` — recovery is clean-batch-only, so a
+    // degraded tracker neither accumulates retries nor re-activates on a partial batch.
+    const retries = (this.mode.kind === "active" ? this.mode.retries : 0) + problems.length;
     this.pendingObservation = statePatchObservation(problems);
     // Accepted deltas in a partially-failing batch still land — engine parity: real work is
     // never rolled back just because a sibling fence was malformed.
     this.draft = this.toMutable(state);
     this.touch();
-    if (retries > this.retryMax) {
-      this.mode = { kind: "degraded", reason: `state-patch retry cap exceeded (${retries} rejected)` };
-    } else if (this.mode.kind === "active") {
-      // An idle degrade fired earlier in this call wins over re-activating — degrade is
-      // sticky; the runtime observation floor keeps Σ alive until the session ends.
-      this.mode = { kind: "active", retries };
+    if (this.mode.kind === "active") {
+      if (retries > this.retryMax) {
+        this.mode = { kind: "degraded", reason: `state-patch retry cap exceeded (${retries} rejected)` };
+      } else {
+        // Persist the running rejection count — the retry cap is CUMULATIVE across turns.
+        this.mode = { kind: "active", retries };
+      }
     }
     return { fences: fences.length, accepted, problems: problems.length };
   }
