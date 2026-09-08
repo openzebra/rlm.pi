@@ -48,19 +48,20 @@ cost per task from real `costUsd` (older journals estimated at OpenRouter list p
 
 | Model | Score | Avg. cost/task |
 |-------|-------|----------------|
-| `qwen/qwen3.8-27b` | **100%** | $0.0127 |
-| `google/gemma-3-27b-it` | 83.3% | $0.0013 |
-| `qwen/qwen3-30b-a3b-instruct-2507` | 66.7% | $0.0009 |
-| `mistralai/mistral-small-3.2-24b-instruct` | 66.7% | $0.0025 |
+| `qwen/qwen3.8-27b` | **87.5%** | $0.0460 |
+| `qwen/qwen3-30b-a3b-instruct-2507` | 75.0% | $0.0023 |
+| `google/gemma-3-27b-it` | 50.0% | $0.0011 |
+| `mistralai/mistral-small-3.2-24b-instruct` | 50.0% | $0.0015 |
 
 Lite suite — `needle` multi-needle recall, `codeqa` repo-QA, `coding` fix task
-(7 tasks × 2 passes per model, deterministic graders, no LLM-as-judge):
+(7 tasks per model, deterministic graders, no LLM-as-judge):
 
 | Model | Score | Accuracy |
 |-------|-------|----------|
-| `qwen/qwen3-30b-a3b-instruct-2507` | **14/14** | **100%** |
-| `google/gemma-3-27b-it` | 12/14 | 86% |
-| `mistralai/mistral-small-3.2-24b-instruct` | 12/14 | 86% |
+| `qwen/qwen3.8-27b` | **7/7** | **100%** |
+| `mistralai/mistral-small-3.2-24b-instruct` | 7/7 | 100% |
+| `qwen/qwen3-30b-a3b-instruct-2507` | 6/7 | 86% |
+| `google/gemma-3-27b-it` | 6/7 | 86% |
 
 Raw per-task rows (correct, recall, latency, tokens, cost) live in
 `bench/runs/*.jsonl` — one JSONL row per task, committed as history.

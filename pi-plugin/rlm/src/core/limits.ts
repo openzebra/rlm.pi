@@ -8,6 +8,15 @@
 
 import type { Usage } from "@earendil-works/pi-ai";
 
+/**
+ * Absolute working ceiling (LO rule 2025-09-09): model windows AT/BELOW this value are never
+ * compacted or budget-amputated — the agent runs its full window. Windows ABOVE it are
+ * compacted/budgeted exactly AT the ceiling (e.g. a 1M-context model works up to ~256k tokens
+ * of history, then rebases/compacts). Single source of truth for budget.ts (resolveBudget)
+ * and compaction.ts (shouldCompact + rebaseWithState token bound).
+ */
+export const COMPACTION_CEILING_TOKENS = 256_000;
+
 export interface Limits {
   readonly maxTimeoutMs?: number;
   readonly maxTokens?: number;

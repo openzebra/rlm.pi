@@ -71,7 +71,7 @@ Optional env vars:
 and a registry whose `getApiKeyAndHeaders` returns the env key at call time. No `complete`
 override → the engine uses `modelComplete` (real `completeSimple` + retry/throttle).
 
-Bench config: `maxIterations 12`, `maxConcurrentSubcalls 4`, `enableMemory false`,
+Bench config: `maxIterations 16`, `maxConcurrentSubcalls 4`, `enableMemory false`,
 `autoSeedCwd false`, `rootSampling.maxTokens 4096`, `subSampling.maxTokens 2048`,
 `enableTokenBudget false` (the cascade caps a task at ~25% of the context window — below the
 raw context of paper-tier tasks; it is unit-tested separately in `pi-plugin/rlm/test/budget.ts`).

@@ -29,9 +29,12 @@ export const DEFAULT_MODEL_REF = "openrouter/qwen/qwen3.8-27b";
  *  ever re-enabled (it is off) — plus provider-side safety. */
 const BENCH_CONTEXT_WINDOW = Number(process.env.RLM_BENCH_CONTEXT_WINDOW ?? 1_000_000);
 
-/** Roomier than the interactive default: a bench turn may need a few repl blocks, but a
- *  free little model should never burn 30 turns on one task. */
-const BENCH_MAX_ITERATIONS = 12;
+/** Roomier than the interactive default: a bench turn may need several repl blocks.
+ *  (Unfinished repl block → 0 score.) */
+// 16, not 12: plain (no-thinking) oolong runs routinely need >12 REPL turns and die mid-loop
+// (unfinished repl block → 0 score). Historical it16 pools score 24/24 where it12 capped at
+// ~70-87%. The "skill.state regression" on qwen3.8 was this cap, not a skill.state regression.
+const BENCH_MAX_ITERATIONS = 16;
 
 export interface BenchTarget {
   readonly ref: string;
@@ -92,7 +95,7 @@ export async function fetchPricing(modelId: string): Promise<BenchPricing> {
 }
 
 export interface BenchRunOpts {
-  /** Default BENCH_MAX_ITERATIONS (12). */
+  /** Default BENCH_MAX_ITERATIONS (16). */
   readonly maxIterations?: number;
   /** Default 0 — bench runs stay deterministic where the provider allows it. */
   readonly temperature?: number;

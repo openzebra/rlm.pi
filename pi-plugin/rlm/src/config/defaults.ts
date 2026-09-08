@@ -9,7 +9,10 @@ const DEFAULT_SUB_SYSTEM_PROMPT =
 export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   enabled: true,
   maxDepth: 4,
-  maxIterations: 30,
+  // Max-long runs: the engine may keep iterating until budget/compaction walls hit. The budget
+  // cascade and compactionThresholdPct are the real length controls; this ceiling only stops
+  // truly runaway loops. Was 30 — capped long tasks prematurely.
+  maxIterations: 200,
   execTimeoutS: 120,
   requestTimeoutMs: 15 * 60_000,
   // Session-wide, not per-batch: spawn() puts many requests on the wire at once, so this is
@@ -34,7 +37,11 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   maxErrors: 5,
   orchestrator: true,
   compaction: true,
-  compactionThresholdPct: 0.65,
+  // Compact only near the hard ceiling: ≈125K of the default 128K window (0.976). Earlier
+  // compaction (0.65) amputated usable working memory long before it was needed.
+  // DEPRECATED: ignored since the absolute 256k compaction ceiling (limits.ts); kept so old
+  // rlm.json files still load. Do not read this value in new code.
+  compactionThresholdPct: 0.976,
   python: "python3",
   sandboxInitTimeoutMs: 30_000,
   contextLoader: true,

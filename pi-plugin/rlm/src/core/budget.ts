@@ -1,7 +1,9 @@
 /**
  * Token budget cascade (port of the v4/v5 `budget.py` engine).
  *
- * The budget is the PRIMARY run-length control: cap = budgetShare × model context window,
+ * The budget is the PRIMARY run-length control: above COMPACTION_CEILING_TOKENS the cap is
+ * max(ceiling, budgetShare × model context window) — the share can only stretch the working
+ * budget further out, never cut under the ceiling;
  * one soft wrap-up turn at `softFrac` of the cap, and at the hard cap a deterministic
  * handoff (`distillTrajectory`) is handed to a fresh continuation run — chain-capped at
  * `maxContinuations`. Wall-clock timeouts stay only as hang backstops.
@@ -16,6 +18,7 @@ import type { ChatMsg } from "../bridge/model.ts";
 import type { RlmConfig } from "./types.ts";
 import type { RunState } from "./run-state.ts";
 import { compactJSON } from "./run-state.ts";
+import { COMPACTION_CEILING_TOKENS } from "./limits.ts";
 
 interface TokenBudgetOptions {
   readonly softFrac?: number;
@@ -110,14 +113,13 @@ export class TokenBudget {
 /**
  * Minimum context window (tokens) for the token-budget cascade to engage at all.
  *
- * The formula (window × budgetShare) assumes the window is large enough that a fraction of it
- * is a meaningful working budget. Below this floor the derived cap shrinks below a task's FIXED
- * overhead (system prompt + per-turn history re-send + sub-LLM calls) and strangles the run —
- * a 32k window would cap a task at 8k tokens, less than the protocol scaffolding alone.
- * So for smaller windows the rule does not apply: the budget is effectively unbounded and runs
- * stay bounded by maxIterations / maxErrors / wall-clock instead.
+ * LO rule (2025-09-09): windows at/below COMPACTION_CEILING_TOKENS (256k) are never
+ * budget-amputated — the derived share would shrink below a task's FIXED overhead (system
+ * prompt + per-turn history re-send + sub-LLM calls); a 32k window would cap a task at 8k
+ * tokens, less than the protocol scaffolding alone. Windows above the ceiling are budgeted
+ * AT the ceiling, never below it. Unbounded runs stay bounded by
+ * maxIterations / maxErrors / wall-clock instead.
  */
-export const BUDGET_WINDOW_FLOOR = 250_000;
 
 /** One TokenBudget construction shape — the cap varies, the policy knobs never do (DRY). */
 function makeBudget(config: RlmConfig, cap: number): TokenBudget {
@@ -135,8 +137,9 @@ function unboundedBudget(config: RlmConfig): TokenBudget {
 
 export function resolveBudget(contextWindow: number | undefined, config: RlmConfig): TokenBudget {
   const ctx = contextWindow !== undefined && contextWindow > 0 ? contextWindow : 32_000;
-  if (ctx < BUDGET_WINDOW_FLOOR) return unboundedBudget(config);
-  const shareCap = Math.floor(ctx * config.budgetShare);
+  if (ctx <= COMPACTION_CEILING_TOKENS) return unboundedBudget(config);
+  // The share only stretches the budget BEYOND the absolute ceiling — never under it.
+  const shareCap = Math.max(COMPACTION_CEILING_TOKENS, Math.floor(ctx * config.budgetShare));
   const cap = config.budgetTaskCap > 0 ? Math.min(shareCap, config.budgetTaskCap) : shareCap;
   return makeBudget(config, Math.max(cap, 1));
 }

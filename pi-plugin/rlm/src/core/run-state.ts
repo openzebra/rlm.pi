@@ -552,13 +552,18 @@ export function statePatchObservation(problems: readonly string[]): string | und
 }
 
 export const STATE_FENCE_INSTRUCTION: string =
-  "[state] Alongside your ```repl block(s), commit durable progress to Σ with a ```state fence:\n" +
+  "[state] Your user-facing reply is normal prose — a readable report. The ```state fence is OPTIONAL compact metadata that trails it, never a replacement for the report:\n" +
   '{"state_patch": {"verifiedFacts[+]": "src/x.ts — fact", "testedApproaches.h1.status": "failed"}}\n' +
+  "Σ is an index of pointers, not a report: ≤ 5 keys per patch, every string value ≤ 120 chars, " +
+  "telegraphic style (`path — fact`, `verdict — numbers`). NEVER paste findings, tables, JSON " +
+  "blobs, or long excerpts into Σ — the prose carries the story, Σ carries only the pointers.\n" +
   "Keys: dotted paths write record leaves; [+] appends; [N] sets an array slot; null deletes.\n" +
   "Commit DELTAS only — never restate unchanged records or arrays; touch single dotted keys " +
   `or append with [+]. Whole-record restatements must keep EVERY key (implicit drops are ` +
   `rejected), and a patch over ${RUN_STATE_LIMITS.patchBytes} bytes is rejected whole.\n` +
-  "Commit anything possibly relevant NOW; the raw observation will not be shown again.";
+  "If this turn produced nothing durable and new, end your reply on the prose — NO fence at all. " +
+  "An absent fence is free; a malformed or oversized one costs a retry. " +
+  "Stale turns are elided and compensated by Σ, so a durable fact you skip here is gone.";
 
 /** ONE Σ-block composer (R2): the engine turn block and the root splice both delegate here —
  *  never duplicate the contract + Σ assembly. `withContract` is paper A.4 authoring mode;

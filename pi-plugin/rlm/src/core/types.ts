@@ -54,7 +54,8 @@ export interface RlmConfig {
   readonly orchestrator: boolean;
   /** Summarize the trajectory when it grows past the threshold (keeps the root window small). */
   readonly compaction: boolean;
-  /** Compact when estimated history tokens reach this fraction of the model's context window. */
+  /** DEPRECATED (LO rule 2025-09-09): ignored — compaction is governed by the absolute
+   *  COMPACTION_CEILING_TOKENS (limits.ts). Kept for settings/UI compatibility only. */
   readonly compactionThresholdPct: number;
   /** Python executable used to launch the sandbox worker. */
   readonly python: string;

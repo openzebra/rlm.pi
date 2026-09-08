@@ -503,13 +503,18 @@ export default function rlmExtension(pi: ExtensionAPI): void {
         });
         elidedMessages += elided;
         const tracker = rootTracker;
-        // R4: a DEGRADED tracker stops splicing Σ (isActive gate) — pure input tax otherwise.
+        // R4 REV (amnesia fix): degrade suspends fence WRITES (applyFences gate) — never Σ
+        // READBACK. SKILL.state §5.3 makes elision lossless precisely because Σ rides with
+        // the elided turns; stubbing history while withholding Σ amnesia-loops the agent
+        // (announce-continue-then-stop). Splice whenever Σ has content, active or degraded;
+        // the fence CONTRACT rides only while active — a degraded tracker ignores fences
+        // (applyFences early-returns), so teaching the contract is pure tax.
         if (
           controller.config.rootContextSnapshot && tracker !== undefined &&
-          tracker.isActive && !tracker.isEmpty
+          !tracker.isEmpty
         ) {
           spliceSigmaSnapshot(filtered, tracker.snapshot(), tracker.rectifyHint(), {
-            withContract: controller.config.enableRootStateFences,
+            withContract: controller.config.enableRootStateFences && tracker.isActive,
           });
           sigmaSplices += 1;
         }

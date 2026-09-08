@@ -26,7 +26,7 @@ import { PythonSandbox, SANDBOX_WATCHDOG_HEARTBEAT_MS } from "../sandbox/sandbox
 import type { ReplResult } from "../sandbox/protocol.ts";
 import { pinContext, type PinnedContext } from "../sandbox/context-file.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
-import { findReplBlocks } from "../text/parsing.ts";
+import { findReplBlocks, stripStateFences } from "../text/parsing.ts";
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
 import { compactHistory, elideOldToolPayloads, rebaseWithState, shouldCompact } from "./compaction.ts";
@@ -364,16 +364,16 @@ export function createEngine(deps: EngineDeps): RunRlm {
           // v5 G1 first: elide old tool payloads head+tail — often avoids the summary entirely.
           history = elideOldToolPayloads(history);
           const compactionDeps = {
-            // Summarisation is done by the cheap worker model; the threshold stays on the
-            // root model's context window (that is the window the history fills each turn).
+            // Summarisation is done by the cheap worker model; compaction fires on the ABSOLUTE
+            // COMPACTION_CEILING_TOKENS (limits.ts): ≤256k windows never compact, larger ones
+            // compact exactly at 256k (LO rule 2025-09-09).
             model: deps.llmModel,
             registry: deps.registry,
             contextWindow: model.contextWindow,
-            thresholdPct: deps.config.compactionThresholdPct,
             retry: retryPolicy(deps.config),
             signal: deps.signal,
           };
-          if (shouldCompact(history, compactionDeps)) {
+          if (shouldCompact(history)) {
             // Workstream A: with Σ active, rebase structurally — [P, Σ_t, window(O)] — and
             // the summarizer call disappears entirely; degraded runs keep compactHistory.
             history = runStateMode.kind === "active"
@@ -602,8 +602,13 @@ export function createEngine(deps: EngineDeps): RunRlm {
 }
 
 function result(answer: string, iterations: number, limits: LimitGuard): RlmResult {
+  // State fences are a Σ transport, never user-visible output (§7): scrub them from the
+  // FINAL answer. A fence-only answer means the model spent its last turn committing state
+  // and never re-answered — surface the stub instead of a raw patch JSON.
+  const clean = stripStateFences(answer);
+  const final = clean.trim().length > 0 ? clean.trim() : "(no final answer — last turn committed state only; see Σ)";
   const u = limits.usage();
-  return { answer, iterations, costUsd: u.costUsd, inputTokens: u.inputTokens, outputTokens: u.outputTokens, durationMs: u.durationMs };
+  return { answer: final, iterations, costUsd: u.costUsd, inputTokens: u.inputTokens, outputTokens: u.outputTokens, durationMs: u.durationMs };
 }
 
 /** Model metadata window, else the offline registry fallback (disk cache → table → 32k). */

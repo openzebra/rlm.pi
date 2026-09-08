@@ -13,8 +13,7 @@ import type { RetryPolicy } from "../util/retry.ts";
 import { estimateMessageTokens } from "../text/tokens.ts";
 import type { RunState } from "../core/run-state.ts";
 import { compactJSON } from "../core/run-state.ts";
-
-const DEFAULT_CONTEXT_WINDOW = 128_000;
+import { COMPACTION_CEILING_TOKENS } from "./limits.ts";
 
 const SUMMARY_REQUEST =
   "Summarize your progress so far. Include: (1) which sub-tasks are done and which remain; " +
@@ -25,17 +24,18 @@ interface CompactionDeps {
   readonly model: Model<Api>;
   readonly registry: ModelRegistry;
   readonly contextWindow?: number;
-  readonly thresholdPct?: number;
   readonly signal?: AbortSignal;
   /** v5.1 retry policy for modelComplete; defaults apply when omitted. */
   readonly retry?: RetryPolicy;
 }
 
-/** True if the history is at/over the compaction threshold. */
-export function shouldCompact(history: ChatMsg[], deps: CompactionDeps): boolean {
-  const contextWindow = deps.contextWindow && deps.contextWindow > 0 ? deps.contextWindow : DEFAULT_CONTEXT_WINDOW;
-  const threshold = (deps.thresholdPct ?? 0.85) * contextWindow;
-  return estimateMessageTokens(history) >= threshold;
+/**
+ * True if the history is at/over the compaction threshold — the ABSOLUTE
+ * COMPACTION_CEILING_TOKENS (LO rule 2025-09-09): windows ≤ 256k never compact; larger
+ * windows compact exactly at 256k. `contextWindow`/`thresholdPct` percentage math is gone.
+ */
+export function shouldCompact(history: ChatMsg[]): boolean {
+  return estimateMessageTokens(history) >= COMPACTION_CEILING_TOKENS;
 }
 
 /**
@@ -141,6 +141,16 @@ export function rebaseWithState(history: ChatMsg[], state: RunState, count = 1):
         break;
       }
     }
+  }
+  // Token-bounded tail (LO rule 2025-09-09): the kept turns must also fit under the absolute
+  // ceiling; walk tailStart forward until the tail does. Σ carries everything dropped turns held.
+  const sizes: number[] = new Array<number>(history.length);
+  for (let i = 0; i < history.length; i++) sizes[i] = estimateMessageTokens([history[i]]);
+  let tailTokens = 0;
+  for (let i = tailStart; i < history.length; i++) tailTokens += sizes[i];
+  while (tailStart < history.length && tailTokens > COMPACTION_CEILING_TOKENS) {
+    tailTokens -= sizes[tailStart];
+    tailStart += 1;
   }
   const window: ChatMsg[] = tailStart < history.length ? history.slice(tailStart) : [];
   return [

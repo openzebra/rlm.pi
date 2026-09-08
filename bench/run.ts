@@ -21,6 +21,9 @@
  *                                             # extended oolong: context_len cap / task count
  *   bun run bench/run.ts --model openrouter/google/gemma-4-31b-it:free
  *   bun run bench/run.ts --list               # print tasks + context sizes, no engine
+ *   bun run bench/run.ts --suite oolong --journal bench/runs/foo.jsonl --resume
+ *                                             # crash-safe pooled run: rows already in the
+ *                                             # journal (same model+task+run) are skipped
  *   bun run bench/run.ts --suite oolong --runs 3 --max-iterations 16 \
  *     --reasoning high --model openrouter/qwen/qwen3.8-27b
  *                                             # r3-style: repeats + thinking arm
@@ -33,7 +36,7 @@ import { gradeAnswer } from "./grade.ts";
 import { DEFAULT_MODEL_REF, fetchPricing, makeRun, requireApiKey, resolveTarget, type BenchRunOpts } from "./engine.ts";
 import { buildTasks, type BenchTask, type SuiteName } from "./tasks.ts";
 import { SkillStore } from "../pi-plugin/rlm/src/config/skillstate.ts";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunRlm } from "../pi-plugin/rlm/src/core/types.ts";
@@ -50,6 +53,7 @@ interface Args {
   readonly temperature?: number;
   readonly reasoning?: string;
   readonly list: boolean;
+  readonly resume: boolean;
 }
 
 function parseArgs(argv: readonly string[]): Args {
@@ -64,6 +68,7 @@ function parseArgs(argv: readonly string[]): Args {
   let temperature: number | undefined;
   let reasoning: string | undefined;
   let list = false;
+  let resume = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = (): string => {
@@ -113,19 +118,53 @@ function parseArgs(argv: readonly string[]): Args {
       model = next();
     } else if (a === "--journal") {
       journal = next();
+    } else if (a === "--resume") {
+      resume = true;
     } else if (a === "--list") {
       list = true;
     } else {
       throw new Error(`unknown argument: ${a}`);
     }
   }
-  return { suite, limit, model, journal, oolongMaxCl, oolongLimit, runs, maxIterations, temperature, reasoning, list };
+  return { suite, limit, model, journal, oolongMaxCl, oolongLimit, runs, maxIterations, temperature, reasoning, list, resume };
 }
 
 function printTasks(tasks: readonly BenchTask[]): void {
   for (const t of tasks) {
     console.log(`${t.suite}/${t.id}  context=${t.context.length} chars  grade=${t.grade.kind}`);
   }
+}
+
+/** Journal row → dedup key for --resume; tolerant of foreign/malformed lines (returns undefined). */
+function resumeKeyOf(v: unknown): string | undefined {
+  if (typeof v !== "object" || v === null) return undefined;
+  const taskId = "taskId" in v ? v.taskId : undefined;
+  const run = "run" in v ? v.run : undefined;
+  const model = "model" in v ? v.model : undefined;
+  if (typeof taskId !== "string" || typeof model !== "string" || typeof run !== "number") {
+    return undefined;
+  }
+  return `${model}#${taskId}#${run}`;
+}
+
+/** Set of `model#taskId#run` keys already present in the journal file (fail-soft: empty on any error). */
+function loadResumeSet(journalPath: string): Set<string> {
+  const done = new Set<string>();
+  try {
+    const prior = readFileSync(journalPath, "utf8");
+    for (const line of prior.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const key = resumeKeyOf(JSON.parse(line));
+        if (key !== undefined) done.add(key);
+      } catch {
+        // malformed line — skip, never crash the run
+      }
+    }
+  } catch {
+    // no prior journal — resume from scratch
+  }
+  return done;
 }
 
 async function runTask(run: RunRlm, task: BenchTask): Promise<Partial<BenchRow>> {
@@ -191,6 +230,13 @@ async function main(): Promise<void> {
   });
   const journalPath = args.journal ?? `bench/runs/bench-${Date.now()}.jsonl`;
 
+  // --resume: skip (model, task, run) triples already journaled — pooled runs stay crash-safe;
+  // re-run the same command and only missing rows get produced (same journal file is reused).
+  const resumed = args.resume ? loadResumeSet(journalPath) : new Set<string>();
+  if (args.resume && resumed.size > 0) {
+    console.log(`  resume: ${resumed.size} journaled rows found — already-done (task, run) pairs will be skipped`);
+  }
+
   // GAP-4: record effective oolong selection opts in the header (journal schema unchanged).
   const oolongOpts = args.oolongMaxCl !== undefined || args.oolongLimit !== undefined
     ? `  oolong(max-cl=${args.oolongMaxCl ?? "default"}, limit=${args.oolongLimit ?? "default"})`
@@ -204,6 +250,10 @@ async function main(): Promise<void> {
   const rows: BenchRow[] = [];
   for (let runIndex = 1; runIndex <= (args.runs ?? 1); runIndex++) {
     for (const task of tasks) {
+      if (resumed.has(`${target.ref}#${task.id}#${runIndex}`)) {
+        console.log(`  = ${task.suite}/${task.id} run=${runIndex} skipped (already in journal)`);
+        continue;
+      }
       let row: BenchRow;
       try {
         const partial = await runTaskWithRetries(run, task);

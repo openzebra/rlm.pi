@@ -38,14 +38,16 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
 
 {
   const b1M = resolveBudget(1_000_000, cfg());
-  check("cap: 1M ctx × 0.25 → 250k", b1M.cap === 250_000, String(b1M.cap));
-  check("cap: soft = 80% → 200k", b1M.soft === 200_000, String(b1M.soft));
+  check("cap: 1M ctx → absolute ceiling 256k", b1M.cap === 256_000, String(b1M.cap));
+  check("cap: soft = 80% → 204.8k", b1M.soft === 204_800, String(b1M.soft));
   const b32k = resolveBudget(32_000, cfg());
-  check("cap: 32k window < floor → unbounded (rule does not apply)", b32k.cap === Number.MAX_SAFE_INTEGER, String(b32k.cap));
+  check("cap: 32k window ≤ ceiling → unbounded (rule does not apply)", b32k.cap === Number.MAX_SAFE_INTEGER, String(b32k.cap));
   const b250k = resolveBudget(250_000, cfg());
-  check("cap: exactly at floor → 250k × 0.25 = 62.5k", b250k.cap === 62_500, String(b250k.cap));
+  check("cap: 250k ctx (< ceiling) → unbounded", b250k.cap === Number.MAX_SAFE_INTEGER, String(b250k.cap));
   const b249k = resolveBudget(249_999, cfg());
-  check("cap: just under floor → unbounded", b249k.cap === Number.MAX_SAFE_INTEGER, String(b249k.cap));
+  check("cap: just under ceiling → unbounded", b249k.cap === Number.MAX_SAFE_INTEGER, String(b249k.cap));
+  const b300k = resolveBudget(300_000, cfg());
+  check("cap: 300k ctx → floored to ceiling 256k", b300k.cap === 256_000, String(b300k.cap));
 
   const clipped = resolveBudget(1_000_000, cfg({ budgetTaskCap: 50_000 }));
   check("cap: budgetTaskCap clips share cap", clipped.cap === 50_000, String(clipped.cap));
