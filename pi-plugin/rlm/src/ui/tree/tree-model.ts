@@ -6,11 +6,14 @@
  *
  * Nothing is ever hidden: every sub-call renders as its own row (parity with
  * pi, which shows each concurrent tool call individually) — except runs of
- * IDENTICAL sibling leaves (same label+model+status), which collapse into one
- * expandable "label ×N" group row so a 20-item llm_batch is one line, not 20.
- * Error leaves are NEVER grouped — each keeps its own row and reason.
- * Collapsed subtrees are skipped at the user's explicit request (chevron flips).
- * Token rows are own-spend only — a row never blends models.
+ * CONSECUTIVE IDENTICAL sibling leaves (same label+model+status), which
+ * collapse into one expandable "label ×N" group row so a 20-item llm_batch is
+ * one line, not 20 and a wholesale batch failure is one `✗ label ×N` line.
+ * Errors group exactly like successes; distinct failures keep their own rows
+ * and reasons, and singletons render as plain rows. Interleaved siblings (✗ ✓
+ * ✗ with different keys between) stay in encounter order — position is never
+ * rewritten. Collapsed subtrees are skipped at the user's explicit request
+ * (chevron flips). Token rows are own-spend only — a row never blends models.
  */
 
 import type { RlmSubcall, RlmRunStatus, SubcallPhase, SubcallStatus } from "../../tool/rlm-details.ts";
@@ -81,9 +84,13 @@ type Entry =
   | { readonly type: "node"; readonly sc: RlmSubcall }
   | { readonly type: "group"; readonly key: string; readonly label: string; readonly model?: string; readonly status: SubcallStatus; readonly members: RlmSubcall[] };
 
-/** Errors never group — each keeps its own row and its own reason. */
+/**
+ * Any childless llm leaf may group — errors included. groupKey pins status, so
+ * only runs of identical failures merge; per-item reasons stay in the detail
+ * modal (expand the group).
+ */
 const groupable = (sc: RlmSubcall, byParent: ReadonlyMap<string | undefined, RlmSubcall[]>): boolean =>
-  sc.kind === "llm" && sc.status !== "error" && (byParent.get(sc.id)?.length ?? 0) === 0;
+  sc.kind === "llm" && (byParent.get(sc.id)?.length ?? 0) === 0;
 
 const groupKey = (sc: RlmSubcall): string => `${sc.label}|${sc.model ?? ""}|${sc.status}`;
 

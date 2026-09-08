@@ -123,7 +123,7 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
   check("model: expanded group shows every member", expanded.length === 11);
   check("model: rows carry runId for modal lookup", nodeRows[1]?.runId === "run1");
 
-  // Errors NEVER group — one item fails mid-batch: ✗ keeps its own row, the rest stay grouped.
+  // Errors never blend into a different-status run: one ✗ among ✓s stays an individual row.
   {
     const failedId = leafIds[0] ?? "";
     emitter.emitSubcallUpdated({ id: failedId, status: "error", detail: "401 unauthorized" });
@@ -154,6 +154,30 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
     const splitLines = formatRows(buildRows(splitSnap, new Set()), agentId, 72, theme);
     check("rows: in/out split shown when tokensOut > 0",
       (splitLines[1]?.includes("190.2k↑")) && (splitLines[1]?.includes("18.6k↓")));
+  }
+
+  // ── consecutive errors collapse: two back-to-back ✗ with same label → ONE error group ──
+  {
+    const failIds: string[] = new Array<string>(2);
+    for (let i = 0; i < 2; i++) {
+      const id = emitter.emitSubcallCreated({ kind: "llm", label: "llm_query", model: "openai/gpt-5-mini", depth: 1 });
+      failIds[i] = id;
+      emitter.emitSubcallUpdated({ id, status: "error", detail: "rate limited" });
+    }
+    const failSnap = registry.snapshots()[0];
+    check("rows: consecutive-error snapshot exists", failSnap !== undefined);
+    if (failSnap !== undefined) {
+      // Sibling order: ✗, ✓×6, ✗, ✗ → runs [✗×1][✓×6][✗×2]. Singleton ✗ stays a node.
+      const failRows = buildRows(failSnap, new Set());
+      const loneErrors = failRows.filter((r): r is NodeRow => r.type === "node" && r.icon === "error");
+      // The singleton ✗ is leafIds[0] (the earlier 401 leaf); failIds[0..1] merge into the ×2 group.
+      check("rows: lone error stays individual next to grouped siblings", loneErrors.length === 1 && loneErrors[0]?.id === leafIds[0]);
+      check("rows: new failures are grouped, not individual", failIds.every((id) => !loneErrors.some((r) => r.id === id)));
+      const failGroups = failRows.filter((r): r is GroupRow => r.type === "group" && r.count === 2);
+      check("rows: consecutive errors form ONE error group of 2", failGroups.length === 1);
+      const failLine = formatRows(failRows, "", 72, theme).find((l) => l.includes("×2"));
+      check("rows: error group renders ✗ llm_query ×2", failLine !== undefined && failLine.includes("✗") && failLine.includes("llm_query"));
+    }
   }
 
   // ── modal view: header + timeline, stable height, no "$" ──
