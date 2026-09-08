@@ -1,10 +1,7 @@
 /**
- * Paper-suite scorers — faithful ports from the rlm_test lab
- * (oolong.py `score_oolong_answer`, browsecomp.py `score_browsecomp`,
- * longbench_codeqa.py `extract_mc_letter`). Deterministic heuristics, no LLM judge.
+ * Oolong scorer — faithful port from the rlm_test lab (oolong.py `score_oolong_answer`).
+ * Deterministic heuristic, no LLM judge.
  */
-
-// ---------------------------------------------------------------- oolong ----
 
 /** Light `ast.literal_eval` stand-in for gold values like "['spam']" or "42". */
 function parsePyLiteral(s: string): unknown {
@@ -79,31 +76,4 @@ export function scoreOolong(pred: string, gold: unknown, answerType: string): nu
 
   const g = String(goldV).trim().toLowerCase();
   return g && p.toLowerCase().includes(g) ? 1.0 : 0.0;
-}
-
-// ------------------------------------------------------------ browsecomp ----
-
-export function scoreBrowsecomp(pred: string, gold: string): number {
-  if (!pred || !gold) return 0.0;
-  const p = pred.trim().toLowerCase();
-  const g = gold.trim().toLowerCase();
-  if (g === p || p.includes(g)) return 1.0;
-  const tokens = (s: string): readonly string[] => s.match(/[a-z0-9]+/g) ?? [];
-  const gt = new Set<string>(tokens(g));
-  const pt = new Set<string>(tokens(p));
-  if (gt.size === 0) return 0.0;
-  let hits = 0;
-  for (const t of gt) if (pt.has(t)) hits++;
-  return hits / gt.size;
-}
-
-// ------------------------------------------------------------ codeqa_lb ----
-
-export function extractMcLetter(text: string): string {
-  if (!text) return "";
-  const t = text.trim().toUpperCase();
-  const m = /\b([ABCD])\b/.exec(t);
-  if (m) return m[1];
-  if (t.length > 0 && "ABCD".includes(t[0])) return t[0];
-  return "";
 }

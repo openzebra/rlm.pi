@@ -2,7 +2,7 @@
  * bench/run.ts — e2e benchmark driver for THIS project's RLM engine.
  *
  * Drives pi-plugin/rlm's headless engine (`createEngine`) against real OpenRouter models with
- * the task suites ported from the rlm_test lab (needle / codeqa / coding).
+ * THE hardcore suite: oolong (oolongbench/oolong-synth) — the only benchmark that can
  *
  * r3 runs a SINGLE model (bench/engine.ts DEFAULT_MODEL_REF = qwen3.8-27b, real OpenRouter
  * pricing fetched at runtime); temperature defaults to 0; repeats (`--runs N`) must be
@@ -14,17 +14,16 @@
  *   RLM_BENCH_CONTEXT_WINDOW  optional, default 1000000
  *
  * Usage (from the repo root):
- *   bun run bench/run.ts                      # all suites
- *   bun run bench/run.ts --suite needle       # one suite: needle|codeqa|coding|all
- *   bun run bench/run.ts --limit 1            # first task per suite only
- *   bun run bench/run.ts --suite oolong --oolong-max-cl 65536 --oolong-limit 24
+ *   bun run bench/run.ts                      # oolong, default 8 tasks @ cl ≤ 2048
+ *   bun run bench/run.ts --limit 1            # first task only
+ *   bun run bench/run.ts --oolong-max-cl 65536 --oolong-limit 24
  *                                             # extended oolong: context_len cap / task count
  *   bun run bench/run.ts --model openrouter/google/gemma-4-31b-it:free
  *   bun run bench/run.ts --list               # print tasks + context sizes, no engine
- *   bun run bench/run.ts --suite oolong --journal bench/runs/foo.jsonl --resume
+ *   bun run bench/run.ts --journal bench/runs/foo.jsonl --resume
  *                                             # crash-safe pooled run: rows already in the
  *                                             # journal (same model+task+run) are skipped
- *   bun run bench/run.ts --suite oolong --runs 3 --max-iterations 16 \
+ *   bun run bench/run.ts --runs 3 --max-iterations 16 \
  *     --reasoning high --model openrouter/qwen/qwen3.8-27b
  *                                             # r3-style: repeats + thinking arm
  *
@@ -42,7 +41,7 @@ import { join } from "node:path";
 import type { RunRlm } from "../pi-plugin/rlm/src/core/types.ts";
 
 interface Args {
-  readonly suite: SuiteName | "all" | "paper";
+  readonly suite: SuiteName;
   readonly limit?: number;
   readonly model?: string;
   readonly journal?: string;
@@ -57,7 +56,7 @@ interface Args {
 }
 
 function parseArgs(argv: readonly string[]): Args {
-  let suite: SuiteName | "all" | "paper" = "all";
+  let suite: SuiteName = "oolong";
   let limit: number | undefined;
   let model: string | undefined;
   let journal: string | undefined;
@@ -76,14 +75,7 @@ function parseArgs(argv: readonly string[]): Args {
       if (i >= argv.length) throw new Error(`missing value for ${a}`);
       return argv[i];
     };
-    if (a === "--suite") {
-      const v = next();
-      const valid = new Set(["all", "paper", "needle", "codeqa", "coding", "s_niah", "oolong", "oolong_coached", "browsecomp", "codeqa_lb"]);
-      if (!valid.has(v)) {
-        throw new Error(`--suite must be all|paper|needle|codeqa|coding|s_niah|oolong|oolong_coached|browsecomp|codeqa_lb, got: ${v}`);
-      }
-      suite = v as Args["suite"];
-    } else if (a === "--limit") {
+    if (a === "--limit") {
       const v = Number(next());
       if (!Number.isInteger(v) || v < 1) throw new Error(`--limit must be a positive integer`);
       limit = v;

@@ -97,17 +97,3 @@ export async function cachedTasks<T>(
   console.log(`[data] ${key}: cached ${tasks.length} tasks -> ${file}`);
   return tasks;
 }
-
-/** Read a previously built task cache. Fail-soft: undefined on miss or parse error — callers
- *  decide whether that is fatal or just a cue to build from scratch. */
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- cache reader: callers own the element type
-export function readCachedTasks<T>(key: string): readonly T[] | undefined {
-  const file = `${DATA_DIR}${key}.json`;
-  if (!existsSync(file)) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
-    return Array.isArray(parsed) ? (parsed as T[]) : undefined;
-  } catch {
-    return undefined;
-  }
-}

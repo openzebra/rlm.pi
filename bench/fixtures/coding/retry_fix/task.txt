@@ -1,1 +1,0 @@
-Study the retry/timeout policy in src/http/retry.py and fix the timeout that is too aggressive by changing DEFAULT_TIMEOUT_MS from 50 to 500. Only change that constant. Report what you changed.
