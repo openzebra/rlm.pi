@@ -36,8 +36,8 @@ interface OolongRecord {
   readonly contextLen: number;
 }
 
-const OOLONG_MAX_CONTEXT_LEN = 2048; // lab paper run: context_len ≤ 2048 units
-const OOLONG_LIMIT = 8;
+const OOLONG_MAX_CONTEXT_LEN = 65536; // hardcore: full dataset context_len range (last bucket = 65536 units)
+const OOLONG_LIMIT = 24;
 /** Rows here are ≤ ~160 KB at cl 65536 — bigger pages are safe and cut request count ~4×,
  *  well under the datasets-server rate limit. */
 const OOLONG_PAGE_SIZE = 20;
@@ -64,7 +64,7 @@ export async function buildTasks(
   const records = await cachedTasks<OolongRecord>(cacheKey, async () => {
     const candidates: OolongRecord[] = [];
     let seen = 0;
-    for await (const row of hfRows("oolongbench/oolong-synth", "validation", OOLONG_PAGE_SIZE)) {
+    for await (const row of hfRows("oolongbench/oolong", "test", OOLONG_PAGE_SIZE)) {
       const contextLen = typeof row.context_len === "number" ? row.context_len : Number(row.context_len ?? 0);
       if (!(contextLen <= maxContextLen)) continue;
       const context = asStr(row.context_window_text);

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.19] — 2026-09-09
+
+### Added
+
+- **UI tree — run-length grouping of leaf sub-calls**: consecutive identical leaf sub-call nodes
+  (`llm_query` / `llm_batch` rows, including ✗ failures) in the background-task tree now collapse
+  into a single row with `×N` (`✓ llm_query ×126`, `✗ llm_query ×3`) instead of one line per
+  spawn — a 126-call leaf used to paint 126 lines. Grouping breaks on name+status; successful
+  runs keep their per-run token totals, failures keep their `0 tok` lines. Implementation in
+  `ui/tree/tree-model.ts` (pure run-length pass over the leaf sequence); regression coverage in
+  `test/phase-tree.ts`.
+
+### Changed
+
+- **Bench**: pruned to the single hardcore suite (oolong) with hero regen + r7 artifacts;
+  mercury-2.5 oolong run added; doc model panel pruned to three.
+
 ## [0.3.18] — 2026-09-08
 
 ### Added — Root Σ v2 (R0..R7, `/tmp/ROOT_FULL_SKILLSTATE_PLAN.md`)
