@@ -45,7 +45,7 @@ Optional env vars:
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `RLM_BENCH_MODEL` | `openrouter/google/gemma-3-27b-it` | OpenRouter model under test (cheap paid; a full lite+paper run costs ≈ $0.30). Free pools die mid-stream (`finish_reason:"error"` with no payload). The lab's `laguna-xs-2.1:free` scores 0 — emits `<tool_call>` tags, never a ```repl block |
+| `RLM_BENCH_MODEL` | `openrouter/google/gemma-3-27b-it` | OpenRouter model under test — one of the three-model panel (`qwen3.8-27b` / `gemma-3-27b-it` / `mercury-2.5`). A full oolong run costs ≈ $0.03–0.30 by model. Free pools die mid-stream (`finish_reason:"error"` with no payload) |
 | `RLM_BENCH_CONTEXT_WINDOW` | `131072` | Advertised context window of the model under test (budget math uses it) |
 
 

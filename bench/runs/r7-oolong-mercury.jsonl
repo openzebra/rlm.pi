@@ -1,0 +1,2 @@
+{"suite":"oolong","taskId":"oolong_0","model":"openrouter/inception/mercury-2.5","run":1,"correct":true,"recall":1,"latencyMs":22755,"inputTokens":24451,"outputTokens":9803,"iterations":7,"costUsd":0.00244849,"answer":"Label: spam","gold":"\"['spam']\""}
+{"suite":"oolong","taskId":"oolong_1","model":"openrouter/inception/mercury-2.5","run":1,"correct":true,"recall":1,"latencyMs":16666,"inputTokens":28493,"outputTokens":6339,"iterations":8,"costUsd":0.00209057,"answer":"Label: ham","gold":"\"['ham']\""}

@@ -43,25 +43,14 @@ models, recursively. Same Pi session, same tools, same keys: `/rlm` and go. Read
 
 ## Benchmarks
 
-**OOLONG (oolong-synth)** — paper-tier long-context suite; latest journal per model,
-cost per task from real `costUsd` (older journals estimated at OpenRouter list prices):
+**OOLONG (oolong-synth)** — paper-tier long-context suite (the only suite); latest
+journal per model, cost per task from real `costUsd`:
 
 | Model | Score | Avg. cost/task |
 |-------|-------|----------------|
 | `qwen/qwen3.8-27b` | **87.5%** | $0.0460 |
-| `qwen/qwen3-30b-a3b-instruct-2507` | 75.0% | $0.0023 |
 | `google/gemma-3-27b-it` | 50.0% | $0.0011 |
-| `mistralai/mistral-small-3.2-24b-instruct` | 50.0% | $0.0015 |
-
-Lite suite — `needle` multi-needle recall, `codeqa` repo-QA, `coding` fix task
-(7 tasks per model, deterministic graders, no LLM-as-judge):
-
-| Model | Score | Accuracy |
-|-------|-------|----------|
-| `qwen/qwen3.8-27b` | **7/7** | **100%** |
-| `mistralai/mistral-small-3.2-24b-instruct` | 7/7 | 100% |
-| `qwen/qwen3-30b-a3b-instruct-2507` | 6/7 | 86% |
-| `google/gemma-3-27b-it` | 6/7 | 86% |
+| `inception/mercury-2.5` | — | — |
 
 Raw per-task rows (correct, recall, latency, tokens, cost) live in
 `bench/runs/*.jsonl` — one JSONL row per task, committed as history.
@@ -71,15 +60,13 @@ Raw per-task rows (correct, recall, latency, tokens, cost) live in
 ```bash
 export OPENROUTER_API_KEY=sk-or-...        # required — env vars are the only key transport
 
-bun run bench                              # lite suite: needle + codeqa + coding
-bun run bench --suite needle --limit 1     # one suite, first task only
-bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
+bun run bench                              # oolong suite, default model (qwen3.8-27b)
+bun run bench --model openrouter/google/gemma-3-27b-it
+bun run bench --model openrouter/inception/mercury-2.5
 bun run bench --list                       # print tasks, no engine / no key
-bun run bench --suite paper                # paper tier: s_niah, oolong, browsecomp, codeqa_lb (downloads datasets)
 ```
 
-Suites: `all` (lite, default) · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
-`oolong` · `browsecomp` · `codeqa_lb`. Regenerate the hero chart:
+One suite (`oolong`). Regenerate the hero chart:
 `python3 bench/hero.py` (needs `matplotlib`).
 
 ## How it works
