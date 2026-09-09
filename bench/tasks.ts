@@ -64,7 +64,9 @@ export async function buildTasks(
   const records = await cachedTasks<OolongRecord>(cacheKey, async () => {
     const candidates: OolongRecord[] = [];
     let seen = 0;
-    for await (const row of hfRows("oolongbench/oolong", "test", OOLONG_PAGE_SIZE)) {
+    // NOTE: `oolongbench/oolong` is gated/unreachable without auth — /rows serves
+    // only `oolongbench/oolong-synth` (the synth pool these caches are named after).
+    for await (const row of hfRows("oolongbench/oolong-synth", "test", OOLONG_PAGE_SIZE)) {
       const contextLen = typeof row.context_len === "number" ? row.context_len : Number(row.context_len ?? 0);
       if (!(contextLen <= maxContextLen)) continue;
       const context = asStr(row.context_window_text);

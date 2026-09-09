@@ -1,178 +1,192 @@
 #!/usr/bin/env python3
-"""bench/hero.py — render the rlm.pi hero chart from the LATEST bench/runs journals.
+"""bench/hero.py — render the rlm.pi hero chart (assets/hero.png).
 
-For every (suite, model) pair only the newest journal file wins. By default the
-suite with the newest activity is charted (override with --suite). Two panels,
-hero.png style: Score (%) and Avg. cost per task ($). Cost is the journal's
-costUsd when present; older journals (pre cost-tracking) are estimated from
-tokens at OpenRouter list prices (public catalog, no key).
+Single source of truth: the bench journals in bench/runs/*.jsonl. For each
+model only the NEWEST journal that contains its rows is charted (older files
+are stale history). Three panels:
 
-Usage (matplotlib lives in a venv — see repo notes):
+  1. Score (%)            — mean(correct) over all (task, run) rows
+  2. Avg tokens / task    — stacked input+output tokens per completed task
+  3. Avg cost / task ($)  — mean(costUsd) per row, straight from the journal
+
+The header names the benchmark and its hardness so the chart is self-describing:
+OOLONG (oolong-synth) · 24 tasks x 3 runs · context <= 65,536 tok · max 16
+iterations · temp 0.
+
+Usage (matplotlib lives in a venv):
     python3 -m venv /tmp/venv-mpl && /tmp/venv-mpl/bin/pip install matplotlib
-    /tmp/venv-mpl/bin/python bench/hero.py [--suite oolong] [--out assets/hero-r3.png]
+    /tmp/venv-mpl/bin/python bench/hero.py [--out assets/hero.png]
 """
 
 import argparse
 import glob
 import json
 import os
-import textwrap
-import urllib.request
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 ROOT = os.getcwd()
 RUNS = os.path.join(ROOT, "bench", "runs")
-HF_CATALOG = "https://openrouter.ai/api/v1/models"
+OUT_DEFAULT = os.path.join(ROOT, "assets", "hero.png")
 
-# Palette matched to the original hero (cycled by bar index).
-COLORS = ["#F2695C", "#F8C9C3", "#3EC3AD", "#9BE3D6", "#A275D8",
-          "#7FB2E5", "#F2D06B", "#95D0A6"]
+BENCH_LINE = "OOLONG (oolong-synth)  ·  24 tasks × 3 runs  ·  context ≤ 65,536 tok  ·  max 16 iterations  ·  temp 0"
+
+# Canonical model set — anything else in the journals must never chart.
+CANONICAL_MODELS = frozenset({"qwen3.8-27b", "gemma-3-27b-it", "mercury-2.5"})
+
+# Model display order palette: green = flagship, red/coral = challengers.
+PALETTE = ["#2e7d32", "#c62828", "#ef6c00", "#6a1b9a", "#00838f"]
+
+TITLE = "rlm.pi — RLM benchmark hero"
+SUBTITLE = "Pi coding agent, harness-controlled runs"
 
 
-def load(path):
+def short_model(model: str) -> str:
+    """'openrouter/google/gemma-3-27b-it' -> 'gemma-3-27b-it'."""
+    return model.rstrip("/").split("/")[-1]
+
+
+def load_rows():
+    """Read every bench/runs/*.jsonl row; tag each row with its source mtime."""
     rows = []
-    with open(path) as fh:
-        for line in fh:
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
+    for path in sorted(glob.glob(os.path.join(RUNS, "*.jsonl"))):
+        try:
+            mtime = os.path.getmtime(path)
+            with open(path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        r = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(r.get("model"), str):
+                        continue
+                    r["_mtime"] = mtime
+                    rows.append(r)
+        except OSError:
+            continue  # fail-soft: unreadable journal, skip it
     return rows
 
 
-def fetch_prices():
-    """model id -> (usd/token in, usd/token out); empty dict on any failure."""
-    try:
-        with urllib.request.urlopen(HF_CATALOG, timeout=30) as res:
-            data = json.load(res).get("data", [])
-        return {m["id"]: (float(m["pricing"]["prompt"]), float(m["pricing"]["completion"]))
-                for m in data if "pricing" in m}
-    except Exception as err:  # noqa: BLE001 — chart must survive offline runs
-        print(f"[hero] pricing fetch failed ({err}); cost bars will be 0 for old journals")
-        return {}
-
-
-def latest_per_model(suite=None):
-    """(suite, model) -> (mtime, rows), keeping only the newest journal per pair."""
-    groups = {}
-    for path in glob.glob(os.path.join(RUNS, "*.jsonl")):
-        rows = load(path)
-        if not rows:
+def aggregate(rows):
+    """Group by model; newest journal per model; canonical trio only."""
+    newest: dict = {}
+    for r in rows:
+        m = r["model"]
+        if m not in newest or r["_mtime"] > newest[m]:
+            newest[m] = r["_mtime"]
+    # Stray vendors / typos must never chart — hard canonical whitelist.
+    newest = {m: mt for m, mt in newest.items()
+              if short_model(m) in CANONICAL_MODELS}
+    stats = []
+    for m, mt in newest.items():
+        mine = [r for r in rows if r["model"] == m and r["_mtime"] == mt]
+        n = len(mine)
+        if n == 0:
             continue
-        mtime = os.path.getmtime(path)
-        key = (rows[0]["suite"], rows[0].get("model", "?"))
-        if suite is not None and key[0] != suite:
-            continue
-        if key not in groups or mtime > groups[key][0]:
-            groups[key] = (mtime, rows)
-    return groups
+        score = sum(1 for r in mine if r.get("correct") is True) / n * 100.0
+        in_tok = sum(float(r.get("inputTokens") or 0) for r in mine) / n
+        out_tok = sum(float(r.get("outputTokens") or 0) for r in mine) / n
+        cost = sum(float(r.get("costUsd") or 0) for r in mine) / n
+        stats.append({
+            "model": m,
+            "label": short_model(m),
+            "score": score,
+            "in_tok": in_tok,
+            "out_tok": out_tok,
+            "cost": cost,
+            "n": n,
+        })
+    stats.sort(key=lambda s: (-s["score"], s["label"]))
+    return stats
 
 
-def estimate_cost(rows, prices):
-    total = sum(r.get("costUsd", 0.0) for r in rows)
-    if total > 0:
-        return total
-    model_id = rows[0].get("model", "").replace("openrouter/", "")
-    rates = prices.get(model_id)
-    if not rates:
-        return 0.0
-    pin, pout = rates
-    return sum(r.get("inputTokens", 0) * pin + r.get("outputTokens", 0) * pout for r in rows)
+def render(stats, out_path: str) -> None:
+    fig, axes = plt.subplots(1, 3, figsize=(15.5, 5.6))
+    fig.patch.set_facecolor("white")
+
+    fig.suptitle(TITLE, fontsize=17, fontweight="bold", y=0.985)
+    fig.text(0.5, 0.905, BENCH_LINE, ha="center", fontsize=10.5, color="#37474f")
+    fig.text(0.5, 0.865, SUBTITLE, ha="center", fontsize=9, color="#78909c")
+
+    labels = [s["label"] for s in stats]
+    colors = [PALETTE[i % len(PALETTE)] for i in range(len(stats))]
+
+    # Panel 1 — Score
+    ax = axes[0]
+    scores = [s["score"] for s in stats]
+    bars = ax.bar(labels, scores, color=colors, width=0.62)
+    for b, v, s in zip(bars, scores, stats):
+        ax.text(b.get_x() + b.get_width() / 2, v + 2.5, f"{v:.0f}%",
+                ha="center", fontsize=12, fontweight="bold")
+        ax.text(b.get_x() + b.get_width() / 2, -13, f"n={s['n']}",
+                ha="center", fontsize=8.5, color="#90a4ae")
+    ax.set_ylim(0, 108)
+    ax.set_ylabel("Score (%)", fontsize=11)
+    ax.set_title("Score — tasks survived", fontsize=12, pad=10)
+
+    # Panel 2 — Avg tokens per task (stacked in/out)
+    ax = axes[1]
+    in_toks = [s["in_tok"] for s in stats]
+    out_toks = [s["out_tok"] for s in stats]
+    bars_in = ax.bar(labels, in_toks, color=colors, width=0.62, label="input")
+    bars_out = ax.bar(labels, out_toks, bottom=in_toks, color=colors,
+                      width=0.62, alpha=0.45, label="output")
+    for i, s in enumerate(stats):
+        total = s["in_tok"] + s["out_tok"]
+        ax.text(i, total + max(in_toks) * 0.03, f"{total / 1000:.1f}k",
+                ha="center", fontsize=12, fontweight="bold")
+    ax.set_ylim(0, max(in_toks) * 1.18)
+    ax.set_ylabel("Avg tokens / task", fontsize=11)
+    ax.set_title("Context appetite (in + out)", fontsize=12, pad=10)
+    ax.legend(loc="upper right", fontsize=8.5, frameon=False)
+
+    # Panel 3 — Avg cost per task
+    ax = axes[2]
+    costs = [s["cost"] for s in stats]
+    bars = ax.bar(labels, costs, color=colors, width=0.62)
+    for b, v in zip(bars, costs):
+        ax.text(b.get_x() + b.get_width() / 2, v + max(costs) * 0.03,
+                f"${v:.4f}", ha="center", fontsize=12, fontweight="bold")
+    ax.set_ylim(0, max(costs) * 1.18 if max(costs) > 0 else 1)
+    ax.set_ylabel("Avg cost / task ($)", fontsize=11)
+    ax.set_title("Price per task", fontsize=12, pad=10)
+
+    for ax in axes:
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.tick_params(axis="x", labelsize=9.5, rotation=12)
+        ax.set_axisbelow(True)
+        ax.grid(axis="y", color="#eceff1", linewidth=0.8)
+
+    fig.text(0.5, 0.035,
+             "canonical set: qwen3.8-27b · gemma-3-27b-it · mercury-2.5   ·   n = scored rows (qwen3.8-27b run aborted early: n=6)",
+             ha="center", fontsize=8, color="#90a4ae")
+    fig.text(0.5, 0.012,
+             "rows: bench/runs/*.jsonl (latest journal per model) · regenerate: python3 bench/hero.py",
+             ha="center", fontsize=8, color="#b0bec5")
+    fig.tight_layout(rect=[0, 0.05, 1, 0.84])
+    fig.savefig(out_path, facecolor="white", dpi=150)
+    print(f"wrote {out_path}")
 
 
-def short(model_ref):
-    return model_ref.replace("openrouter/", "").split("/")[-1]
-
-
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--suite", default=None, help="chart one suite (default: newest activity)")
-    ap.add_argument("--out", default=os.path.join(ROOT, "assets", "hero.png"))
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Render rlm.pi bench hero chart")
+    ap.add_argument("--out", default=OUT_DEFAULT, help="output PNG path")
     args = ap.parse_args()
 
-    groups = latest_per_model(args.suite)
-    if not groups:
-        raise SystemExit("no journals matched")
-
-    if args.suite is None:  # the suite whose newest journal is the newest overall
-        suite = max(groups.items(), key=lambda kv: kv[1][0])[0][0]
-        groups = {k: v for k, v in groups.items() if k[0] == suite}
-    else:
-        suite = args.suite
-
-    prices = fetch_prices()
-    bars = []
-    for (s, model), (_, rows) in sorted(groups.items()):
-        n = len(rows)
-        bars.append({
-            "model": short(model),
-            "score": 100.0 * sum(r.get("correct", False) for r in rows) / n,
-            "cost": estimate_cost(rows, prices) / n,
-            "tasks": n,
-        })
-    bars.sort(key=lambda b: (-b["score"], b["cost"]))
-
-    for b in bars:
-        print(f"  {b['model']:36s} {b['score']:5.1f}%  ${b['cost']:.4f}/task  (n={b['tasks']})")
-
-    # ---------------------------------------------------------------- render --
-    fig = plt.figure(figsize=(15, 10), dpi=100, facecolor="white")
-    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-    fig.text(0.125, 0.92, "rlm.pi", fontsize=46, fontweight="bold", color="#111111", va="top")
-    for y in (0.775, 0.635):
-        fig.add_artist(Line2D([0.0, 1.0], [y, y], color="#DDDDDD", lw=1.2))
-    for label, value, x in [("AUTHOR", "hicaru", 0.125), ("PACKAGE", "pi.dev", 0.4375), ("LICENSE", "MIT", 0.70)]:
-        fig.text(x, 0.715, label, fontsize=12, color="#555555")
-        fig.text(x, 0.678, value, fontsize=18, fontweight="bold", color="#111111")
-
-    def style_axis(ax, title):
-        ax.set_title(title, fontsize=15, fontweight="bold", pad=14)
-        ax.yaxis.grid(True, linestyle=":", color="#BBBBBB", lw=0.9)
-        ax.set_axisbelow(True)
-        for side in ("top", "right"):
-            ax.spines[side].set_color("#888888")
-        for side in ("left", "bottom"):
-            ax.spines[side].set_color("#333333")
-        ax.tick_params(colors="#333333", labelsize=9.5)
-
-    n = len(bars)
-    xs = range(n)
-    names = [textwrap.fill(b["model"], width=15) for b in bars]
-    scores = [b["score"] for b in bars]
-    costs = [b["cost"] for b in bars]
-    palette = [COLORS[i % len(COLORS)] for i in xs]
-
-    ax_l = fig.add_axes([0.115, 0.12, 0.39, 0.42])
-    ax_l.bar(xs, scores, color=palette, edgecolor="#333333", lw=0.8, width=0.62)
-    ax_l.set_xticks(xs, names)
-    ax_l.set_ylabel("Score (%)", fontsize=12.5, fontweight="bold")
-    style_axis(ax_l, f"{suite} — Score (%) — latest runs")
-    ax_l.set_ylim(0, 112)
-    ax_l.set_yticks(range(0, 101, 20))
-    ax_l.axhline(min(scores), color="#666666", linestyle="--", lw=1.1)
-    for i, v in enumerate(scores):
-        ax_l.text(i, v + 2.5, f"{v:.1f}%", ha="center", fontsize=11.5, fontweight="bold")
-
-    ax_r = fig.add_axes([0.585, 0.12, 0.39, 0.42])
-    ax_r.bar(xs, costs, color=palette, edgecolor="#333333", lw=0.8, width=0.62)
-    ax_r.set_xticks(xs, names)
-    ax_r.set_ylabel("Avg. Cost per Task ($)", fontsize=12.5, fontweight="bold")
-    style_axis(ax_r, f"{suite} — Avg. Cost per Task ($)")
-    ax_r.set_ylim(0, max(costs) * 1.3 if max(costs) > 0 else 1)
-    ax_r.set_yticks([])
-    for i, v in enumerate(costs):
-        ax_r.text(i, v + max(costs) * 0.035, f"\\${v:.4f}", ha="center", fontsize=11.5,
-                  fontweight="bold")
-
-    out = os.path.join(ROOT, args.out) if not os.path.isabs(args.out) else args.out
-    fig.savefig(out, facecolor="white")
-    print(f"wrote {out}")
+    rows = load_rows()
+    if not rows:
+        raise SystemExit("no journal rows found in bench/runs/*.jsonl")
+    stats = aggregate(rows)
+    if not stats:
+        raise SystemExit("no model rows aggregated")
+    out = args.out if os.path.isabs(args.out) else os.path.join(ROOT, args.out)
+    render(stats, out)
 
 
 if __name__ == "__main__":
