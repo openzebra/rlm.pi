@@ -109,7 +109,18 @@ function elideRange(
     if (i === lastUser) continue; // paranoia: the final user message is never touched
     if (m.role === "assistant") {
       staleAssistants -= 1; // turns AFTER this one = count minus itself
-      messages[i] = { ...m, content: [{ type: "text", text: ROOT_TURN_ELIDED_LINE }] } as RootMessage;
+      // Provider pairing invariant: Anthropic requires every tool_result to follow the
+      // assistant message carrying its tool_use; OpenAI requires each tool/function_call_output
+      // to pair with its tool_call/function_call. Eliding the toolCall blocks here orphaned the
+      // surviving toolResults and broke the request. Elide only the prose — keep toolCall blocks.
+      const toolCalls = Array.isArray(m.content)
+        ? (m.content as Array<{ type?: string }>).filter((b) => b?.type === "toolCall")
+        : [];
+      const content: unknown[] =
+        toolCalls.length > 0
+          ? [...toolCalls, { type: "text", text: ROOT_TURN_ELIDED_LINE }]
+          : [{ type: "text", text: ROOT_TURN_ELIDED_LINE }];
+      messages[i] = { ...m, content } as RootMessage;
       elided += 1;
       continue;
     }
