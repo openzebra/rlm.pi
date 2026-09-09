@@ -61,6 +61,30 @@ const BIG = "y".repeat(4_000);
   check("fewer turns than window ⇒ zero", none === 0);
 }
 
+// ── WS-3a regression: elision must preserve toolCall blocks (provider tool pairing) ──
+{
+  const messages: RootMessage[] = [
+    assistant("stale turn with call"),
+    toolResult("bash", "OUT ok"),
+    assistant("recent turn"),
+    user("latest ask"),
+  ];
+  // give the stale assistant a toolCall block matching the following toolResult
+  (messages[0] as { content: unknown[] }).content = [
+    { type: "text", text: "stale turn with call" },
+    { type: "toolCall", id: "tool_01", name: "bash", arguments: { cmd: "ls" } },
+  ];
+  (messages[1] as { toolCallId: string }).toolCallId = "tool_01";
+  const elided = elideStalePayloads(messages, { keepTurns: 1, elideChars: 1_500 });
+  check("stale turn elided", elided === 1, String(elided));
+  const blocks = (messages[0] as { content: { type: string }[] }).content;
+  const call = blocks.find((b) => b.type === "toolCall") as { id: string; name: string; arguments: { cmd: string } } | undefined;
+  check("toolCall block survives elision", call !== undefined, JSON.stringify(blocks));
+  check("toolCall id/name/arguments verbatim", call !== undefined && call.id === "tool_01" && call.name === "bash" && call.arguments.cmd === "ls", JSON.stringify(call));
+  check("prose still stubbed", blocks.some((b) => b.type === "text" && "text" in b && (b as { text: string }).text.length > 0));
+  check("following toolResult untouched", (messages[1] as { toolCallId: string }).toolCallId === "tool_01");
+}
+
 // ── WS-3b: sigma splice ──────────────────────────────────────────────────────────────
 {
   const tracker = RootStateTracker.fresh("splice test");
