@@ -60,7 +60,7 @@ function commit(state: RunState, patchKey: Record<string, unknown>): RunState {
     { nextStep: "check the loader" },
   );
   const handoff = stateHandoff(state, "original question here", 4_000);
-  check("handoff keeps the template header", handoff.includes("A prior RLM run hit its token cap"));
+  check("handoff keeps the template header", handoff.includes("A prior RLM run hit its outlier token ceiling"));
   check("handoff carries compact Σ", handoff.includes('"verifiedFacts"') && handoff.includes("src/a.ts — fact one"));
   check("handoff carries the Σ next step", handoff.includes("check the loader"));
   check("no unreplaced template slots", !handoff.includes("{state}") && !handoff.includes("{next}"));

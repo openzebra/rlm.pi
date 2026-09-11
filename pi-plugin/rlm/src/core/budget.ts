@@ -158,7 +158,17 @@ export function resolveBudget(contextWindow: number | undefined, config: RlmConf
  */
 export function truncateMid(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
-  const half = Math.max(0, maxChars - ELISION_MARK.length) >> 1;
+  // Reserve for the WORST-CASE rendered mark, not the shortest (FINDING-5): the elision
+  // count is substituted at render time, so a 2+ digit count grows the mark past the
+  // length `half` was budgeted from. digits(text.length) upper-bounds digits(elided) —
+  // one pass, and the output can never exceed maxChars.
+  const reserve = maxChars - (ELISION_MARK.length - 1 + String(text.length).length);
+  if (reserve <= 0) {
+    // Cap smaller than even a mark-only render: head-truncate to keep the exact
+    // ≤ maxChars guarantee instead of emitting an oversized degenerate mark.
+    return text.slice(0, maxChars);
+  }
+  const half = reserve >> 1;
   const elided = text.length - (half * 2);
   return text.slice(0, half) + ELISION_MARK.replace("N", String(elided)) + text.slice(text.length - half);
 }

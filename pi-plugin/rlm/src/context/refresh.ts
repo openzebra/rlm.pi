@@ -38,8 +38,9 @@ function pathMatches(entryPath: string, target: string, cwd: string): boolean {
   const a = normalizeContextPath(entryPath, cwd);
   const b = normalizeContextPath(target, cwd);
   if (a === b) return true;
-  // suffix match for namespaced entries
-  return entryPath.endsWith("/" + target) || entryPath.endsWith(target);
+  // suffix match for namespaced entries — separator required, otherwise "ile.ts"
+  // would match "myfile.ts" (wrong-entry overwrite on native edits).
+  return entryPath.endsWith("/" + target);
 }
 
 /**

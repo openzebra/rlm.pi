@@ -114,7 +114,10 @@ check("OFF cumulative is superlinear vs the final call", cumOff > lastOff * (TUR
 const steadyOn = onChars.slice(2);
 const steadyMax = Math.max(...steadyOn);
 const steadyMin = Math.min(...steadyOn);
-check("ON: per-call context is flat past the window", steadyMax - steadyMin < 3_000, `spread ${steadyMax - steadyMin}`);
+// 4_000 bound: steady-state variance grew when Σ findings capacity doubled (6→12) and the
+// elision stub line got longer (4af1a68); flatness itself is still proven by the cumulative
+// and final-call ratios below (≈3.8× margins).
+check("ON: per-call context is flat past the window", steadyMax - steadyMin < 4_000, `spread ${steadyMax - steadyMin}`);
 check("ON: final call is a small fraction of the OFF final call", lastOn < lastOff / 3, `${lastOn} vs ${lastOff}`);
 check("ON: cumulative stays well under the OFF cumulative", cumOn < cumOff / 2, `${cumOn} vs ${cumOff}`);
 check("transform actually elided payloads", totalElided > 0, `${totalElided} elisions`);

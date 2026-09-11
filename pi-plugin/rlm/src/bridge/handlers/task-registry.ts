@@ -54,17 +54,19 @@ interface Waiter {
   timer?: ReturnType<typeof setTimeout>;
 }
 
-function notify(waiters: Map<string, Waiter>, taskId: string, entry: TaskEntry): void {
-  const w = waiters.get(taskId);
-  if (w === undefined) return;
-  if (w.timer !== undefined) clearTimeout(w.timer);
-  w.resolve(entry);
+function notify(waiters: Map<string, Waiter[]>, taskId: string, entry: TaskEntry): void {
+  const list = waiters.get(taskId);
+  if (list === undefined) return;
   waiters.delete(taskId);
+  for (const w of list) {
+    if (w.timer !== undefined) clearTimeout(w.timer);
+    w.resolve(entry);
+  }
 }
 
 export function createTaskRegistry(): TaskRegistry {
   const tasks = new Map<string, TaskEntry>();
-  const waiters = new Map<string, Waiter>();
+  const waiters = new Map<string, Waiter[]>();
   let counter = 0;
 
   const spawnDeps: SpawnDeps = {
@@ -92,7 +94,9 @@ export function createTaskRegistry(): TaskRegistry {
     },
     resolve(taskId, result) {
       const entry = tasks.get(taskId);
-      if (entry === undefined) return;
+      // Settle-once: a late resolve after a timeout/reject must not flip status or
+      // double-notify; the entry is terminal the moment it leaves "pending".
+      if (entry === undefined || entry.status !== "pending") return;
       entry.status = "done";
       if (typeof result === "string") {
         entry.result = result;
@@ -103,14 +107,17 @@ export function createTaskRegistry(): TaskRegistry {
     },
     reject(taskId, error) {
       const entry = tasks.get(taskId);
-      if (entry === undefined) return;
+      // Settle-once (mirror of resolve): reject after resolve/timeout is a no-op.
+      if (entry === undefined || entry.status !== "pending") return;
       entry.status = "error";
       entry.error = error;
-      const w = waiters.get(taskId);
-      if (w !== undefined) {
-        if (w.timer !== undefined) clearTimeout(w.timer);
-        w.reject(new Error(error));
+      const list = waiters.get(taskId);
+      if (list !== undefined) {
         waiters.delete(taskId);
+        for (const w of list) {
+          if (w.timer !== undefined) clearTimeout(w.timer);
+          w.reject(new Error(error));
+        }
       }
     },
   };
@@ -124,19 +131,39 @@ export function createTaskRegistry(): TaskRegistry {
           resolve(entry);
           return;
         }
-        const timer =
+        const w: Waiter = { resolve, reject };
+        w.timer =
           timeoutMs !== undefined
             ? setTimeout(() => {
-                waiters.delete(taskId);
-                const e = tasks.get(taskId);
-                if (e !== undefined && e.status === "pending") {
-                  e.status = "timeout";
-                  e.error = `Timeout after ${timeoutMs}ms`;
+                w.timer = undefined;
+                // Remove only THIS waiter — a sibling wait() on the same task stays parked.
+                const list = waiters.get(taskId);
+                let lastWaiter = true;
+                if (list !== undefined) {
+                  const i = list.indexOf(w);
+                  if (i >= 0) {
+                    list.splice(i, 1);
+                    lastWaiter = list.length === 0;
+                    if (lastWaiter) waiters.delete(taskId);
+                  }
+                }
+                // Timeout is a per-waiter event, not a task property: only when the LAST
+                // waiter gives up does the shared entry record "timeout" (settle-once then
+                // keeps a late resolve from resurrecting it). While a sibling stays parked,
+                // the entry remains pending and resolve() still wakes it.
+                if (lastWaiter) {
+                  const e = tasks.get(taskId);
+                  if (e !== undefined && e.status === "pending") {
+                    e.status = "timeout";
+                    e.error = `Timeout after ${timeoutMs}ms`;
+                  }
                 }
                 reject(new Error(`Timeout waiting for task ${taskId}`));
               }, timeoutMs)
             : undefined;
-        waiters.set(taskId, { resolve, reject, timer });
+        const list = waiters.get(taskId);
+        if (list === undefined) waiters.set(taskId, [w]);
+        else list.push(w);
       });
     },
     unawaitedIds: () => {
