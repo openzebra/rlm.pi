@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.20] — 2026-09-12
+
+### Fixed
+
+- **`truncateMid` now guarantees output ≤ `maxChars`** (`core/budget.ts`): the old code budgeted
+  the half-window for the *shortest* rendered elision mark (1-digit count), so a 2+ digit elision
+  count pushed the final string past the cap. The mark size is now reserved for the worst case
+  (digits of the input length — one pass), degenerate caps head-truncate instead of emitting an
+  oversized mark, and the exact `≤ maxChars` guarantee holds for every input. Dedicated
+  exact-cap sweep added to `test/budget.ts` (caps 40–1000 × lengths up to 1M, worst-case
+  4-digit elision, boundary passthrough); the old `≤ cap + 64` assertion tightened to exact.
+- **`await_task` multi-waiter race** (`bridge/handlers/task-registry.ts`): the waiters map held
+  a single `Waiter` per task id, so a second concurrent `await_task` on the same task replaced
+  the first — a lost wakeup that could leave a cell parked forever. The map now holds
+  `Waiter[]` (all waiters notified on settle), with settle-once guards so a late timeout or
+  reject can no longer double-resolve or flip a settled entry's status, plus timer cleanup on
+  settle.
+- **Context prefix matching: two sibling-leak/overwrite bugs** (`context/merge.ts`,
+  `context/refresh.ts`): (1) bare `startsWith` matching let the prefix `src/cont` select entries
+  under `src/context/` — matching is now exact-file or directory-boundary
+  (`src/cont/`), with duplicate emission deduped when several prefixes match one file (every
+  match still counts toward the unmatched-prefix report); (2) suffix matching without a required
+  separator let `ile.ts` match `myfile.ts` — a wrong-entry overwrite on native edits. A
+  separator is now mandatory.
+- **`test/phase-rectify.ts`**: handoff template-header assertion aligned with the current
+  wording ("outlier token ceiling").
+
+### Changed
+
+- **Bench**: added `zai/glm-4.7` to the model panel and a full 24-task oolong run
+  (`bench/runs/z1-glm47-full24.jsonl`); dropped `gemma` from the hero roster; `hero.png`
+  regenerated with the new lineup; READMEs and docs aligned to the panel changes.
+
 ## [0.3.19] — 2026-09-09
 
 ### Added
