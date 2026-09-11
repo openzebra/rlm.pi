@@ -126,8 +126,12 @@ export function namespaceContextFiles(
   return namespaceContextFilesWithChars(payload, sourceId).files;
 }
 
+/** Regex SOURCE for the `ctx/<id>/` namespace — single literal; CTX_PREFIX_RE and the
+ *  sandbox exec-code (Python, refresh.ts) both derive from it. Never inline a copy. */
+export const CTX_PREFIX_PATTERN_SOURCE = "ctx/[^/]+/";
+
 /** The one `ctx/<id>/` matcher. Never re-declare this regex; use the helpers below. */
-const CTX_PREFIX_RE = /^(ctx\/[^/]+\/)/;
+const CTX_PREFIX_RE = new RegExp(`^(${CTX_PREFIX_PATTERN_SOURCE})`);
 
 /** Narrow an unknown context entry to a ContextFile. Type guard, never a cast. */
 export function isContextFile(entry: unknown): entry is ContextFile {
@@ -142,7 +146,7 @@ export function contextEntryPath(entry: unknown): string | undefined {
 }
 
 /** The `ctx/<id>/` prefix owning this path, or undefined. Skips the legacy catch-all. */
-function ctxPrefixOf(path: string): string | undefined {
+export function ctxPrefixOf(path: string): string | undefined {
   const prefix = CTX_PREFIX_RE.exec(path)?.[1];
   // `ctx/unknown/` is the legacy catch-all: never treat it as an identity.
   return prefix === undefined || prefix === LEGACY_UNKNOWN_PREFIX ? undefined : prefix;

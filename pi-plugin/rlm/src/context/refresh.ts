@@ -7,6 +7,7 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { estimateTokens } from "../text/tokens.ts";
+import { ctxPrefixOf } from "./namespace.ts";
 import type { ContextFile } from "./types.ts";
 
 /** Paths that look like tool file targets. */
@@ -38,9 +39,12 @@ function pathMatches(entryPath: string, target: string, cwd: string): boolean {
   const a = normalizeContextPath(entryPath, cwd);
   const b = normalizeContextPath(target, cwd);
   if (a === b) return true;
-  // suffix match for namespaced entries — separator required, otherwise "ile.ts"
-  // would match "myfile.ts" (wrong-entry overwrite on native edits).
-  return entryPath.endsWith("/" + target);
+  // Namespaced entries (`ctx/<id>/…`) must match on the FULL remainder after the
+  // namespace — never a bare suffix: "/src/a.ts" also ends "ctx/A/other/src/a.ts",
+  // which would refresh an unrelated deeper file (wrong-entry overwrite). The prefix
+  // regex itself is owned by namespace.ts (single matcher, DRY).
+  const ns = ctxPrefixOf(entryPath);
+  return ns !== undefined && entryPath.slice(ns.length) === b;
 }
 
 /**
@@ -73,8 +77,12 @@ export function upsertContextFile(
       typeof (item).path === "string" &&
       pathMatches((item as { path: string }).path, path, cwd)
     ) {
-      next[n++] = entry;
-      replaced = true;
+      // First match replaces; later duplicates of the same logical file are absorbed,
+      // otherwise two matching payload entries would emit the replacement twice.
+      if (!replaced) {
+        next[n++] = entry;
+        replaced = true;
+      }
     } else if (
       item !== null &&
       typeof item === "object" &&
@@ -124,15 +132,27 @@ _tokens = ${tokens}
 _old = context if isinstance(context, list) else []
 _next = []
 _found = False
+def _ns_matches(p, t):
+    # Anchored namespace match, mirrors host ctxPrefixOf: full remainder after
+    # the ctx/<id>/ prefix must EQUAL the target — suffix endswith also hits
+    # deeper paths like ctx/A/other/src/a.ts for target src/a.ts (wrong-entry).
+    if not p.startswith("ctx/"):
+        return False
+    rest = p[4:]
+    i = rest.find("/")
+    if i < 0:
+        return False
+    return rest[i + 1:] == t
 for _e in _old:
     if isinstance(_e, dict) and str(_e.get("path", "")) in (_path, _path.replace("\\\\", "/")):
-        _next.append({"path": _path, "content": _content, "tokens": _tokens})
-        _found = True
-    elif isinstance(_e, dict) and (
-        str(_e.get("path", "")).endswith("/" + _path) or str(_e.get("path", "")).endswith(_path)
-    ):
-        _next.append({"path": str(_e.get("path")), "content": _content, "tokens": _tokens})
-        _found = True
+        if not _found:
+            _next.append({"path": _path, "content": _content, "tokens": _tokens})
+            _found = True
+    elif isinstance(_e, dict) and _ns_matches(str(_e.get("path", "")), _path):
+        # First match replaces; later duplicates are absorbed (dedup mirrors host upsert).
+        if not _found:
+            _next.append({"path": str(_e.get("path")), "content": _content, "tokens": _tokens})
+            _found = True
     else:
         _next.append(_e)
 if not _found:
