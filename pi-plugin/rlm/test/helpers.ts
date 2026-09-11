@@ -98,7 +98,7 @@ export function captureComplete(responses: readonly string[]): {
 /** A zero-cost child result, for tests that only care about the RlmInput a child received. */
 export function emptyChildResult(answer = "child"): RlmResult {
   return Object.freeze({
-    answer, iterations: 1, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 0,
+    answer, iterations: 1, inputTokens: 0, outputTokens: 0, durationMs: 0, lastStdout: "",
   });
 }
 

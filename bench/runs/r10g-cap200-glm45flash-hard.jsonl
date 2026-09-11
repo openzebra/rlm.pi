@@ -1,0 +1,3 @@
+{"suite":"oolong","taskId":"oolong_0","model":"zai/glm-4.5-flash","run":1,"correct":true,"recall":1,"latencyMs":375414,"inputTokens":6694,"outputTokens":1757,"iterations":18,"costUsd":0,"answer":"Label: incorrect","gold":"\"['incorrect']\""}
+{"suite":"oolong","taskId":"oolong_50","model":"zai/glm-4.5-flash","run":1,"correct":false,"recall":0,"latencyMs":46867,"inputTokens":1,"outputTokens":823,"iterations":1,"costUsd":0,"answer":"Label: correct","gold":"\"['incorrect']\""}
+{"suite":"oolong","taskId":"oolong_100","model":"zai/glm-4.5-flash","run":1,"correct":false,"recall":0,"latencyMs":3954219,"inputTokens":38967,"outputTokens":15470,"iterations":200,"costUsd":0,"answer":"Label: correct","gold":"\"['incorrect']\""}

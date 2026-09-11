@@ -28,6 +28,9 @@ export interface CompleteOptions {
   readonly temperature?: number;
   readonly reasoning?: ThinkingLevel;
   readonly signal?: AbortSignal;
+  /** Wall-clock cap for ONE provider request (ms); omitted = pi-ai default. Long-context
+   *  providers (zai bigmodel: ~1 min per 10k ctx chars TTFB) need this raised per config. */
+  readonly timeoutMs?: number;
   /** Retry + adaptive throttle for transient 429/5xx; defaults apply when omitted. */
   readonly retry?: RetryPolicy;
   /** v5.1 UX: fired while parked on the rate-limit cooldown ("queued") / when released. */
@@ -116,6 +119,7 @@ export async function modelComplete(messages: readonly ChatMsg[], opts: Complete
           temperature: opts.temperature,
           reasoning: effectiveReasoning(opts.model, opts.reasoning),
           signal: opts.signal,
+          timeoutMs: opts.timeoutMs,
           onResponse: (res) => { note(res.status, res.headers); },
         },
       );

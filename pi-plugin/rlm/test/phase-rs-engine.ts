@@ -7,6 +7,7 @@
  */
 
 import { createEngine } from "../src/core/engine.ts";
+import { COMPACTION_CEILING_TOKENS } from "../src/core/limits.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import type { RlmConfig } from "../src/core/types.ts";
 import { RlmEmitter } from "../src/tool/rlm-events.ts";
@@ -28,10 +29,11 @@ const RESP0 = [
 ].join("\n");
 
 // Turn 1: a deliberately rejected patch (unknown field) — must roll back + observe.
-// Padded past the ABSOLUTE COMPACTION_CEILING_TOKENS (256k tok ≈ 1.02M chars @ 4 ch/tok,
-// LO rule 2025-09-09): shouldCompact no longer reads compactionThresholdPct, so the rebase
-// arm of this suite must reach the ceiling by mass instead of by config.
-const PAD = "filler ".repeat(220_000); // ≈1.1M chars ≈ 275k tokens
+// Padded past the ABSOLUTE COMPACTION_CEILING_TOKENS (shouldCompact no longer reads
+// compactionThresholdPct — LO rule 2025-09-09), so the rebase arm must reach the ceiling by
+// mass instead of by config. Derived from the constant (≈4 chars/token + 25% slack) so this
+// suite keeps working when the ceiling is re-tuned — it broke once at the 256k→1M change.
+const PAD = "filler ".repeat(Math.ceil((COMPACTION_CEILING_TOKENS * 4 * 1.25) / 7));
 const RESP1 = [
   repl("print(2)"),
   PAD,

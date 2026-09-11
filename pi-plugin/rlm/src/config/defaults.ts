@@ -12,7 +12,10 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   // Max-long runs: the engine may keep iterating until budget/compaction walls hit. The budget
   // cascade and compactionThresholdPct are the real length controls; this ceiling only stops
   // truly runaway loops. Was 30 — capped long tasks prematurely.
-  maxIterations: 200,
+  // Strongly oversized on purpose: runs end on FINAL answer / errors / wall-clock long
+  // before this bites. History: 30 capped long tasks; the bench's 16 all-failed oolong
+  // mid-retrieval. 1000 ≈ 5× the old interactive default, effectively a runaway backstop.
+  maxIterations: 1_000,
   execTimeoutS: 120,
   requestTimeoutMs: 15 * 60_000,
   // Session-wide, not per-batch: spawn() puts many requests on the wire at once, so this is
@@ -53,9 +56,11 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   enableTokenBudget: true,
   budgetShare: 0.25,
   budgetSoftFrac: 0.8,
-  budgetTaskCap: 400_000,
+  budgetTaskCap: 1_000_000,
   budgetMaxContinuations: 2,
-  budgetHandoffChars: 4_000,
+  // 24K: the handoff must carry Σ + findings + query verbatim — a 4K skeleton is what made
+  // long research runs "lose context" on hard-budget continuation (amputated, not lost).
+  budgetHandoffChars: 24_000,
   // v5 TaskLedger blackboard
   enableLedger: true,
   rlmBudget: 8,

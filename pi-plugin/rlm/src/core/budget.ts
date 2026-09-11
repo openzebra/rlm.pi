@@ -1,12 +1,13 @@
 /**
  * Token budget cascade (port of the v4/v5 `budget.py` engine).
  *
- * The budget is the PRIMARY run-length control: above COMPACTION_CEILING_TOKENS the cap is
+ * The budget is an OUTLIER CEILING, not a progress control (progress = maxIterations):
+ * windows at/below COMPACTION_CEILING_TOKENS are never metered; above it the cap is
  * max(ceiling, budgetShare × model context window) — the share can only stretch the working
- * budget further out, never cut under the ceiling;
- * one soft wrap-up turn at `softFrac` of the cap, and at the hard cap a deterministic
- * handoff (`distillTrajectory`) is handed to a fresh continuation run — chain-capped at
- * `maxContinuations`. Wall-clock timeouts stay only as hang backstops.
+ * budget further out, never cut under the ceiling. One soft wrap-up turn at `softFrac` of
+ * the cap, and at the hard cap a deterministic handoff (`distillTrajectory`) is handed to
+ * a fresh continuation run — chain-capped at `maxContinuations`. Wall-clock timeouts stay
+ * only as hang backstops.
  *
  * v5 counts the whole tree (root turns + sub-LLM usage) against the cap; the engine feeds
  * the run's LimitGuard totals in via `observeTotal` after every turn. Each continuation
@@ -30,22 +31,25 @@ type BudgetState = "" | "soft" | "hard";
 
 /** v5 verbatim: the soft wrap-up note prepended to the single turn after crossing soft. */
 export const WRAP_UP_BUDGET: string =
-  "[budget] ~80% of your token cap — ONE turn left. If the task is answerable NOW, finalize " +
-    '(set answer["ready"] = True). Otherwise print a compact findings dump: what is confirmed, ' +
-    "current file/line or search position, and the exact next step — a fresh continuation picks " +
-    "it up. Do not start new exploration.";
+  "[budget] ~80% of this run's outlier cap — ONE turn left. If the task is answerable NOW, " +
+    'finalize (set answer["ready"] = True). Otherwise print a compact findings dump IN THE ' +
+    "NOTES: what is confirmed, current file/line or search position, and the exact next " +
+    "step — a continuation picks it up. The task, the packed context and the ledger carry " +
+    "over; only repl variables are re-derived. Do not start new exploration.";
 
 export const DEFAULT_NEXT_STEP: string =
   "continue the probing that was in flight, then finalize";
 
 /** v5 verbatim template (adapting the finalize spelling to this plugin's REPL). */
 const HANDOFF_TEMPLATE: string =
-  "A prior RLM run hit its token cap mid-task.\n" +
+  "A prior RLM run hit its outlier token ceiling mid-task.\n" +
     "You are its continuation — pick up EXACTLY where it stopped.\n\n" +
     "ORIGINAL TASK:\n{query}\n\n" +
     "CONFIRMED FINDINGS SO FAR:\n{findings}\n\n" +
     "CURRENT STATE / LAST ACTIONS:\n{state}\n\n" +
     "NEXT STEP: {next}\n" +
+    "NOTE: repl variables are re-derived, but the task, the packed context and the ledger " +
+    "carry over. `add_context()` the same external sources again if you still need them.\n" +
     "Do not re-do confirmed work; continue from the NEXT STEP and finalize as\n" +
     'soon as the task is answerable (answer["ready"] = True).';
 
@@ -137,10 +141,14 @@ function unboundedBudget(config: RlmConfig): TokenBudget {
 
 export function resolveBudget(contextWindow: number | undefined, config: RlmConfig): TokenBudget {
   const ctx = contextWindow !== undefined && contextWindow > 0 ? contextWindow : 32_000;
-  if (ctx <= COMPACTION_CEILING_TOKENS) return unboundedBudget(config);
   // The share only stretches the budget BEYOND the absolute ceiling — never under it.
   const shareCap = Math.max(COMPACTION_CEILING_TOKENS, Math.floor(ctx * config.budgetShare));
   const cap = config.budgetTaskCap > 0 ? Math.min(shareCap, config.budgetTaskCap) : shareCap;
+  // LO rule (2025-09-10): small windows are never budget-amputated — but an EXPLICIT
+  // budgetTaskCap that actually binds (below shareCap) must still be honored. The old
+  // early-return swallowed the explicit cap on windows ≤ the ceiling (task-cap bug).
+  const userCapped = config.budgetTaskCap > 0 && config.budgetTaskCap < shareCap;
+  if (!userCapped && ctx <= COMPACTION_CEILING_TOKENS) return unboundedBudget(config);
   return makeBudget(config, Math.max(cap, 1));
 }
 
@@ -157,10 +165,10 @@ export function truncateMid(text: string, maxChars: number): string {
 
 /** Digest/handoff section caps — ONE source: budget.ts's handoff distillation and the root
  *  digest (core/root-digest.ts) must never drift apart on the same trajectory heuristics. */
-export const FINDINGS_MAX = 6;
+export const FINDINGS_MAX = 12; // aligns with RUN_STATE_LIMITS.findings — Σ and handoff agree
 export const FINDINGS_MIN_CHARS = 20;
 export const STATE_MAX = 8;
-const QUERY_CHARS = 800;
+const QUERY_CHARS = 4_000; // full task statement fits; 800 forced the model to "forget" its own goal
 const STATE_NEEDLE = "REPL stdout";
 /** Next-step probe shared by the engine handoff and the root digest (one wording source). */
 export const NEXT_STEP_RE = /next|then|will |todo/i;

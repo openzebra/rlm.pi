@@ -91,7 +91,7 @@ const handlers = createSubcallHandlers({
   gates: createSubcallGates(GATE_LIMIT),
   registry: MOCK_REGISTRY,
   getLlmModel: () => fakeModel,
-  getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 2 }),
+  getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 2, requestTimeoutMs: 900_000 }),
 });
 
 // ── the regression ──
@@ -150,13 +150,13 @@ const childHandlers = createSubcallHandlers({
   gates: childGates,
   registry: MOCK_REGISTRY,
   getLlmModel: () => fakeModel,
-  getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 4 }),
+  getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 2, requestTimeoutMs: 900_000 }),
   runChild: async () => {
     childActive += 1;
     if (childActive > childPeak) childPeak = childActive;
     await sleep(20);
     childActive -= 1;
-    return { answer: "child", iterations: 1, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 0 };
+    return { answer: "child", iterations: 1, inputTokens: 0, outputTokens: 0, durationMs: 0, lastStdout: "" };
   },
   degrade: async () => "degraded",
 });

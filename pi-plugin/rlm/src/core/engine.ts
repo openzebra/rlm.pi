@@ -28,7 +28,7 @@ import { pinContext, type PinnedContext } from "../sandbox/context-file.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
 import { findReplBlocks, stripStateFences } from "../text/parsing.ts";
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
-import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, turnHadError } from "./answer.ts";
+import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, latestStdoutOf, turnHadError } from "./answer.ts";
 import { compactHistory, elideOldToolPayloads, rebaseWithState, shouldCompact } from "./compaction.ts";
 import { applyStatePatches, freshRunState, runStateTurnBlock, type RunState, type RunStateMode } from "./run-state.ts";
 import { findStatePatches } from "../text/parsing.ts";
@@ -141,8 +141,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
           limits.addUsage(u);
           deps.onUsage?.(u, "sub");
         },
-        addRaw: (costUsd, inputTokens, outputTokens) => {
-          limits.addRaw(costUsd, inputTokens, outputTokens);
+        addRaw: (inputTokens, outputTokens) => {
+          limits.addRaw(inputTokens, outputTokens);
         },
       },
     };
@@ -269,6 +269,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
       await previous?.release();
     };
     let best = "";
+    // P2 §3.4: last non-empty repl stdout across the whole run — recovered by the bench when
+    // the run ends with no `answer[…]` frame (the value was printed, just never submitted).
+    let lastStdout = "";
     let lastAnswer = "";
     let compactions = 0;
     let completedTurns = 0;
@@ -412,7 +415,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
             verificationNudgePending ? VERIFICATION_NUDGE : undefined,
             // One-shot (turn 0 only): thinking tokens share the completion budget — mirror of
             // the bench's doubling rule. Advisory; never fatal, never repeated.
-            i === 0 && rootSampling.reasoning !== undefined && (rootSampling.maxTokens ?? 16_384) < 8_192
+            // P3.1a (plan §3.4): `<= 8_192` — the bench pins maxTokens = 8192 exactly, so the old
+            // strict `<` made this a dead condition and REASONING_BUDGET_HINT never fired.
+            i === 0 && rootSampling.reasoning !== undefined && (rootSampling.maxTokens ?? 16_384) <= 8_192
               ? REASONING_BUDGET_HINT
               : undefined,
           ]
@@ -427,6 +432,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
           sampling: rootSampling,
           retry: deps.complete === undefined ? retryPolicy(deps.config) : undefined,
           signal: deps.signal,
+          // Long-context providers: bigmodel.cn TTFB scales ~1 min per 10k ctx chars; the
+          // pi-ai default idle cap aborts such turns as "Request timed out". One knob, both seams.
+          timeoutMs: deps.config.requestTimeoutMs,
           complete: deps.complete,
           onPhase: reportPhase,
         });
@@ -441,18 +449,21 @@ export function createEngine(deps: EngineDeps): RunRlm {
         if (selfReportId) {
           emitter.emitSubcallUpdated({
             id: selfReportId,
-            costUsd: turn.usage.cost.total,
             tokens: turn.usage.totalTokens,
             tokensIn: turn.usage.input,
             tokensOut: turn.usage.output,
           });
         } else {
-          emitter.emitRootUsage(turn.usage.cost.total, turn.usage.totalTokens, turn.usage.input, turn.usage.output);
+          emitter.emitRootUsage(turn.usage.totalTokens, turn.usage.input, turn.usage.output);
         }
         deps.onUsage?.(turn.usage, "root");
         const answerContent = latestAnswerContentOf(turn.results);
         if (answerContent) best = answerContent;
         else if (!best && turn.response.trim()) best = turn.response;
+        // Stdout fallback floor (P2 §3.4): keep the newest non-empty block output, always —
+        // cheapest possible recovery for a run that never submits a final frame.
+        const turnStdout = latestStdoutOf(turn.results);
+        if (turnStdout) lastStdout = turnStdout;
         completedTurns = i + 1;
         const final = finalAnswerOf(turn.results);
         if (final != null) {
@@ -464,7 +475,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
             verificationNudged = true;
             verificationNudgePending = true;
           } else {
-            const done = result(final, i + 1, limits);
+            const done = result(final, i + 1, limits, lastStdout);
             lastAnswer = done.answer;
             return done;
           }
@@ -546,7 +557,6 @@ export function createEngine(deps: EngineDeps): RunRlm {
                 iterations: inner.iterations + completedTurns,
                 inputTokens: inner.inputTokens + u.inputTokens,
                 outputTokens: inner.outputTokens + u.outputTokens,
-                costUsd: inner.costUsd + u.costUsd,
               };
               // R2: lastAnswer must be set before return — `finally` emitAnswer reads it.
               lastAnswer = chained.answer;
@@ -558,19 +568,19 @@ export function createEngine(deps: EngineDeps): RunRlm {
         }
       }
       if (pendingReplOutputs) appendUserMessage(history, pendingReplOutputs);
-      const finalized = result(await finalize(history, model, deps, limits, sandbox), deps.config.maxIterations, limits);
+      const finalized = result(await finalize(history, model, deps, limits, sandbox), completedTurns, limits, lastStdout);
       lastAnswer = finalized.answer;
       return finalized;
     } catch (err) {
       // Abort is a user action — resolve with the best partial, not an error.
       if (deps.signal?.aborted) {
-        const aborted = result(best.trim() || "(aborted)", completedTurns, limits);
+        const aborted = result(best.trim() || "(aborted)", completedTurns, limits, lastStdout);
         lastAnswer = aborted.answer;
         return aborted;
       }
       if (err instanceof LimitError) {
         nodeStatus = "error";
-        const stopped = result(best.trim() || `(stopped: ${err.message})`, completedTurns, limits);
+        const stopped = result(best.trim() || `(stopped: ${err.message})`, completedTurns, limits, lastStdout);
         lastAnswer = stopped.answer;
         return stopped;
       }
@@ -601,14 +611,21 @@ export function createEngine(deps: EngineDeps): RunRlm {
   return run;
 }
 
-function result(answer: string, iterations: number, limits: LimitGuard): RlmResult {
+function result(answer: string, iterations: number, limits: LimitGuard, lastStdout: string): RlmResult {
   // State fences are a Σ transport, never user-visible output (§7): scrub them from the
   // FINAL answer. A fence-only answer means the model spent its last turn committing state
   // and never re-answered — surface the stub instead of a raw patch JSON.
   const clean = stripStateFences(answer);
   const final = clean.trim().length > 0 ? clean.trim() : "(no final answer — last turn committed state only; see Σ)";
   const u = limits.usage();
-  return { answer: final, iterations, costUsd: u.costUsd, inputTokens: u.inputTokens, outputTokens: u.outputTokens, durationMs: u.durationMs };
+  return {
+    answer: final,
+    iterations,
+    inputTokens: u.inputTokens,
+    outputTokens: u.outputTokens,
+    durationMs: u.durationMs,
+    lastStdout,
+  };
 }
 
 /** Model metadata window, else the offline registry fallback (disk cache → table → 32k). */

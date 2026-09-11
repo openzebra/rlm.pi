@@ -255,20 +255,20 @@ function testBackgroundRegistry(): void {
   const store = new SubcallStore(emitter);
   const rootId = emitter.emitSubcallCreated({ kind: "rlm", label: "rlm_query", depth: 1 });
   const childId = emitter.emitSubcallCreated({ kind: "llm", label: "llm_query", parentId: rootId, depth: 2 });
-  emitter.emitSubcallUpdated({ id: rootId, status: "done", costUsd: 0.02, tokens: 200 });
+  emitter.emitSubcallUpdated({ id: rootId, status: "done", tokens: 200 });
 
   const early = store.takeSettledSubtrees();
   check("a root with a running descendant is withheld", early.subcalls.length === 0, `${early.subcalls.length}`);
 
-  emitter.emitSubcallUpdated({ id: childId, status: "done", costUsd: 0.01, tokens: 100 });
+  emitter.emitSubcallUpdated({ id: childId, status: "done", tokens: 100 });
   const drained = store.takeSettledSubtrees();
   check("the whole subtree comes over once it settles", drained.subcalls.length === 2, `${drained.subcalls.length}`);
   check("drained totals cover the subtree",
-    Math.abs(drained.totals.costUsd - 0.03) < 1e-9 && drained.totals.tokens === 300,
-    `$${drained.totals.costUsd} / ${drained.totals.tokens} tok`);
+    drained.totals.tokens === 300,
+    `${drained.totals.tokens} tok`);
   check("drained totals are removed from the store's running totals",
-    store.getTotals().costUsd === 0 && store.getTotals().tokens === 0,
-    `$${store.getTotals().costUsd}`);
+    store.getTotals().tokens === 0,
+    `${store.getTotals().tokens} tok`);
   check("a drained subtree is not handed over twice",
     store.takeSettledSubtrees().subcalls.length === 0, "");
 
@@ -291,7 +291,7 @@ async function testUnawaitedCostReported(): Promise<void> {
   const id = emitter.emitSubcallCreated({ kind: "llm", label: "llm_query", depth: 0 });
   const tracked = background.track(async () => {
     await blocked;
-    emitter.emitSubcallUpdated({ id, status: "done", costUsd: 0.05, tokens: 500 });
+    emitter.emitSubcallUpdated({ id, status: "done", tokens: 500 });
     return "done";
   });
   check("in-flight detached work is counted", background.pending === 1, `${background.pending}`);
@@ -299,11 +299,11 @@ async function testUnawaitedCostReported(): Promise<void> {
 
   finish();
   await tracked;
-  // Nobody awaited the Task; the next turn's drain must still report its cost.
+  // Nobody awaited the Task; the next turn's drain must still report its tokens.
   const drained = background.drain();
-  check("un-awaited detached cost is still reported at the next drain",
-    drained.subcalls.length === 1 && Math.abs(drained.totals.costUsd - 0.05) < 1e-9,
-    `${drained.subcalls.length} subcall(s), $${drained.totals.costUsd}`);
+  check("un-awaited detached usage is still reported at the next drain",
+    drained.subcalls.length === 1 && drained.totals.tokens === 500,
+    `${drained.subcalls.length} subcall(s), ${drained.totals.tokens} tok`);
   check("pending returns to zero", background.pending === 0, `${background.pending}`);
   background.dispose();
 }

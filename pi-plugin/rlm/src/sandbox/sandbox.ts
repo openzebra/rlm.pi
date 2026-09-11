@@ -92,7 +92,10 @@ export class PythonSandbox {
   private scanOffset = 0;
   private seq = 0;
   private readonly pending = new Map<string, Pending>();
-  private readonly handlers: SubLlmHandlers;
+  // Not readonly: the engine's continuation handoff re-installs a successor run's closures
+  // on a live worker (installHandlers) instead of respawning it — respawn would destroy the
+  // pinned context accumulator, which is exactly what the chain must preserve.
+  private handlers: SubLlmHandlers;
   private readonly requestTimeoutMs: number;
   private readonly initTimeoutMs: number;
   /** Bounded stderr tail (chunks, newest last) — avoids rebuilding the buffer per chunk. */
@@ -222,6 +225,15 @@ export class PythonSandbox {
     const res = await this.request({ type: "load_context", path: pinned.path, json: pinned.json });
     if (!res.ok) throw new Error(res.error ?? "load_context failed");
     return res.index ?? 0;
+  }
+
+  /**
+   * Continuation handoff (engine chain): re-install a successor run's sub-call handlers on
+   * THIS live worker so a chained engine run can adopt it without a respawn. Respawning
+   * would destroy the pinned context accumulator — the one thing the chain must preserve.
+   */
+  installHandlers(handlers: SubLlmHandlers): void {
+    this.handlers = { ...REJECT, ...handlers };
   }
 
   async exec(code: string, signal?: AbortSignal): Promise<ReplResult> {

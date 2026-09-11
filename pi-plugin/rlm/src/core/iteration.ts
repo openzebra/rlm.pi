@@ -30,6 +30,9 @@ interface TurnDeps {
   readonly registry: ModelRegistry;
   readonly sampling?: Sampling;
   readonly signal?: AbortSignal;
+  /** Wall-clock cap per provider request (ms) — forwarded to the modelComplete seam.
+   *  Long-context providers (zai bigmodel TTFB ~1 min per 10k ctx chars) need it raised. */
+  readonly timeoutMs?: number;
   /** Test-only override for model completion (scripted responses). */
   readonly complete?: CompleteFn;
   /** v5.1 retry policy for modelComplete (rate-limit resilience); defaults apply when omitted. */
@@ -52,6 +55,7 @@ export async function runTurn(history: readonly ChatMsg[], sandbox: PythonSandbo
     onThrottlePark: deps.onPhase ? () => deps.onPhase?.("queued") : undefined,
     onThrottleRelease: deps.onPhase ? () => deps.onPhase?.("thinking") : undefined,
     signal: deps.signal,
+    timeoutMs: deps.timeoutMs,
   });
 
   const blocks = findReplBlocks(text);

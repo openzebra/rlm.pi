@@ -24,7 +24,7 @@ class ProbeController extends RlmController {
   protected spawnEngine(deps: EngineDeps): RunRlm {
     this.captured = deps;
     return async () => ({
-      answer: "stub-answer", iterations: 1, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 1,
+      answer: "stub-answer", iterations: 1, inputTokens: 0, outputTokens: 0, durationMs: 1, lastStdout: "",
     });
   }
 }

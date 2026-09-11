@@ -1,0 +1,2 @@
+{"suite": "oolong", "taskId": "oolong_0", "model": "openrouter/qwen/qwen3.8-27b", "run": 1, "correct": true, "recall": 1, "latencyMs": 194072, "inputTokens": 41864, "outputTokens": 10254, "iterations": 21, "costUsd": 0.04834488, "answer": "Label: incorrect", "gold": "\"['incorrect']\""}
+{"suite": "oolong", "taskId": "oolong_50", "model": "openrouter/qwen/qwen3.8-27b", "run": 1, "correct": true, "recall": 1, "latencyMs": 269476, "inputTokens": 87297, "outputTokens": 17239, "iterations": 34, "costUsd": 0.08838174, "answer": "Label: incorrect", "gold": "\"['incorrect']\""}

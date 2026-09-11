@@ -18,8 +18,8 @@ export interface ReplDetails {
   readonly executionTimeMs: number;
   /** Sub-calls triggered during this execution (llm_query, rlm_query, etc.). */
   readonly subcalls: readonly RlmSubcall[];
-  /** Running totals for this repl() call (cost + tokens from sub-LLM calls). */
-  readonly totals: { readonly costUsd: number; readonly tokens: number };
+  /** Running totals for this repl() call (tokens from sub-LLM calls). */
+  readonly totals: { readonly tokens: number };
   /** Final answer submitted through answer["ready"] without echoing it to the model. */
   readonly finalAnswer?: string;
   /** Detached spawn() sub-calls still running when this call returned. Absent when none. */

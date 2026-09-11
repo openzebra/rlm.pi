@@ -21,6 +21,21 @@ export function latestAnswerContentOf(results: readonly ReplResult[]): string | 
   return null;
 }
 
+/** Cap for the recovered-stdout fallback (P2 §3.4) — it rides `RlmResult`, not history. */
+const LAST_STDOUT_CAP = 4_000;
+
+/** Last non-empty stdout across a turn's blocks, capped. P2 §3.4: a run that ends without an
+ *  `answer[...]` frame still printed its winning value, and re-running the whole task to get it
+ *  is a waste (and non-deterministic). The bench recovers from here and marks the row
+ *  `recovered: true`; the engine itself never treats stdout as an answer. */
+export function latestStdoutOf(results: readonly ReplResult[]): string {
+  for (let i = results.length - 1; i >= 0; i--) {
+    const out = results[i]?.stdout.trim();
+    if (out) return out.length > LAST_STDOUT_CAP ? out.slice(-LAST_STDOUT_CAP) : out;
+  }
+  return "";
+}
+
 /** True if any block in the turn raised an exception. Plain stderr does not count. */
 export function turnHadError(results: readonly ReplResult[]): boolean {
   return results.some((r) => r.raised);

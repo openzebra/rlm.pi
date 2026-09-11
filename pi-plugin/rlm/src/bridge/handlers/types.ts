@@ -57,7 +57,7 @@ export interface FinishResult {
 export interface InvocationLimits {
   remainingTimeoutMs(): number | undefined;
   addUsage(usage: Usage): void;
-  addRaw(costUsd: number, inputTokens: number, outputTokens: number): void;
+  addRaw(inputTokens: number, outputTokens: number): void;
 }
 
 export function limitsFromRemaining(
@@ -66,7 +66,7 @@ export function limitsFromRemaining(
   return Object.freeze({
     remainingTimeoutMs: () => remaining?.().timeoutMs,
     addUsage: (_usage: Usage) => {},
-    addRaw: (_costUsd: number, _inputTokens: number, _outputTokens: number) => {},
+    addRaw: (_inputTokens: number, _outputTokens: number) => {},
   });
 }
 
@@ -86,6 +86,9 @@ export interface SubcallConfig {
   readonly maxDepth: number;
   readonly subSampling?: Sampling;
   readonly subSystemPrompt?: string;
+  /** Per-request wall cap (ms) for the llm tier — long-context providers (zai bigmodel TTFB
+   *  ~1 min per 10k ctx chars) abort under the pi-ai default without it. */
+  readonly requestTimeoutMs: number;
   /** v5 TaskLedger: claim/coalesce/echo gates (optional — unwired callers keep ledger off). */
   readonly enableLedger?: boolean;
   /** v5: real rlm spawns before demotion to llm (0 = never demote). */
@@ -114,7 +117,7 @@ export interface SubcallHandlerDeps {
   readonly getChildContext?: () => unknown;
   readonly getModel?: () => Model<Api>;
   readonly degrade?: (prompt: string, depth: number) => Promise<string>;
-  readonly onChildUsage?: (costUsd: number, inputTokens: number, outputTokens: number) => void;
+  readonly onChildUsage?: (inputTokens: number, outputTokens: number) => void;
   readonly trackDetached?: <T>(run: () => Promise<T>) => Promise<T>;
   /** v5 TaskLedger blackboard shared across the whole run tree (claim/coalesce/echo/demote). */
   readonly ledger?: TaskLedger;

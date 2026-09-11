@@ -39,11 +39,44 @@ export function shouldCompact(history: ChatMsg[]): boolean {
 }
 
 /**
+ * P3.2 (plan §3.4): never elide an ANSWER FRAME — `answer['content'] = …` is the run's only
+ * durable output, and dropping it from history is how a finished run still reports empty.
+ */
+const ANSWER_FRAME_RE = /answer\[\s*['"](?:content|ready)['"]\s*\]|answers\s*\.\s*update\s*\(/;
+
+/** Identifier shape used by the last-reference scan (`counter_a`, `rows_by_label`, …). */
+const REF_TOKEN_RE = /[A-Za-z_][A-Za-z0-9_]{2,}/g;
+/** Bounds: per-payload ids and the growing "future" set stay tiny (O(T·N) with small N). */
+const PAYLOAD_TOKEN_CAP = 64;
+const REF_TOKEN_CAP = 512;
+
+/** Whitespace-collapsed body skeleton — two identical page dumps share it even when the
+ *  turn banner differs (P3.2 "按内容签名去重"). Exact text, NOT digit-normalised: two
+ *  `counter_a=875` / `counter_a=499` payloads are different conclusions and must not collapse. */
+function payloadSignature(content: string): string {
+  return content.replace(/\s+/g, " ").trim().slice(0, 400) + "#" + content.length;
+}
+
+function payloadTokens(content: string, into: Set<string>): void {
+  let n = 0;
+  REF_TOKEN_RE.lastIndex = 0;
+  for (let m = REF_TOKEN_RE.exec(content); m !== null; m = REF_TOKEN_RE.exec(content)) {
+    into.add(m[0]);
+    if (++n >= PAYLOAD_TOKEN_CAP) return;
+  }
+}
+
+/**
  * v5 G1: elide old tool/repl payload bodies, keep the head (system) and the working-set tail
  * intact. Runs BEFORE `shouldCompact` — v3 measured −97% tokens on coding tasks with this
  * alone, often avoiding the summarizer entirely. Head-ONLY elision was a measured v3 bug
  * (turns grew 3→8): the tail carries the current working set, so the last `keepTurns` turns
  * are never touched.
+ *
+ * P3.2 adds a whitelist on top of the volume rule (which stays as the floor — dedup and
+ * exemptions only ever REMOVE bytes, never add them back):
+ *  - answer frames and payloads whose identifiers a later turn still mentions are kept verbatim;
+ *  - a payload byte-identical to an earlier one collapses to a one-line stub.
  */
 export function elideOldToolPayloads(
   history: ChatMsg[],
@@ -65,17 +98,60 @@ export function elideOldToolPayloads(
     }
   }
   if (tailStart === 0) return history; // fewer turns than keepTurns — nothing to elide
+
+  // Last-reference scan (descending): `future` holds the identifiers mentioned by everything
+  // AFTER the message we are looking at — the working set the model still has in hand.
+  const future = new Set<string>();
+  const referenced = new Array<boolean>(history.length).fill(false);
+  const ids = new Set<string>();
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role === "assistant") {
+      if (future.size < REF_TOKEN_CAP) payloadTokens(m.content, future);
+      continue;
+    }
+    if (m.role !== "user" || i >= tailStart || m.content.length <= toolChars) continue;
+    if (ANSWER_FRAME_RE.test(m.content)) continue; // answer frames are kept anyway
+    ids.clear();
+    payloadTokens(m.content.slice(0, 2_000), ids);
+    for (const id of ids) {
+      if (future.has(id)) {
+        referenced[i] = true;
+        break;
+      }
+    }
+  }
+
   let changed = false;
-  const marker = "\n…[elided v5-G1]…";
+  const marker =
+    "\n…[elided v5-G1 — your repl sandbox is INTACT: variables/answers persist; re-run or " +
+    "print(answers) in the next repl to re-derive this content]…";
+  const dupMarker =
+    "\n…[dup v5-G1 — byte-identical payload already in this history; sandbox INTACT: " +
+    "print(<expr>) to inspect it again]…";
+  const signatures = new Set<string>();
   const out: ChatMsg[] = new Array<ChatMsg>(history.length); // pre-allocated
   for (let i = 0; i < history.length; i++) {
     const m = history[i];
-    if (
-      i < tailStart &&
-      m.role === "user" &&
-      m.content.length > toolChars
-    ) {
-      out[i] = { role: "user", content: m.content.slice(0, toolChars) + marker };
+    if (i < tailStart && m.role === "user" && m.content.length > toolChars) {
+      if (ANSWER_FRAME_RE.test(m.content)) {
+        out[i] = m; // never touch the answer frame
+        continue;
+      }
+      const sig = payloadSignature(m.content);
+      if (signatures.has(sig)) {
+        out[i] = { role: "user", content: dupMarker.trimStart() };
+        changed = true;
+        continue;
+      }
+      signatures.add(sig);
+      if (referenced[i]) {
+        out[i] = m; // a later turn still names what this payload produced
+        continue;
+      }
+      // Elided message is capped at exactly toolChars total (§5.3 preview + marker).
+      const body = m.content.slice(0, Math.max(0, toolChars - marker.length));
+      out[i] = { role: "user", content: body + marker };
       changed = true;
     } else {
       out[i] = m;

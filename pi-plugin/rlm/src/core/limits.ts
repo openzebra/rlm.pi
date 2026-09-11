@@ -3,19 +3,20 @@
  * (ported from rlm/core/rlm.py `_check_timeout` / `_check_iteration_limits`). Any breach throws
  * a LimitError; the engine catches it and returns the best partial answer it has.
  *
- * Cost is tracked for reporting only — there is no USD spend ceiling.
+ * Cost is NOT tracked: there is no USD spend ceiling and no cost reporting.
  */
 
 import type { Usage } from "@earendil-works/pi-ai";
 
 /**
- * Absolute working ceiling (LO rule 2025-09-09): model windows AT/BELOW this value are never
- * compacted or budget-amputated — the agent runs its full window. Windows ABOVE it are
- * compacted/budgeted exactly AT the ceiling (e.g. a 1M-context model works up to ~256k tokens
- * of history, then rebases/compacts). Single source of truth for budget.ts (resolveBudget)
- * and compaction.ts (shouldCompact + rebaseWithState token bound).
+ * Absolute working ceiling (LO rule 2025-09-09, raised 2025-09-10): model windows AT/BELOW
+ * this value are never compacted or budget-amputated — the agent runs its full window, and
+ * tree-wide spend (root turns + sub-LLM calls) is NOT metered against it. Windows ABOVE it
+ * are budgeted exactly AT the ceiling — an outlier context-fit guard, not a cost meter.
+ * Single source of truth for budget.ts (resolveBudget) and compaction.ts (shouldCompact +
+ * rebaseWithState token bound).
  */
-export const COMPACTION_CEILING_TOKENS = 256_000;
+export const COMPACTION_CEILING_TOKENS = 1_000_000;
 
 export interface Limits {
   readonly maxTimeoutMs?: number;
@@ -36,7 +37,6 @@ export function limitsFromConfig(config: Limits): Limits {
 interface UsageSnapshot {
   readonly inputTokens: number;
   readonly outputTokens: number;
-  readonly costUsd: number;
   readonly durationMs: number;
 }
 
@@ -54,7 +54,6 @@ export class LimitGuard {
   private start: number;
   private inputTokens = 0;
   private outputTokens = 0;
-  private costUsd = 0;
   private consecutiveErrors = 0;
 
   constructor(private readonly limits: Limits = {}, seedElapsedMs = 0) {
@@ -73,12 +72,10 @@ export class LimitGuard {
   addUsage(usage: Usage): void {
     this.inputTokens += usage.input;
     this.outputTokens += usage.output;
-    this.costUsd += usage.cost.total;
   }
 
-  /** Fold a recursive child run's total cost/tokens into this guard. */
-  addRaw(costUsd: number, inputTokens: number, outputTokens: number): void {
-    this.costUsd += costUsd;
+  /** Fold a recursive child run's total tokens into this guard. */
+  addRaw(inputTokens: number, outputTokens: number): void {
     this.inputTokens += inputTokens;
     this.outputTokens += outputTokens;
   }
@@ -99,7 +96,6 @@ export class LimitGuard {
     return {
       inputTokens: this.inputTokens,
       outputTokens: this.outputTokens,
-      costUsd: this.costUsd,
       durationMs: Date.now() - this.start,
     };
   }

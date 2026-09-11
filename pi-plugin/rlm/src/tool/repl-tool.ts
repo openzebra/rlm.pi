@@ -270,7 +270,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         stderr: errors,
         executionTimeMs: 0,
         subcalls: [],
-        totals: { costUsd: 0, tokens: 0 },
+        totals: { tokens: 0 },
       }));
       if (!validation.ok) return validation.error;
       const params = validation.value;
@@ -318,7 +318,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
             stderr: capturedStderr,
             executionTimeMs: Date.now() - startedAt,
             subcalls: live.length > 0 ? [...store.getSubcalls(), ...live] : store.getSubcalls(),
-            totals: { costUsd: own.costUsd + bg.costUsd, tokens: own.tokens + bg.tokens },
+            totals: { tokens: own.tokens + bg.tokens },
             backgroundPending: background.pending > 0 ? background.pending : undefined,
           };
         },
@@ -400,12 +400,11 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           ? [...store.getSubcalls(), ...adopted.subcalls]
           : store.getSubcalls();
         const totals = {
-          costUsd: store.getTotals().costUsd + adopted.totals.costUsd,
           tokens: store.getTotals().tokens + adopted.totals.tokens,
         };
         const subUsage: Usage = {
           input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: totals.tokens,
-          cost: { total: totals.costUsd, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          cost: { total: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         };
         onUsage?.(subUsage, "sub");
 
@@ -453,7 +452,6 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           executionTimeMs: 0,
           subcalls: [...store.getSubcalls(), ...adopted.subcalls],
           totals: {
-            costUsd: store.getTotals().costUsd + adopted.totals.costUsd,
             tokens: store.getTotals().tokens + adopted.totals.tokens,
           },
           backgroundPending: background.pending > 0 ? background.pending : undefined,

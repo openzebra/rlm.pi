@@ -54,12 +54,10 @@ export async function emitting<T>(
     inv.emitter.emitSubcallUpdated({ id, ...u });
   };
 
-  let costUsd = 0;
   let tokens = 0;
   let tokensIn = 0;
   let tokensOut = 0;
   const track = (u: Usage): void => {
-    costUsd += u.cost.total;
     tokens += u.totalTokens;
     tokensIn += u.input;
     tokensOut += u.output;
@@ -72,7 +70,6 @@ export async function emitting<T>(
       id,
       status: summary.error !== undefined ? "error" : "done",
       resultPreview: summary.preview,
-      costUsd,
       tokens,
       tokensIn,
       tokensOut,
@@ -87,7 +84,6 @@ export async function emitting<T>(
       id,
       status: "error",
       resultPreview: msg,
-      costUsd,
       tokens,
       tokensIn,
       tokensOut,

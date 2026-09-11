@@ -279,13 +279,10 @@ async function main(): Promise<void> {
   // ── 7. config-panel knobs: applySetting + validation + persistence round-trip ──
   {
     const base = cfg({});
-    const t0 = applySetting(base, "rootSamplingTemperature", "0");
-    check("panel: temperature 0 applies (0 is a value, not cleared)", t0.rootSampling?.temperature === 0 && t0 !== base);
-    const tClear = applySetting(t0, "rootSamplingTemperature", "default");
-    check("panel: 'default' clears temperature to provider default", tClear.rootSampling?.temperature === undefined);
-    check("panel: cleared temperature vanishes from persisted JSON", !("temperature" in (JSON.parse(JSON.stringify(tClear.rootSampling ?? {})) as Record<string, unknown>)));
-    const tBad = applySetting(base, "rootSamplingTemperature", "bananas");
-    check("panel: invalid temperature is rejected, current kept", tBad === base);
+    // LO 2025-09-08: the ROOT temperature row was removed on purpose (knob lives with the
+    // runner: bench `--temperature` / programmatic rootSampling.temperature). Asserting the
+    // absence keeps a future re-add honest instead of silently dropping a typed value.
+    check("panel: root temperature row is gone (unknown id = no-op)", applySetting(base, "rootSamplingTemperature", "0") === base);
     const r = applySetting(base, "smartReasoning", "high");
     check("panel: reasoning effort applies", r.smartReasoning === "high");
     check("panel: reasoning 'default' clears", applySetting(r, "smartReasoning", "default").smartReasoning === undefined);
@@ -297,18 +294,27 @@ async function main(): Promise<void> {
     check("panel: worker invalid temperature rejected", applySetting(base, "subSamplingTemperature", "nope") === base);
 
     // The panel values must survive the exact validation seam a hand-edited rlm.json takes.
-    const both = applySetting(t0, "smartReasoning", "high");
-    const persisted = validateConfig(JSON.parse(JSON.stringify({ rootSampling: both.rootSampling, smartReasoning: both.smartReasoning })) as unknown);
-    check("panel: temperature survives validateConfig", persisted.rootSampling?.temperature === 0);
+    // Root maxTokens is a panel field and must survive; root TEMPERATURE is run-scoped (LO
+    // above) and must be dropped by validation — a hand-edited rlm.json cannot pin it.
+    const subWithTemp = applySetting(base, "subSamplingTemperature", "0.3");
+    const both = applySetting(subWithTemp, "smartReasoning", "high");
+    const persisted = validateConfig(JSON.parse(JSON.stringify({
+      rootSampling: { maxTokens: 4096, temperature: 0.5 },
+      subSampling: both.subSampling,
+      smartReasoning: both.smartReasoning,
+    })) as unknown);
+    check("panel: root maxTokens survives validateConfig", persisted.rootSampling?.maxTokens === 4096);
+    check("panel: root temperature does NOT persist (run-scoped knob)", persisted.rootSampling?.temperature === undefined);
+    check("panel: worker temperature survives validateConfig", persisted.subSampling?.temperature === 0.3);
     check("panel: reasoning survives validateConfig", persisted.smartReasoning === "high");
 
     // Disk round-trip through saveSettings/loadSettings (same backup/restore dance as phase1).
     const previous = await loadSettings();
-    const full = mergeConfig({ ...DEFAULT_CONFIG, rootSampling: both.rootSampling, smartReasoning: both.smartReasoning });
+    const full = mergeConfig({ ...DEFAULT_CONFIG, subSampling: both.subSampling, smartReasoning: both.smartReasoning });
     const saved = await saveSettings({ config: full });
     const loaded = mergeConfig((await loadSettings()).config);
     check("panel: saveSettings reports success", saved);
-    check("panel: temperature round-trips through rlm.json", loaded.rootSampling?.temperature === 0, String(loaded.rootSampling?.temperature));
+    check("panel: worker temperature round-trips through rlm.json", loaded.subSampling?.temperature === 0.3, String(loaded.subSampling?.temperature));
     check("panel: reasoning round-trips through rlm.json", loaded.smartReasoning === "high", String(loaded.smartReasoning));
     await saveSettings(previous);
   }

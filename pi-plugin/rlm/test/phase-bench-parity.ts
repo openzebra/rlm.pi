@@ -53,34 +53,36 @@ function drive(config: RlmConfig, responses: readonly string[]): Promise<ReturnT
 async function main(): Promise<void> {
   const DONE = repl(`answer["content"] = "ok"\nanswer["ready"] = True`);
 
-  // ── thinking arm (the r3 coached shape): reasoning "high", temperature 0, 8192 root cap ──
+  // ── thinking arm (the standing bench shape): root pins reasoning "medium" (user taxonomy:
+  //    rlm thinks), temperature 0, 8192 root cap; llm tier never carries reasoning ──
   {
-    const config = benchConfig({ temperature: 0, reasoning: "high" });
+    const config = benchConfig({ temperature: 0 });
     const rs = config.rootSampling;
-    check("parity: bench root sampling frozen with reasoning", rs !== undefined && rs.reasoning === "high" && rs.temperature === 0 && rs.maxTokens === 8192);
+    check("parity: bench root sampling frozen with reasoning", rs !== undefined && rs.reasoning === "medium" && rs.temperature === 0 && rs.maxTokens === 8192);
+    check("parity: llm sub-sampling never carries reasoning", config.subSampling?.reasoning === undefined, String(config.subSampling?.reasoning));
     const calls = await drive(config, [DONE]);
     const first = calls[0];
-    check("parity: reasoning flag wins the engine merge (not an interactive default)", first?.opts.reasoning === "high", String(first?.opts.reasoning));
+    check("parity: bench reasoning wins the engine merge (not an interactive default)", first?.opts.reasoning === "medium", String(first?.opts.reasoning));
     check("parity: thinking-doubled root cap reaches the wire", first?.opts.maxTokens === 8192, String(first?.opts.maxTokens));
     check("parity: temperature 0 reaches the wire", first?.opts.temperature === 0, String(first?.opts.temperature));
   }
 
   // ── finalize parity: the LAST model call must carry the bench sampling too ──
   {
-    const calls = await drive(benchConfig({ temperature: 0, reasoning: "high" }), [repl(`print("not done")`), "final text"]);
+    const calls = await drive(benchConfig({ temperature: 0 }), [repl(`print("not done")`), "final text"]);
     const finalizeCall = calls[1];
     check("parity: finalize carries temperature 0", finalizeCall?.opts.temperature === 0, String(finalizeCall?.opts.temperature));
     check("parity: finalize carries the thinking-doubled cap", finalizeCall?.opts.maxTokens === 8192, String(finalizeCall?.opts.maxTokens));
-    check("parity: finalize carries the bench reasoning", finalizeCall?.opts.reasoning === "high", String(finalizeCall?.opts.reasoning));
+    check("parity: finalize carries the bench reasoning", finalizeCall?.opts.reasoning === "medium", String(finalizeCall?.opts.reasoning));
   }
 
-  // ── no-reasoning arm: 4096 cap, no reasoning anywhere ──
+  // ── llm tier contract: sub model id may differ (--sub-model) and never thinks ──
   {
     const config = benchConfig({ temperature: 0 });
-    const rs = config.rootSampling;
-    check("parity: no-reasoning arm keeps the lean cap", rs !== undefined && rs.maxTokens === 4096 && rs.reasoning === undefined);
+    check("parity: no-reasoning arm still pins the medium root effort", config.rootSampling?.reasoning === "medium");
+    check("parity: llm tier cap stays lean", config.subSampling?.maxTokens === 2048);
     const calls = await drive(config, [DONE]);
-    check("parity: no-reasoning arm wires no reasoning", calls[0]?.opts.reasoning === undefined && calls[0]?.opts.maxTokens === 4096);
+    check("parity: llm tier wires no reasoning", calls[0]?.opts.reasoning === "medium" && config.subSampling?.reasoning === undefined);
   }
 
   // ── leaf shape: bench sub sampling never carries reasoning, mirrors the temperature ──

@@ -23,7 +23,7 @@ function baseDeps(groundLeaf?: (p: string) => string): SubcallHandlerDeps {
     gates: createSubcallGates(2),
     registry: MOCK_REGISTRY,
     getLlmModel: () => MOCK_MODEL,
-    getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 4 }),
+    getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 4, requestTimeoutMs: 900_000 }),
     ...(groundLeaf === undefined ? {} : { groundLeaf }),
   };
 }

@@ -31,7 +31,6 @@ export interface RlmSubcall {
   readonly resultPreview?: string;
   readonly startedAt: number;
   readonly endedAt?: number;
-  readonly costUsd: number;
   readonly tokens: number;
   /** In/out split (input / output) — mirrors tokens. */
   readonly tokensIn: number;
@@ -49,7 +48,7 @@ export interface RlmDetails {
   readonly rootPrompt: string;
   readonly turns: { readonly current: number; readonly max: number };
   readonly subcalls: readonly RlmSubcall[];
-  readonly totals: { readonly costUsd: number; readonly tokens: number; readonly tokensIn: number; readonly tokensOut: number };
+  readonly totals: { readonly tokens: number; readonly tokensIn: number; readonly tokensOut: number };
   readonly answer?: string;
 }
 

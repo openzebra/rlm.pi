@@ -21,7 +21,8 @@ export function buildTurnPrompt(
 
 /** Asked once when the engine runs out of turns without a submitted answer. Same finalize
  *  dialect as the budget wrap-up note (audit M6): answer-ready first, plain text only as an
- *  explicit fallback the engine still accepts. */
+ *  explicit fallback the engine still accepts. Deliberately near-unreachable: the cap is
+ *  large by design (the old 16-cap all-failed oolong mid-retrieval). */
 export const FINALIZE_PROMPT =
   "You are out of turns. Finalize NOW: set `answer[\"content\"]` and `answer[\"ready\"] = True` " +
     "(fenced ```repl```) with your best final answer from everything you have gathered. " +

@@ -24,10 +24,10 @@ function emptyResult(answer: string): RlmResult {
   return {
     answer,
     iterations: 0,
-    costUsd: 0,
     inputTokens: 0,
     outputTokens: 0,
     durationMs: 0,
+    lastStdout: "",
   };
 }
 
@@ -149,8 +149,8 @@ async function childRun(
 
   try {
     const res = await deps.gates.rlm.at(childDepth).run(() => run(input, inv));
-    inv.limits.addRaw(res.costUsd, res.inputTokens, res.outputTokens);
-    deps.onChildUsage?.(res.costUsd, res.inputTokens, res.outputTokens);
+    inv.limits.addRaw(res.inputTokens, res.outputTokens);
+    deps.onChildUsage?.(res.inputTokens, res.outputTokens);
     if (ledger !== undefined && claimKey !== undefined) ledger.finish(claimKey, res.answer);
     inv.emitter.emitSubcallUpdated({
       id: subId,
