@@ -42,14 +42,16 @@ pi uninstall npm:@hicaru/pi-rlm
 **OOLONG (oolong-synth)** —— paper 级长上下文套件；取每个模型最新的日志，每任务成本
 来自真实 `costUsd`（旧日志按 OpenRouter 牌价估算）：
 
-**本轮面板** —— `qwen3.8-27b` · `gemma-3-27b-it` · `mercury-2.5`（最新日志见
+**本轮面板** —— `glm-4.7` · `qwen3.8-27b` · `mercury-2.5`（最新日志见
 `bench/runs/*.jsonl`，历史表格待本轮跑完后更新）：
 
 | 模型 | 得分 | 每任务成本 |
 |------|------|------------|
-| `qwen/qwen3.8-27b` | **100%** | $0.0127 |
-| `google/gemma-3-27b-it` | 83.3% | $0.0013 |
-| `inception/mercury-2.5` | — | — |
+| `zai/glm-4.7` | **83%** | $0.0000 * |
+| `qwen/qwen3.8-27b` | 49% | $0.1038 |
+| `inception/mercury-2.5` | 38% | $0.0052 |
+
+\* glm-4.7 走 Z.ai coding 端点 —— 按订阅计费，引擎无单价，`costUsd` 保持 $0。
 
 逐任务原始数据（正确性、召回率、延迟、token、成本）位于 `bench/runs/*.jsonl`
 —— 每个任务一行 JSONL，作为历史记录提交。
@@ -57,10 +59,11 @@ pi uninstall npm:@hicaru/pi-rlm
 ### 运行基准测试
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-...        # 必需 —— 密钥仅通过环境变量传递
+export OPENROUTER_API_KEY=sk-or-...        # openrouter/* 模型必需
+export ZAI_API_KEY=...                     # zai/* 模型必需（coding 端点）
 
 bun run bench                              # oolong 套件，默认模型（qwen3.8-27b）
-bun run bench --model openrouter/google/gemma-3-27b-it
+bun run bench --model zai/glm-4.7
 bun run bench --model openrouter/inception/mercury-2.5
 bun run bench --list                       # 仅列出任务，无需引擎和密钥
 ```

@@ -69,9 +69,12 @@ Model panel — exactly three, everything else was pruned from the docs on purpo
 
 | Model | Score | Avg. cost/task |
 |-------|-------|----------------|
-| `qwen/qwen3.8-27b` | **100%** | $0.0127 |
-| `google/gemma-3-27b-it` | 83.3% | $0.0013 |
-| `inception/mercury-2.5` | — | — |
+| `zai/glm-4.7` | **83%** | $0.0000 * |
+| `qwen/qwen3.8-27b` | 49% | $0.1038 |
+| `inception/mercury-2.5` | 38% | $0.0052 |
+
+\* glm-4.7 runs on Z.ai's coding-plan endpoint — subscription billing, so the engine has
+no per-token price and `costUsd` stays $0.
 
 Raw per-task rows (correct, recall, latency, tokens, cost) live in
 `bench/runs/*.jsonl` — one JSONL row per task, committed as history.
@@ -79,10 +82,11 @@ Raw per-task rows (correct, recall, latency, tokens, cost) live in
 ### Run the benchmarks
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-...        # required — env vars are the only key transport
+export OPENROUTER_API_KEY=sk-or-...        # required for openrouter/* models
+export ZAI_API_KEY=...                     # required for zai/* models (coding endpoint)
 
 bun run bench                              # oolong suite, default model (qwen3.8-27b)
-bun run bench --model openrouter/google/gemma-3-27b-it
+bun run bench --model zai/glm-4.7
 bun run bench --model openrouter/inception/mercury-2.5
 bun run bench --list                       # print tasks, no engine / no key
 ```

@@ -1,0 +1,20 @@
+{
+  "gitRev": "4af1a68",
+  "startedAt": "2026-09-11T04:05:57.214Z",
+  "model": "zai/glm-4.7",
+  "subModel": null,
+  "suite": "oolong",
+  "limit": null,
+  "taskIds": null,
+  "oolongMaxCl": 65536,
+  "oolongLimit": 24,
+  "oolongLabels": false,
+  "runs": 1,
+  "maxIterations": 30,
+  "temperature": 0,
+  "skillState": true,
+  "pricing": {
+    "inputPerToken": 0,
+    "outputPerToken": 0
+  }
+}

@@ -47,7 +47,9 @@ export interface BenchTarget {
 }
 
 /** Z.ai (bigmodel.cn) free-tier models speak the OpenAI protocol at /api/paas/v4. */
-const ZAI_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
+// Coding-plan endpoint is the only channel where glm-4.7 avoids 429 (plan §0 probe:
+// global/china plain channels are balance-gated for non-flash models, 2025-09-09).
+const ZAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 /** Accepts "openrouter/<id>" / "zai/<id>" (project ref convention) or a bare "<id>";
