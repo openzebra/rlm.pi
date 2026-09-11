@@ -47,7 +47,7 @@ const BIG = "y".repeat(4_000);
   const elided = elideStalePayloads(messages, { keepTurns: 2, elideChars: 1_500 });
   check("one payload elided", elided === 1, String(elided));
   const stale = (messages[0] as { content: { text: string }[] }).content[0].text;
-  check("stale payload became a preview", stale.includes("chars elided — full result in session log"), stale.slice(0, 80));
+  check("stale payload became a preview", stale.includes("chars elided — repl sandbox persists"), stale.slice(0, 80));
   check("preview keeps head and tail", stale.startsWith("STALE") && stale.trimEnd().endsWith("y"));
   check("fresh payload untouched", JSON.stringify(messages[4]).includes(`FRESH ${BIG}`));
   check("sigma immune", (messages[1] as { content: unknown }).content === "old snapshot");

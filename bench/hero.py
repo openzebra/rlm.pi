@@ -132,8 +132,9 @@ def render(stats, out_path: str) -> None:
     for b, v, s in zip(bars, scores, stats):
         ax.text(b.get_x() + b.get_width() / 2, v + 2.5, f"{v:.0f}%",
                 ha="center", fontsize=12, fontweight="bold")
-        ax.text(b.get_x() + b.get_width() / 2, -13, f"n={s['n']}",
-                ha="center", fontsize=8.5, color="#90a4ae")
+        # n= rides inside the bar base — outside placement collided with tick labels
+        ax.text(b.get_x() + b.get_width() / 2, 5, f"n={s['n']}",
+                ha="center", fontsize=8.5, color="white")
     ax.set_ylim(0, 108)
     ax.set_ylabel("Score (%)", fontsize=11)
     ax.set_title("Score — tasks survived", fontsize=12, pad=10)
@@ -145,14 +146,16 @@ def render(stats, out_path: str) -> None:
     bars_in = ax.bar(labels, in_toks, color=colors, width=0.62, label="input")
     bars_out = ax.bar(labels, out_toks, bottom=in_toks, color=colors,
                       width=0.62, alpha=0.45, label="output")
-    for i, s in enumerate(stats):
-        total = s["in_tok"] + s["out_tok"]
-        ax.text(i, total + max(in_toks) * 0.03, f"{total / 1000:.1f}k",
+    totals = [s["in_tok"] + s["out_tok"] for s in stats]
+    for i, total in enumerate(totals):
+        ax.text(i, total + max(totals) * 0.03, f"{total / 1000:.1f}k",
                 ha="center", fontsize=12, fontweight="bold")
-    ax.set_ylim(0, max(in_toks) * 1.18)
+    # ylim from in+out, not in alone — otherwise tall stacks clip and
+    # their totals land on the panel title
+    ax.set_ylim(0, max(totals) * 1.18)
     ax.set_ylabel("Avg tokens / task", fontsize=11)
     ax.set_title("Context appetite (in + out)", fontsize=12, pad=10)
-    ax.legend(loc="upper right", fontsize=8.5, frameon=False)
+    ax.legend(loc="upper left", fontsize=8.5, frameon=False)
 
     # Panel 3 — Avg cost per task
     ax = axes[2]

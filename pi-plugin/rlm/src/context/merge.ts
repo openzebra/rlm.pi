@@ -37,12 +37,19 @@ export function filterContextByPaths(context: unknown, prefixes: readonly string
   for (let i = 0; i < context.length; i++) {
     const entry: unknown = context[i];
     if (!isContextFile(entry)) continue;
+    let matched = false;
     for (let p = 0; p < prefixes.length; p++) {
-      if (!entry.path.startsWith(prefixes[p])) continue;
+      // Path-boundary match: exact file, or a directory prefix ending at a separator.
+      // Bare startsWith would let "src/cont" match "src/context/x.ts" (sibling leak).
+      const prefix = prefixes[p];
+      const bounded = prefix.endsWith("/") ? prefix : `${prefix}/`;
+      if (entry.path !== prefix && !entry.path.startsWith(bounded)) continue;
       hit[p] = true;
-      out[n++] = entry;
-      break;
+      matched = true;
     }
+    // Emit once even when several prefixes matched the same file (exact + its dir),
+    // but every matching prefix still counts as "matched" for the unmatched report.
+    if (matched) out[n++] = entry;
   }
   out.length = n;
   const unmatched = new Array<string>(prefixes.length); // pre-allocated, no .push()

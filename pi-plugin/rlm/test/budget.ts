@@ -96,9 +96,23 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
 {
   const long = "A".repeat(1_000) + "TAIL";
   const cut = truncateMid(long, 200);
-  check("truncateMid: length respected", cut.length <= 200 + 64, String(cut.length));
+  // FINDING-5 fix tightened this from `<= 200 + 64`: exact cap is now guaranteed.
+  check("truncateMid: length respected", cut.length <= 200, String(cut.length));
   check("truncateMid: head+tail survive", cut.startsWith("AAAA") && cut.endsWith("TAIL"));
   check("truncateMid: marker present", cut.includes("[v5 handoff]"));
+
+  // FINDING-5 exact-cap sweep (dedicated): the old code budgeted `half` for the SHORTEST
+  // mark form (N = 1 digit), so a 2+ digit elision count pushed the render past maxChars.
+  for (const cap of [40, 64, 100, 200, 333, 1_000]) {
+    for (const len of [cap + 1, cap + 9, 10_000, 1_000_000]) {
+      const out = truncateMid("x".repeat(len), cap);
+      check(`truncateMid: exact cap len=${len} cap=${cap}`, out.length <= cap, String(out.length));
+    }
+  }
+  const big = truncateMid("y".repeat(10_000), 100); // elided count is 4 digits — the overshoot case
+  check("truncateMid: worst-case 4-digit elision count stays capped", big.length <= 100, String(big.length));
+  check("truncateMid: degenerate cap head-truncates", truncateMid("z".repeat(500), 20).length <= 20);
+  check("truncateMid: passthrough at exact boundary", truncateMid("q".repeat(200), 200).length === 200);
 
   const history: ChatMsg[] = [
     { role: "system", content: "sys" },
