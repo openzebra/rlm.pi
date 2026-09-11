@@ -115,13 +115,13 @@ function testSilentBlockVarsHint() {
 
 function testCollectReplWarnings() {
   const ok: readonly RlmSubcall[] = Object.freeze([
-    { id: "s1", depth: 0, kind: "llm", label: "a", status: "done", startedAt: 0, costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0 },
+    { id: "s1", depth: 0, kind: "llm", label: "a", status: "done", startedAt: 0, tokens: 0, tokensIn: 0, tokensOut: 0 },
   ]);
   check("collectReplWarnings — none when all ok", collectReplWarnings(ok) === undefined);
 
   const mixed: readonly RlmSubcall[] = Object.freeze([
-    { id: "s1", depth: 0, kind: "llm", label: "a", status: "done", startedAt: 0, costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0 },
-    { id: "s2", depth: 0, kind: "llm", label: "b", status: "error", startedAt: 0, costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0 },
+    { id: "s1", depth: 0, kind: "llm", label: "a", status: "done", startedAt: 0, tokens: 0, tokensIn: 0, tokensOut: 0 },
+    { id: "s2", depth: 0, kind: "llm", label: "b", status: "error", startedAt: 0, tokens: 0, tokensIn: 0, tokensOut: 0 },
   ]);
   const w = collectReplWarnings(mixed);
   check("collectReplWarnings — single error is 1/1", w !== undefined && w[0] === "1/1 sub-call(s) failed — results may be incomplete");
@@ -130,7 +130,7 @@ function testCollectReplWarnings() {
   const batch: readonly RlmSubcall[] = Object.freeze([
     {
       id: "s1", depth: 0, kind: "batch", label: "llm_query ×8", status: "error",
-      startedAt: 0, costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0, failedCount: 3, totalCount: 8,
+      startedAt: 0, tokens: 0, tokensIn: 0, tokensOut: 0, failedCount: 3, totalCount: 8,
     },
   ]);
   const bw = collectReplWarnings(batch);

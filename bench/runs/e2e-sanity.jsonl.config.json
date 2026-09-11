@@ -1,0 +1,20 @@
+{
+  "gitRev": "a0f3e08",
+  "startedAt": "2026-09-11T00:13:04.571Z",
+  "model": "openrouter/qwen/qwen3.8-27b",
+  "subModel": "zai/glm-4.7",
+  "suite": "oolong",
+  "limit": 1,
+  "taskIds": null,
+  "oolongMaxCl": 65536,
+  "oolongLimit": 24,
+  "oolongLabels": false,
+  "runs": 1,
+  "maxIterations": 8,
+  "temperature": 0,
+  "skillState": true,
+  "pricing": {
+    "inputPerToken": 4.2e-7,
+    "outputPerToken": 0.000003
+  }
+}

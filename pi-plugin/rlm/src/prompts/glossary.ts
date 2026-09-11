@@ -63,9 +63,11 @@ export const SKILL_RECALL_LINE =
   "Recall more anytime inside repl: `skill_search(query, k=8)` → [{id, text, tags, score}].";
 
 /** R5 (G4, /tmp/ROOT_FULL_SKILLSTATE_PLAN.md): the one-line replacement for assistant prose
- *  older than the keep window — durable facts live in Σ, the full text in the session log. */
+ *  older than the keep window — durable facts live in Σ; the repl sandbox (answers/vars) is
+ *  the model-reachable recovery channel — the session log is host-side only, never re-openable
+ *  by the model, so stubs must not promise it. */
 export const ROOT_TURN_ELIDED_LINE =
-  "… turn elided — durable facts live in Σ; full text in session log";
+  "… turn elided — durable facts live in Σ; your repl sandbox persists: print(answers) / SHOW_VARS() to re-derive";
 
 export function skillStateLines(noteCount: number, body: string): string {
   return [

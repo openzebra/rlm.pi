@@ -7,7 +7,7 @@
  * cache file to force a re-download.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const DATA_DIR = fileURLToPath(new URL("./data/", import.meta.url));
@@ -96,4 +96,53 @@ export async function cachedTasks<T>(
   writeFileSync(file, JSON.stringify(tasks), "utf8");
   console.log(`[data] ${key}: cached ${tasks.length} tasks -> ${file}`);
   return tasks;
+}
+
+/**
+ * Slice a smaller task set out of an already-cached pool (e.g. n18@cl16384 out of the
+ * n24@cl65536 pool) so smoke/ladder runs never re-scan HuggingFace. Deterministic: pick the
+ * MOST INCLUSIVE cached pool (largest cl, tie-break larger n), filter its records by
+ * contextLen ≤ maxContextLen (every cl-capped pool stores each record's own contextLen),
+ * first `rows` of the preserved source order — identical to what a fresh HF scan yields.
+ *
+ * P0 / 附 D.1: the slice fast path must also recognise the LABELED cache family, else a small
+ * labeled run (n<24) silently re-scans HuggingFace. Both spellings the plan writes are
+ * accepted — `oolong_synth_lab_cl<n>_n<rows>` (§P0 cacheKey + the acceptance script's file name)
+ * and `oolong_lab_synth_cl<n>_n<rows>` (附D.1's regex/cacheKey). Neither of the plan's two
+ * literal regexes matches its own sibling name, so this single alternation covers both; the
+ * family guard then makes cross-family hits impossible — the silent reuse of the unlabeled
+ * slice is exactly the trap §P0 names (“为什么必须新 key”).
+ */
+const OOLONG_CACHE_RE = /^oolong_(?:lab_)?synth(?:_lab)?_cl(\d+)_n(\d+)\.json$/;
+
+export function cachedTaskSlice<T>(
+  rows: number,
+  maxContextLen: number,
+  opts?: { readonly labels?: boolean },
+): readonly T[] | undefined {
+  if (!existsSync(DATA_DIR)) return undefined;
+  const wantLabels = opts?.labels === true;
+  let bestName: string | undefined;
+  let bestCl = -1;
+  let bestN = 0;
+  for (const name of readdirSync(DATA_DIR)) {
+    const m = OOLONG_CACHE_RE.exec(name);
+    if (m === null) continue;
+    if (name.includes("lab_") !== wantLabels) continue; // ← 变体必须匹配
+    const cl = Number(m[1]);
+    const n = Number(m[2]);
+    if (cl > bestCl || (cl === bestCl && n > bestN)) {
+      bestCl = cl;
+      bestN = n;
+      bestName = name;
+    }
+  }
+  if (bestName === undefined) return undefined;
+  const parsed: unknown = JSON.parse(readFileSync(`${DATA_DIR}${bestName}`, "utf8"));
+  if (!Array.isArray(parsed)) return undefined;
+  const filtered = (parsed as readonly (T & { contextLen: number })[]).filter(
+    (r) => r.contextLen <= maxContextLen,
+  );
+  console.log(`[data] slicing ${Math.min(rows, filtered.length)}/${filtered.length} tasks (cl≤${maxContextLen}${wantLabels ? ", labels" : ""}) from cached ${bestName}`);
+  return filtered.slice(0, rows);
 }

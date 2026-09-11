@@ -31,7 +31,7 @@ export interface ElideOptions {
   readonly elideChars: number;
 }
 
-const ELIDE_MARK = "chars elided — full result in session log";
+const ELIDE_MARK = "chars elided — repl sandbox persists: print(answers[k]) or re-run repl to re-derive";
 
 /**
  * WS-3a: elide stale turns. The newest `keepTurns` assistant turns and the final user message

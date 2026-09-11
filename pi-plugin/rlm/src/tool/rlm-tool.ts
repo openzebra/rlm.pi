@@ -51,7 +51,7 @@ export function createRlmTool(controller: RlmController, runRegistry?: RunRegist
         rootPrompt: "",
         turns: { current: 0, max: 0 },
         subcalls: [],
-        totals: { costUsd: 0, tokens: 0, tokensIn: 0, tokensOut: 0 },
+        totals: { tokens: 0, tokensIn: 0, tokensOut: 0 },
       }));
       if (!validation.ok) return validation.error;
       const params = validation.value;

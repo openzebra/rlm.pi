@@ -20,7 +20,7 @@ interface RunRegistration {
   readonly label: string;
   readonly emitter: RlmEmitter;
   readonly subcalls: () => readonly RlmSubcall[];
-  readonly totals: () => { readonly costUsd: number; readonly tokens: number };
+  readonly totals: () => { readonly tokens: number };
   /** Live root state; defaults: running, no phase, no turns. */
   readonly rootStatus?: () => RlmRunStatus;
   readonly rootPhase?: () => SubcallPhase | undefined;
@@ -40,7 +40,7 @@ export interface RunEntry {
   readonly label: string;
   readonly timeline: TimelineStore;
   readonly subcalls: () => readonly RlmSubcall[];
-  readonly totals: () => { readonly costUsd: number; readonly tokens: number };
+  readonly totals: () => { readonly tokens: number };
   readonly rootStatus: () => RlmRunStatus;
   readonly rootPhase: () => SubcallPhase | undefined;
   readonly turns: () => { readonly current: number; readonly max: number };

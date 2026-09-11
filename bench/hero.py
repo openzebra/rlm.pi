@@ -31,10 +31,14 @@ ROOT = os.getcwd()
 RUNS = os.path.join(ROOT, "bench", "runs")
 OUT_DEFAULT = os.path.join(ROOT, "assets", "hero.png")
 
-BENCH_LINE = "OOLONG (oolong-synth)  ·  24 tasks × 3 runs  ·  context ≤ 65,536 tok  ·  max 16 iterations  ·  temp 0"
+BENCH_LINE = "OOLONG (oolong-synth)  ·  context ≤ 65,536 tok  ·  temp 0  ·  newest full journal per model"
 
 # Canonical model set — anything else in the journals must never chart.
-CANONICAL_MODELS = frozenset({"qwen3.8-27b", "gemma-3-27b-it", "mercury-2.5"})
+CANONICAL_MODELS = frozenset({"qwen3.8-27b", "mercury-2.5", "glm-4.7"})
+
+# A journal with fewer scored rows is a smoke/sanity probe, not a sample —
+# it must never hijack a model's bar via mtime ordering.
+MIN_CHART_ROWS = 6
 
 # Model display order palette: green = flagship, red/coral = challengers.
 PALETTE = ["#2e7d32", "#c62828", "#ef6c00", "#6a1b9a", "#00838f"]
@@ -44,7 +48,7 @@ SUBTITLE = "Pi coding agent, harness-controlled runs"
 
 
 def short_model(model: str) -> str:
-    """'openrouter/google/gemma-3-27b-it' -> 'gemma-3-27b-it'."""
+    """'openrouter/qwen/qwen3.8-27b' -> 'qwen3.8-27b'."""
     return model.rstrip("/").split("/")[-1]
 
 
@@ -73,12 +77,17 @@ def load_rows():
 
 
 def aggregate(rows):
-    """Group by model; newest journal per model; canonical trio only."""
-    newest: dict = {}
+    """Group by model; newest journal (>= MIN_CHART_ROWS rows) per model; canonical trio only."""
+    counts: dict = {}
     for r in rows:
-        m = r["model"]
-        if m not in newest or r["_mtime"] > newest[m]:
-            newest[m] = r["_mtime"]
+        key = (r["model"], r["_mtime"])
+        counts[key] = counts.get(key, 0) + 1
+    newest: dict = {}
+    for (m, mt), n in counts.items():
+        if n < MIN_CHART_ROWS:
+            continue
+        if m not in newest or mt > newest[m]:
+            newest[m] = mt
     # Stray vendors / typos must never chart — hard canonical whitelist.
     newest = {m: mt for m, mt in newest.items()
               if short_model(m) in CANONICAL_MODELS}
@@ -164,7 +173,7 @@ def render(stats, out_path: str) -> None:
         ax.grid(axis="y", color="#eceff1", linewidth=0.8)
 
     fig.text(0.5, 0.035,
-             "canonical set: qwen3.8-27b · gemma-3-27b-it · mercury-2.5   ·   n = scored rows (qwen3.8-27b run aborted early: n=6)",
+             "canonical set: qwen3.8-27b · mercury-2.5 · zai/glm-4.7   ·   n = scored rows   ·   glm-4.7 unpriced (cost $0)",
              ha="center", fontsize=8, color="#90a4ae")
     fig.text(0.5, 0.012,
              "rows: bench/runs/*.jsonl (latest journal per model) · regenerate: python3 bench/hero.py",

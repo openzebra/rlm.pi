@@ -197,11 +197,9 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   }
   if (typeof r.rootSampling === "object" && r.rootSampling !== null) {
     const rs = r.rootSampling as Record<string, unknown>;
-    const rootSampling: { maxTokens?: number; temperature?: number; reasoning?: ThinkingLevel } = {};
+    const rootSampling: { maxTokens?: number; reasoning?: ThinkingLevel } = {};
     const rsMaxTokens = validateNumber(rs.maxTokens, 1);
     if (rsMaxTokens !== undefined) rootSampling.maxTokens = rsMaxTokens;
-    const rsTemperature = validateNumber(rs.temperature, 0);
-    if (rsTemperature !== undefined) rootSampling.temperature = rsTemperature;
     const rsReasoning = validateThinkingLevel(rs.reasoning);
     if (rsReasoning !== undefined) rootSampling.reasoning = rsReasoning;
     out.rootSampling = Object.freeze(rootSampling);

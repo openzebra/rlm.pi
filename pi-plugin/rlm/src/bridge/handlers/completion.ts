@@ -83,6 +83,9 @@ export async function complete1(
         onThrottlePark: hooks?.onThrottlePark,
         onThrottleRelease: hooks?.onThrottleRelease,
         signal: deps.signal,
+        // Long-context providers (zai bigmodel TTFB ~1 min per 10k ctx chars) need the
+        // per-request wall cap raised from the pi-ai default.
+        timeoutMs: config.requestTimeoutMs,
       }),
     );
     inv.limits.addUsage(res.usage);

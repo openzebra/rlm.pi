@@ -19,9 +19,10 @@ import type { RlmConfig, RunRlm, Sampling } from "../pi-plugin/rlm/src/core/type
 type BenchModel = EngineDeps["model"];
 type BenchRegistry = EngineDeps["registry"];
 
-/** r3 single bench model: Qwen3.8 27B hybrid thinker — thinking enabled per-run via the
- *  `--reasoning` flag (ROOT/RLM agent only; sub-LLM never gets reasoning), 1M-token context.
- *  Verified to drive the repl protocol AND use llm_query delegation when grep misses. */
+/** r3 single bench model: Qwen3.8 27B, 1M-token context. Agent taxonomy (user, 2025-09-10):
+ *  root (Pi dialog) thinks; the RLM root thinks (benchSampling pins an explicit level);
+ *  llm sub-workers never think — pi-ai turns a missing level into each dialect's explicit
+ *  no-thinking directive. Verified to drive the repl protocol AND use llm_query delegation. */
 export const DEFAULT_MODEL_REF = "openrouter/qwen/qwen3.8-27b";
 
 /** Advertised context window for the default model (qwen3.8-27b: 1M). Override via
@@ -31,36 +32,66 @@ const BENCH_CONTEXT_WINDOW = Number(process.env.RLM_BENCH_CONTEXT_WINDOW ?? 1_00
 
 /** Roomier than the interactive default: a bench turn may need several repl blocks.
  *  (Unfinished repl block → 0 score.) */
-// 16, not 12: plain (no-thinking) oolong runs routinely need >12 REPL turns and die mid-loop
-// (unfinished repl block → 0 score). Historical it16 pools score 24/24 where it12 capped at
-// ~70-87%. The "skill.state regression" on qwen3.8 was this cap, not a skill.state regression.
-const BENCH_MAX_ITERATIONS = 16;
+// 200, not 16: the 16-cap all-failed oolong mid-retrieval (median iterations equaled the cap
+// even for PASSED runs, and the model saw "Turn N/16" every turn and rushed). 200 = the old
+// interactive default; still overridable per-run via bench/run.ts --max-iterations <N>.
+const BENCH_MAX_ITERATIONS = 200;
 
 export interface BenchTarget {
   readonly ref: string;
   readonly provider: string;
   readonly id: string;
   readonly contextWindow: number;
+  /** OpenAI-compatible chat-completions base URL (no trailing slash). */
+  readonly baseUrl: string;
 }
 
-/** Accepts "openrouter/<id>" (project ref convention) or a bare "<id>"; openrouter implied. */
+/** Z.ai (bigmodel.cn) free-tier models speak the OpenAI protocol at /api/paas/v4. */
+// Coding-plan endpoint is the only channel where glm-4.7 avoids 429 (plan §0 probe:
+// global/china plain channels are balance-gated for non-flash models, 2025-09-09).
+const ZAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+
+/** Accepts "openrouter/<id>" / "zai/<id>" (project ref convention) or a bare "<id>";
+ *  openrouter implied for bare ids. */
 export function resolveTarget(raw: string): BenchTarget {
   const id = raw.trim().replace(/^openrouter\//, "");
+  if (id !== raw.trim()) {
+    return Object.freeze({
+      ref: `openrouter/${id}`,
+      provider: "openrouter",
+      id,
+      contextWindow: BENCH_CONTEXT_WINDOW,
+      baseUrl: OPENROUTER_BASE_URL,
+    });
+  }
+  const zaiId = raw.trim().replace(/^zai\//, "");
+  if (zaiId !== raw.trim()) {
+    return Object.freeze({
+      ref: `zai/${zaiId}`,
+      provider: "zai",
+      id: zaiId,
+      contextWindow: BENCH_CONTEXT_WINDOW,
+      baseUrl: ZAI_BASE_URL,
+    });
+  }
   return Object.freeze({
     ref: `openrouter/${id}`,
     provider: "openrouter",
     id,
     contextWindow: BENCH_CONTEXT_WINDOW,
+    baseUrl: OPENROUTER_BASE_URL,
   });
 }
 
 /** The ONLY key transport is the environment. Fail fast with an actionable message. */
-export function requireApiKey(): string {
-  const key = process.env.OPENROUTER_API_KEY;
+export function requireApiKey(provider = "openrouter"): string {
+  const envVar = provider === "zai" ? "ZAI_API_KEY" : "OPENROUTER_API_KEY";
+  const key = process.env[envVar];
   if (!key || key.trim().length === 0) {
     throw new Error(
-      "OPENROUTER_API_KEY is not set. Export it first — env vars are the only key transport:\n" +
-        "  export OPENROUTER_API_KEY=sk-or-... && bun run bench/run.ts",
+      `${envVar} is not set. Export it first — env vars are the only key transport:\n` +
+        `  export ${envVar}=... && bun run bench/run.ts`,
     );
   }
   return key;
@@ -95,13 +126,13 @@ export async function fetchPricing(modelId: string): Promise<BenchPricing> {
 }
 
 export interface BenchRunOpts {
-  /** Default BENCH_MAX_ITERATIONS (16). */
+  /** Override the default 200-turn budget with a finite cap (A/B arm). */
   readonly maxIterations?: number;
+  /** Model ref for the llm tier (llm_query leaves + compaction summarizer); default = main.
+   *  Agent taxonomy: root/rlm think, the llm worker never does (dialect-level directive). */
+  readonly subModel?: string;
   /** Default 0 — bench runs stay deterministic where the provider allows it. */
   readonly temperature?: number;
-  /** ThinkingLevel for the ROOT (RLM agent) only; omit = no thinking. Sub-LLM (subSampling)
-   *  NEVER gets reasoning — the worker model has none. */
-  readonly reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   /** Real USD-per-token prices (see fetchPricing); default zeros (only listings run without). */
   readonly pricing?: BenchPricing;
   /** Hydrated SkillState store — without it the ON arm's SkillState features are inert
@@ -111,53 +142,64 @@ export interface BenchRunOpts {
 
 /**
  * The bench's sampling assembly, pure and exported for the bench↔engine parity test
- * (test/phase-bench-parity.ts). makeRun freezes these straight into RlmConfig — reasoning
- * rides INSIDE rootSampling on purpose: the engine's merge rule ({ reasoning: smartReasoning,
- * ...rootSampling }) makes rootSampling.reasoning win, so the bench's thinking flag survives
- * the engine hop instead of being overridden by an interactive default.
+ * (test/phase-bench-parity.ts). makeRun freezes these straight into RlmConfig.
+ *
+ * Agent taxonomy (user, 2025-09-10): root = Pi dialog orchestrator (thinks); rlm = engine
+ * root, calls rlm_query/llm_query and THINKS (explicit effort pinned here); llm = weak
+ * sub-worker, thinking DISABLED — no reasoning field on subSampling, so pi-ai's dialect
+ * layer emits each provider's explicit off-directive. No per-provider branches.
  */
 export function benchSampling(opts?: BenchRunOpts): { readonly root: Sampling; readonly sub: Sampling } {
   const temperature = opts?.temperature ?? 0;
   return {
+    // rlm root: thinking ON at the user's standing cross-dialect effort. Reasoning tokens
+    // share the completion budget, hence the doubled maxTokens (8192, not 4096).
     root: Object.freeze({
-      // Reasoning tokens share the completion budget, so the root budget doubles when
-      // thinking is on. Sub-sampling NEVER carries reasoning (worker model has none).
-      maxTokens: opts?.reasoning !== undefined ? 8192 : 4096,
+      maxTokens: 8192,
       temperature,
-      ...(opts?.reasoning !== undefined ? { reasoning: opts.reasoning } : {}),
+      reasoning: "medium",
     }),
+    // llm worker: no reasoning field — the dialect layer emits explicit disabled.
     sub: Object.freeze({ maxTokens: 2048, temperature }),
   };
 }
 
 export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts): RunRlm {
-  const model = {
-    id: target.id,
-    provider: target.provider,
-    api: "openai-completions" as const,
-    name: target.id,
-    baseUrl: "https://openrouter.ai/api/v1",
-    reasoning: opts?.reasoning !== undefined,
-    input: ["text"] as const,
-    // pi-ai's calculateCost expects rates in USD per MILLION tokens; OpenRouter prices are
-    // USD per token — convert here, at the only place units meet (×1e6, not ÷).
-    cost: {
-      input: (opts?.pricing?.inputPerToken ?? 0) * 1_000_000,
-      output: (opts?.pricing?.outputPerToken ?? 0) * 1_000_000,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    contextWindow: target.contextWindow,
-    maxTokens: 8192,
-  } as unknown as BenchModel;
+  // Agent taxonomy (user, 2025-09-10): root/rlm — thinking orchestrator; llm — weak sub-worker
+  // with thinking DISABLED. Same construction shape for both (one makeModel, no branches);
+  // only the id (and thus the dialect-level thinking directive) differs.
+  const makeModel = (id: string): BenchModel =>
+    ({
+      id,
+      provider: target.provider,
+      api: "openai-completions" as const,
+      name: id,
+      baseUrl: target.baseUrl,
+      // Capability flag, not a switch: lets pi-ai translate "no reasoningEffort" into the
+      // provider dialect's EXPLICIT no-thinking directive (see benchSampling doctrine note).
+      reasoning: true,
+      input: ["text"] as const,
+      // pi-ai's calculateCost expects rates in USD per MILLION tokens; OpenRouter prices are
+      // USD per token — convert here, at the only place units meet (×1e6, not ÷).
+      cost: {
+        input: (opts?.pricing?.inputPerToken ?? 0) * 1_000_000,
+        output: (opts?.pricing?.outputPerToken ?? 0) * 1_000_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      contextWindow: target.contextWindow,
+      maxTokens: 8192,
+    }) as unknown as BenchModel;
+  const model = makeModel(target.id);
+  const llmModel = makeModel(opts?.subModel ?? target.id);
 
   // pi-ai receives auth through the registry (modelComplete → getApiKeyAndHeaders); the key
   // stays in this closure and is never persisted anywhere.
   const registry = {
     getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey, headers: {} }),
     find: () => undefined,
-    getAvailable: () => [model],
-    getAll: () => [model],
+    getAvailable: () => [model, llmModel],
+    getAll: () => [model, llmModel],
   } as unknown as BenchRegistry;
 
   const config: RlmConfig = {
@@ -174,7 +216,7 @@ export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts
     // contextWindow × budgetShare (≈33k tokens on a 131k window) — below the raw context
     // alone, making big tasks structurally unwinnable. The cascade is its own feature with
     // unit tests (test/budget.ts); the bench measures capability, so it runs without it.
-    // Runs stay bounded by maxIterations + maxErrors.
+    // Runs stay bounded by maxIterations (200) + maxErrors.
     enableTokenBudget: false,
     // A/B toggles: RLM_BENCH_NO_RUNSTATE=1 / RLM_BENCH_NO_SKILLSTATE=1 revert the
     // corresponding integration (Σ-state compaction / persistent skill grounding) to the
@@ -189,7 +231,7 @@ export function makeRun(target: BenchTarget, apiKey: string, opts?: BenchRunOpts
 
   return createEngine({
     model,
-    llmModel: model,
+    llmModel,
     registry,
     config,
     emitter: new RlmEmitter(),

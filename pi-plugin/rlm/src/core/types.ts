@@ -13,7 +13,8 @@ export interface RlmConfig {
   readonly enabled: boolean;
   /** Max recursion depth. depth >= maxDepth ⇒ rlm_query falls back to a plain llm_query. */
   readonly maxDepth: number;
-  /** Max turns before the engine must finalize. */
+  /** Max turns before the engine must finalize. Deliberately large — runs end on FINAL
+   *  answer, errors, or wall-clock long before this bites. */
   readonly maxIterations: number;
   /** Per-`repl`-block wall-clock timeout inside the worker (seconds).
    *  v5 doctrine: content limits are the token budget's job — this is a HANG backstop only. */
@@ -181,10 +182,14 @@ export interface RlmInput {
 export interface RlmResult {
   readonly answer: string;
   readonly iterations: number;
-  readonly costUsd: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly durationMs: number;
+  /** Last non-empty repl stdout of the run (capped, P2 §3.4). The engine itself never reads
+   *  it: a run that ends without `answer[...]` (no final frame) would otherwise score as an
+   *  empty submission even though the winning value was printed. The bench/grader recovers
+   *  that value from here instead of re-running the whole task. */
+  readonly lastStdout: string;
 }
 
 /** A function that runs an RLM to completion — used to wire recursion (rlm_query). */

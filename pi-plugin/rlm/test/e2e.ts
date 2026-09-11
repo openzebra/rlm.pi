@@ -144,6 +144,7 @@ writeFileSync(
     config: {
       enabled: true,
       maxDepth: 2,
+  requestTimeoutMs: 900_000,
       maxConcurrentSubcalls: 16,
       maxConcurrentChildren: 6,
     },
@@ -220,7 +221,6 @@ interface Stats {
   batchesDone: number;
   spawned: number;
   awaited: number;
-  costUsd: number;
   tokens: number;
   byKind: { llm: number; batch: number; rlm: number };
 }
@@ -234,7 +234,6 @@ const stats: Stats = {
   batchesDone: 0,
   spawned: 0,
   awaited: 0,
-  costUsd: 0,
   tokens: 0,
   byKind: { llm: 0, batch: 0, rlm: 0 },
 };
@@ -428,9 +427,9 @@ function show(v: unknown): string {
   if (kind === "subcall.updated") {
     const status = asString(ev.status);
     const id = asString(ev.id);
-    const cost = typeof ev.costUsd === "number" ? ev.costUsd : 0;
+
     const tokens = typeof ev.tokens === "number" ? ev.tokens : 0;
-    stats.costUsd += cost;
+
     stats.tokens += tokens;
     if (status === "done") {
       stats.subcallsDone += 1;
@@ -447,8 +446,8 @@ function show(v: unknown): string {
       emit(
         "rlm",
         `  ↳ ${status.padEnd(5)} [${id}]` +
-          (cost > 0 || tokens > 0
-            ? `  $${cost.toFixed(4)}  ${tokens} tok`
+          (tokens > 0
+            ? `  ${tokens} tok`
             : "") +
           (ev.detail ? `  ${asString(ev.detail).slice(0, 80)}` : ""),
       );
@@ -619,7 +618,7 @@ try {
   let batchesDone = 0;
   let done = 0;
   let err = 0;
-  let cost = 0;
+
   let tokens = 0;
   let execs = 0;
   let raised = 0;
@@ -655,7 +654,7 @@ try {
           if (total > 1 || kindById.get(id) === "batch") batchesDone += 1;
         }
         if (e.status === "error") err += 1;
-        if (typeof e.costUsd === "number") cost += e.costUsd;
+
         if (typeof e.tokens === "number") tokens += e.tokens;
       }
     } catch {
@@ -671,7 +670,7 @@ try {
   stats.batchesDone = Math.max(stats.batchesDone, batchesDone);
   stats.spawned = Math.max(stats.spawned, spawned);
   stats.awaited = Math.max(stats.awaited, awaited);
-  stats.costUsd = Math.max(stats.costUsd, cost);
+
   stats.tokens = Math.max(stats.tokens, tokens);
 } catch {
   /* ignore */
@@ -720,7 +719,7 @@ console.log(`
    batches         ${stats.byKind.batch} (max ${stats.maxBatchSize} prompts)
    rlm_query       ${stats.byKind.rlm}
  spawned (bg)      ${stats.spawned} started / ${stats.awaited} awaited
- cost              $${stats.costUsd.toFixed(4)}   tokens ${stats.tokens}
+ tokens           ${stats.tokens}
  wall time         ${((Date.now() - t0) / 1000).toFixed(1)}s
  artifacts         ${runDir}
 ───────────────────────────────────────────`);

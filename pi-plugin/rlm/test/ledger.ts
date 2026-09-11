@@ -154,12 +154,12 @@ import { errorMessage } from "../src/util/errors.ts";
     gates: createSubcallGates(4, 2),
     registry: MOCK_REGISTRY,
     getLlmModel: () => MOCK_MODEL,
-    getConfig: () => config,
+    getConfig: () => ({ ...config, requestTimeoutMs: 900_000 }),
     getModel: () => MOCK_MODEL,
     runChild: async (input): Promise<RlmResult> => {
       childRuns++;
       await new Promise((r) => setTimeout(r, 40));
-      return { answer: `child-${input.rootPrompt.slice(0, 6)}`, iterations: 1, costUsd: 0, inputTokens: 5, outputTokens: 5, durationMs: 1 };
+      return { answer: `child-${input.rootPrompt.slice(0, 6)}`, iterations: 1, inputTokens: 5, outputTokens: 5, durationMs: 1, lastStdout: "" };
     },
     ledger,
   };
@@ -219,7 +219,7 @@ import { errorMessage } from "../src/util/errors.ts";
     getLlmModel: () => {
       throw new Error("R4 test: no leaf model");
     },
-    getConfig: () => ({ maxPromptChars: 100_000, maxDepth: 4, enableLedger: true, rlmBudget: 1 }),
+    getConfig: () => ({ maxPromptChars: 100_000, maxDepth: 4, enableLedger: true, rlmBudget: 1, requestTimeoutMs: 900_000 }),
     getModel: () => MOCK_MODEL,
     runChild: async (): Promise<RlmResult> => {
       throw new Error("R4: demoted rlm_query must not spawn a child engine");
@@ -344,10 +344,10 @@ import { errorMessage } from "../src/util/errors.ts";
     gates: createSubcallGates(4, 2),
     registry: MOCK_REGISTRY,
     getLlmModel: () => MOCK_MODEL,
-    getConfig: () => ({ maxPromptChars: 100_000, maxDepth: 4, enableLedger: true }),
+    getConfig: () => ({ maxPromptChars: 100_000, maxDepth: 4, enableLedger: true, requestTimeoutMs: 900_000 }),
     getModel: () => MOCK_MODEL,
     runChild: async (input): Promise<RlmResult> => ({
-      answer: `ran:${input.rootPrompt.slice(0, 8)}`, iterations: 1, costUsd: 0, inputTokens: 1, outputTokens: 1, durationMs: 1,
+      answer: `ran:${input.rootPrompt.slice(0, 8)}`, iterations: 1, inputTokens: 1, outputTokens: 1, durationMs: 1, lastStdout: "",
     }),
     ledger,
   };

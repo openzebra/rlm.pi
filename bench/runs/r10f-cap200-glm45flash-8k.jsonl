@@ -1,0 +1,2 @@
+{"suite":"oolong","taskId":"oolong_0","model":"zai/glm-4.5-flash","run":1,"correct":true,"recall":1,"latencyMs":486523,"inputTokens":9153,"outputTokens":1537,"iterations":14,"costUsd":0,"answer":"Label: incorrect","gold":"\"['incorrect']\""}
+{"suite":"oolong","taskId":"oolong_50","model":"zai/glm-4.5-flash","run":1,"correct":true,"recall":1,"latencyMs":564914,"inputTokens":19748,"outputTokens":10255,"iterations":18,"costUsd":0,"answer":"Label: incorrect","gold":"\"['incorrect']\""}

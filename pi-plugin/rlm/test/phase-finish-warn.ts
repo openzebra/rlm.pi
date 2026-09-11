@@ -31,7 +31,7 @@ const handlers = createSubcallHandlers(
     getLlmModel: () => {
       throw new Error("should not complete");
     },
-    getConfig: () => ({ maxPromptChars: 10_000, maxDepth: 1 }),
+    getConfig: () => ({ maxPromptChars: 10_000, maxDepth: 1, requestTimeoutMs: 900_000 }),
   },
   registry,
 );

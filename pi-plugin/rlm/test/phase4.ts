@@ -68,7 +68,7 @@ function rlmOnlyHandlers(opts: {
   /** Stands in for the parent's live context; omit to test the unwired fallback. */
   childContext?: () => unknown;
   remaining?: () => { readonly timeoutMs?: number };
-  onChildUsage?: (costUsd: number, inputTokens: number, outputTokens: number) => void;
+  onChildUsage?: (inputTokens: number, outputTokens: number) => void;
 }): SubcallHandlers {
   const emitter = new RlmEmitter();
   const limits = limitsFromRemaining(opts.remaining);
@@ -79,7 +79,7 @@ function rlmOnlyHandlers(opts: {
     getLlmModel: () => {
       throw new Error("leaf completion must not be reached in the recursion tests");
     },
-    getConfig: () => ({ maxPromptChars: Number.MAX_SAFE_INTEGER, maxDepth: opts.maxDepth }),
+    getConfig: () => ({ maxPromptChars: Number.MAX_SAFE_INTEGER, maxDepth: opts.maxDepth, requestTimeoutMs: 900_000 }),
     runChild: opts.run,
     getChildContext: opts.childContext,
     degrade: opts.degrade,
@@ -99,7 +99,7 @@ async function testRecursionBridge(): Promise<boolean> {
   const calls: string[] = [];
   const run: RunRlm = async (input) => {
     calls.push(`run@${input.depth}`);
-    return { answer: `child(${String(input.context).slice(0, 8)})`, iterations: 1, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 0 };
+    return { answer: `child(${String(input.context).slice(0, 8)})`, iterations: 1, inputTokens: 0, outputTokens: 0, durationMs: 0, lastStdout: "" };
   };
   const handlers = rlmOnlyHandlers({
     run,
@@ -253,32 +253,30 @@ async function testChildEngineSeesInheritedContext(): Promise<boolean> {
   return pass;
 }
 
-/** Token-free: prove recursive child cost is debited from the parent's guard. */
-async function testChildCostPropagation(): Promise<boolean> {
+/** Child token debit: recursive rlm children debit the parent guard. */
+async function testChildTokenDebit(): Promise<boolean> {
   let pass = true;
   const log = (n: string, ok: boolean, extra = "") => {
     console.log(`${ok ? "✓" : "✗"} ${n}${extra ? `  — ${extra}` : ""}`);
     if (!ok) pass = false;
   };
 
-  let debitedCost = 0;
   let debitedTokens = 0;
   const run: RunRlm = async (input) => {
     return {
       answer: `child(${String(input.context).slice(0, 8)})`,
       iterations: 1,
-      costUsd: 0.10,
       inputTokens: 500,
       outputTokens: 200,
       durationMs: 0,
+      lastStdout: "",
     };
   };
   const handlers = rlmOnlyHandlers({
     run,
     degrade: async () => "",
     maxDepth: 3,
-    onChildUsage: (costUsd, inputTokens, outputTokens) => {
-      debitedCost += costUsd;
+    onChildUsage: (inputTokens, outputTokens) => {
       debitedTokens += inputTokens + outputTokens;
     },
   });
@@ -287,11 +285,6 @@ async function testChildCostPropagation(): Promise<boolean> {
   await awaitText(handlers, await handlers.rlmQuery("alpha", 0, ATTACHED));
   await awaitText(handlers, await handlers.rlmQuery("beta", 0, ATTACHED));
 
-  log(
-    "R1b: child cost debited from parent after each rlm_query",
-    Math.abs(debitedCost - 0.20) < 1e-9,
-    `$${debitedCost.toFixed(4)}`,
-  );
   log(
     "R1b: child tokens debited from parent",
     debitedTokens === 1400,
@@ -312,7 +305,7 @@ async function testPreSpawnGuard(): Promise<boolean> {
   let spawnCount = 0;
   const run: RunRlm = async () => {
     spawnCount++;
-    return { answer: "ok", iterations: 1, costUsd: 0, inputTokens: 0, outputTokens: 0, durationMs: 0 };
+    return { answer: "ok", iterations: 1, inputTokens: 0, outputTokens: 0, durationMs: 0, lastStdout: "" };
   };
   const degrade: Degrade = async () => "";
 
@@ -448,8 +441,8 @@ async function main() {
   const childEngineOk = await testChildEngineSeesInheritedContext();
   if (!childEngineOk) process.exit(1);
 
-  const costOk = await testChildCostPropagation();
-  if (!costOk) process.exit(1);
+  const tokensOk = await testChildTokenDebit();
+  if (!tokensOk) process.exit(1);
 
   const guardOk = await testPreSpawnGuard();
   if (!guardOk) process.exit(1);
@@ -477,7 +470,7 @@ async function main() {
       gates: createSubcallGates(2),
       registry,
       getLlmModel: () => fallbackModel,
-      getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 0 }),
+      getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 2, requestTimeoutMs: 900_000 }),
     });
     const guardedOut = await awaitText(
       guardedLlm,

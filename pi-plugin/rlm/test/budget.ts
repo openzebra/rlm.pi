@@ -38,18 +38,20 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
 
 {
   const b1M = resolveBudget(1_000_000, cfg());
-  check("cap: 1M ctx → absolute ceiling 256k", b1M.cap === 256_000, String(b1M.cap));
-  check("cap: soft = 80% → 204.8k", b1M.soft === 204_800, String(b1M.soft));
+  check("cap: 1M ctx ≤ ceiling → unbounded (LO 2025-09-10)", b1M.cap === Number.MAX_SAFE_INTEGER, String(b1M.cap));
   const b32k = resolveBudget(32_000, cfg());
-  check("cap: 32k window ≤ ceiling → unbounded (rule does not apply)", b32k.cap === Number.MAX_SAFE_INTEGER, String(b32k.cap));
+  check("cap: 32k window ≤ ceiling → unbounded", b32k.cap === Number.MAX_SAFE_INTEGER, String(b32k.cap));
   const b250k = resolveBudget(250_000, cfg());
   check("cap: 250k ctx (< ceiling) → unbounded", b250k.cap === Number.MAX_SAFE_INTEGER, String(b250k.cap));
   const b249k = resolveBudget(249_999, cfg());
   check("cap: just under ceiling → unbounded", b249k.cap === Number.MAX_SAFE_INTEGER, String(b249k.cap));
   const b300k = resolveBudget(300_000, cfg());
-  check("cap: 300k ctx → floored to ceiling 256k", b300k.cap === 256_000, String(b300k.cap));
+  check("cap: 300k ctx (< 1M ceiling) → unbounded", b300k.cap === Number.MAX_SAFE_INTEGER, String(b300k.cap));
+  const bOver = resolveBudget(2_000_000, cfg());
+  check("cap: 2M ctx, share 0.25×2M=500k → floored UP to 1M ceiling", bOver.cap === 1_000_000, String(bOver.cap));
+  check("cap: soft = 80% of 1M → 800k", bOver.soft === 800_000, String(bOver.soft));
 
-  const clipped = resolveBudget(1_000_000, cfg({ budgetTaskCap: 50_000 }));
+  const clipped = resolveBudget(2_000_000, cfg({ budgetTaskCap: 50_000 }));
   check("cap: budgetTaskCap clips share cap", clipped.cap === 50_000, String(clipped.cap));
 
   const noCtx = resolveBudget(undefined, cfg());
@@ -141,11 +143,58 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
   const out = elideOldToolPayloads(history);
   check("G1: system untouched", out[0].content === "sys prompt");
   check("G1: tail user message untouched", out[out.length - 1].content.includes("keep-me-verbatim"));
-  const elided = out.filter((m) => m.content.includes("[elided v5-G1]"));
+  const elided = out.filter((m) => m.content.includes("[elided v5-G1"));
   check("G1: old payloads elided", elided.length >= 1, String(elided.length));
   check("G1: elided size bounded", elided.every((m) => m.content.length <= 1_600));
   const short = elideOldToolPayloads([mk("system", "s"), mk("user", "tiny"), mk("assistant", "a"), mk("user", "tiny2")]);
   check("G1: short history untouched (same ref)", short.length === 4 && !short.some((m) => m.content.includes("[elided")));
+
+  // ── P3.2 whitelist (plan §3.4): nothing the answer depends on may be elided ──
+  const withAnswer: ChatMsg[] = [
+    mk("system", "sys"),
+    mk("user", "Turn 0/30:"),
+    mk("assistant", "turn a"),
+    mk("user", "REPL stdout:\n" + "z".repeat(5_000)),
+    mk("assistant", "turn b"),
+    mk("user", "REPL stdout:\nanswer['content'] = 'sparse'\n" + "w".repeat(5_000)),
+    mk("assistant", "turn c"),
+    mk("user", "REPL stdout:\n" + "v".repeat(5_000)),
+    mk("assistant", "turn d"),
+    mk("user", "REPL stdout:\ntail"),
+  ];
+  const outA = elideOldToolPayloads(withAnswer);
+  const answerMsg = outA.find((m) => m.content.includes("answer['content'] = 'sparse'"));
+  check("P3.2: answer frame kept verbatim", answerMsg !== undefined && !answerMsg.content.includes("[elided"));
+  check("P3.2: frame still elided elsewhere", outA.some((m) => m.content.includes("[elided v5-G1")));
+
+  const h = (n: number): ChatMsg[] => [
+    mk("system", "sys"),
+    mk("user", "Turn 0/30:"),
+    mk("assistant", "count them"),
+    mk("user", "REPL stdout:\ncounter_a = 875\n" + "p".repeat(5_000)),
+    mk("assistant", "looks high"),
+    mk("user", "Turn " + n + "/30:\n"),
+    mk("assistant", "final"),
+    mk("user", "REPL stdout:\ntail"),
+  ];
+  const outRef = elideOldToolPayloads(h(3));
+  check("P3.2: payload a later turn re-reads survives", outRef.some((m) => m.content.includes("counter_a = 875")));
+
+  const dup: ChatMsg[] = [
+    mk("system", "sys"),
+    mk("user", "Turn 0/30:"),
+    mk("assistant", "t1"),
+    mk("user", "REPL stdout:\n" + "q".repeat(5_000)),
+    mk("assistant", "t2"),
+    mk("user", "REPL stdout:\n" + "q".repeat(5_000)),
+    mk("assistant", "t3"),
+    mk("user", "REPL stdout:\nnothing new here\n" + "r".repeat(5_000)),
+    mk("assistant", "t4"),
+    mk("user", "REPL stdout:\ntail"),
+  ];
+  const outDup = elideOldToolPayloads(dup);
+  check("P3.2: duplicate payload collapsed", outDup.some((m) => m.content.includes("[dup v5-G1")));
+  check("P3.2: unique payload keeps first copy", outDup.some((m) => m.content.includes("q".repeat(100))));
 }
 
 // ── ModelContextRegistry ─────────────────────────────────────────────────────────

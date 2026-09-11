@@ -38,8 +38,6 @@ export interface SubcallUpdatedEvent {
   readonly args?: string;
   readonly resultPreview?: string;
   /** Delta — additive on both the subcall and running totals. */
-  readonly costUsd?: number;
-  /** Delta — additive on both the subcall and running totals. */
   readonly tokens?: number;
   /** Deltas for the in/out split shown in the tree (input / output). Additive like tokens. */
   readonly tokensIn?: number;
@@ -56,7 +54,6 @@ export interface TurnEvent {
 }
 
 export interface RootUsageEvent {
-  readonly costUsd: number;
   readonly tokens: number;
   readonly tokensIn?: number;
   readonly tokensOut?: number;
@@ -108,7 +105,7 @@ export class RlmEmitter {
     return id;
   }
 
-  /** Update an existing sub-call. All fields are partial. costUsd/tokens are additive. */
+  /** Update an existing sub-call. All fields are partial. tokens are additive. */
   emitSubcallUpdated(event: SubcallUpdatedEvent): void {
     this.ee.emit("subcall:updated", event);
   }
@@ -119,8 +116,8 @@ export class RlmEmitter {
   }
 
   /** Accumulate usage directly to root-level totals. */
-  emitRootUsage(costUsd: number, tokens: number, tokensIn?: number, tokensOut?: number): void {
-    this.ee.emit("root-usage", { costUsd, tokens, tokensIn, tokensOut } satisfies RootUsageEvent);
+  emitRootUsage(tokens: number, tokensIn?: number, tokensOut?: number): void {
+    this.ee.emit("root-usage", { tokens, tokensIn, tokensOut } satisfies RootUsageEvent);
   }
 
   /** Set the final answer text (root-only). */

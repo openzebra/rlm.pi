@@ -1,0 +1,1 @@
+{"suite":"oolong","taskId":"oolong_0","model":"zai/glm-4.5-flash","run":1,"correct":true,"recall":1,"latencyMs":231338,"inputTokens":5070,"outputTokens":1692,"iterations":10,"costUsd":0,"answer":"Label: spam","gold":"\"['spam']\""}

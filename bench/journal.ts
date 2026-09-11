@@ -23,17 +23,24 @@ export interface BenchRow {
   readonly costUsd: number;
   /** 1-based repeat index within one invocation (--runs N); absent in pre-r3 journals. */
   readonly run?: number;
+  /** P2 §3.4: the graded answer came from the run's last repl stdout, not from a final
+   *  `answer[…]` frame. Absent = the normal path. Report counts these separately. */
+  readonly recovered?: boolean;
+  /** Which surface the graded answer came from: "final" frame or recovered "stdout". */
+  readonly answerSource?: "final" | "stdout";
 }
 
 const ANSWER_TRUNCATE = 500;
 
 export function makeRow(base: Omit<BenchRow, "answer"> & { answer: string }): BenchRow {
-  const { gold, error, ...rest } = base;
+  const { gold, error, recovered, answerSource, ...rest } = base;
   return {
     ...rest,
     answer: base.answer.slice(0, ANSWER_TRUNCATE),
     ...(gold !== undefined ? { gold } : {}),
     ...(error !== undefined ? { error } : {}),
+    ...(recovered !== undefined ? { recovered } : {}),
+    ...(answerSource !== undefined ? { answerSource } : {}),
   };
 }
 

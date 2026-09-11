@@ -42,17 +42,17 @@ async function main(): Promise<void> {
     gates: createSubcallGates(4, 2),
     registry: MOCK_REGISTRY,
     getLlmModel: () => MOCK_MODEL,
-    getConfig: () => ({ maxPromptChars: 100_000, maxDepth: 4, enableLedger: true, rlmBudget: 8 }),
+    getConfig: () => ({ maxPromptChars: 100_000, maxDepth: 4, enableLedger: true, rlmBudget: 8, requestTimeoutMs: 900_000 }),
     getModel: () => MOCK_MODEL,
     runChild: async (_input): Promise<RlmResult> => {
       childRuns++;
       return {
         answer: CHILD_ANSWER,
         iterations: 1,
-        costUsd: 0,
         inputTokens: 1,
         outputTokens: 1,
         durationMs: 5,
+        lastStdout: "",
       };
     },
     ledger,

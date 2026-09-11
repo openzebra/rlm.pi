@@ -145,6 +145,19 @@ function pctStr(correct: number, n: number): string {
   return n > 0 ? `${((correct / n) * 100).toFixed(1)}%` : "n/a";
 }
 
+/** P4.1 (plan §3.5 A.4): a ✗ is only informative when the model actually ANSWERED. An empty
+ *  answer, an engine stub (`(no final answer…)`, `(stopped: …)`, `(aborted)`) or a crashed row
+ *  is a DEGENERATE failure — the run never produced a comparable value. Rendering those as a
+ *  plain ✗ silently mixes "wrong answer" with "no answer", which is how a run with 0% shows
+ *  up looking like a hard task rather than a broken harness. They get `!` and a legend. */
+const ENGINE_STUB_RE = /^\((?:no final answer|stopped|aborted|no answer)/;
+
+function isDegenerate(r: BenchRow): boolean {
+  if (typeof r.error === "string" && r.error.length > 0) return true;
+  const a = r.answer.trim();
+  return a.length === 0 || ENGINE_STUB_RE.test(a);
+}
+
 function avgStr(sum: number, n: number, digits = 2): string {
   return n > 0 ? (sum / n).toFixed(digits) : "n/a";
 }
@@ -170,7 +183,8 @@ function printSummary(journals: readonly Journal[], byRun: boolean): void {
     console.log("no rows — nothing to summarize");
     return;
   }
-  const header = ["suite/model", "n", "correct", "pct", "recall", "iters", "lat_s", "in_tok", "out_tok", "cost_usd"];
+  const header = ["suite/model", "n", "correct", "pct", "recov", "invalid", "recall", "iters", "lat_s", "in_tok", "out_tok", "cost_usd", "$/correct"];
+  const invalidGroups: string[] = [];
   const rows = order.map((k) => {
     const rs = groups.get(k) ?? [];
     const n = rs.length;
@@ -181,8 +195,12 @@ function printSummary(journals: readonly Journal[], byRun: boolean): void {
     let inTok = 0;
     let outTok = 0;
     let costUsd = 0;
+    let recovered = 0;
+    let invalid = 0;
     for (const r of rs) {
       if (r.correct) correct += 1;
+      if (r.recovered === true) recovered += 1;
+      if (isDegenerate(r)) invalid += 1;
       recall += r.recall;
       iterations += r.iterations;
       latencyMs += r.latencyMs;
@@ -190,20 +208,64 @@ function printSummary(journals: readonly Journal[], byRun: boolean): void {
       outTok += r.outputTokens;
       costUsd += r.costUsd;
     }
+    // P4.1 (plan §3.5 A.4): `correct == 0` AND every row degenerate → INVALID. Such a group is
+    // not a measurement at all (the harness never produced an answer), so it is excluded from
+    // the pooled TOTAL line instead of dragging the average toward 0.
+    const invalidRow = correct === 0 && n > 0 && invalid === n;
+    if (invalidRow) invalidGroups.push(k);
     return [
       k.split("|").join("  "),
       String(n),
       String(correct),
-      pctStr(correct, n),
+      invalidRow ? "INVALID" : pctStr(correct, n),
+      String(recovered),
+      String(invalid),
       avgStr(recall, n),
       avgStr(iterations, n),
       avgStr(latencyMs / 1000, n, 1),
       String(inTok),
       String(outTok),
       costUsd.toFixed(4),
+      // P3.3: dollars spent per CORRECT answer (the number the paper's cost table needs).
+      // n/a when nothing passed — dividing by zero would read as "free".
+      correct > 0 ? (costUsd / correct).toFixed(4) : "n/a",
     ] as const;
   });
+  // Pooled TOTAL over the VALID groups only (P4.1) — printed as one extra row after the table.
+  {
+    const invalidSet = new Set(invalidGroups);
+    let tvN = 0;
+    let tvCorrect = 0;
+    for (const [i, k] of order.entries()) {
+      if (invalidSet.has(k)) continue;
+      const r = rows[i];
+      if (r === undefined) continue;
+      tvN += Number(r[1]);
+      tvCorrect += Number(r[2]);
+    }
+    if (invalidGroups.length > 0 && tvN > 0) {
+      printTable(
+        ["TOTAL (valid only)", "n", "correct", "pct"],
+        [["", String(tvN), String(tvCorrect), pctStr(tvCorrect, tvN)] as const],
+      );
+    }
+  }
   printTable(header, rows);
+  const notes: string[] = [];
+  if (invalidGroups.length > 0) {
+    notes.push(
+      `INVALID group(s) (every row degenerate → not a measurement, excluded from TOTAL): ${invalidGroups.join(", ")}`,
+    );
+  }
+  const totalRecov = rows.reduce((s, r) => s + Number(r[4]), 0);
+  const totalInvalid = rows.reduce((s, r) => s + Number(r[5]), 0);
+  if (totalRecov > 0) notes.push(`${totalRecov} row(s) recovered from last repl stdout (P2 §3.4)`);
+  if (totalInvalid > 0) {
+    notes.push(
+      `${totalInvalid} degenerate row(s) (empty/stub answer or error) — those are harness failures, not wrong answers`,
+    );
+  }
+  for (const nt of notes) console.log(`  note: ${nt}`);
 }
 
 interface TaskTotal {
@@ -244,11 +306,19 @@ function printMatrix(
     return new Map();
   }
   const header = ["task", "group/type", ...journals.map((j) => j.name.split("/").pop() ?? j.name), "passes"];
+  // Degenerate cells are tracked per journal+task so the matrix can render `!` (P4.1).
+  const degenerate = new Set<string>();
+  for (const [ji, j] of journals.entries()) {
+    for (const r of j.rows) {
+      if (isDegenerate(r)) degenerate.add(`${ji}:${r.taskId}`);
+    }
+  }
   const rows = taskIds.map((id) => {
     const m = meta.get(id);
     const cells = journals.map((_, ji) => {
       const c = perJournal.get(`${ji}:${id}`);
       if (c === undefined) return "-";
+      if (c.passes === 0 && degenerate.has(`${ji}:${id}`)) return "!";
       return c.runs > 1 ? `${c.passes}/${c.runs}` : c.passes > 0 ? "✓" : "✗";
     });
     const t = totals.get(id);
@@ -260,6 +330,7 @@ function printMatrix(
     ] as const;
   });
   printTable(header, rows);
+  console.log("legend: ✓ pass   ✗ wrong answer   ! degenerate (empty/stub answer or error)");
   const out = new Map<string, TaskTotal>();
   for (const [id, t] of totals) out.set(id, Object.freeze({ ...t }));
   return out;

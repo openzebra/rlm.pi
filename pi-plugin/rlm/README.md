@@ -48,9 +48,11 @@ journal per model, cost per task from real `costUsd`:
 
 | Model | Score | Avg. cost/task |
 |-------|-------|----------------|
-| `qwen/qwen3.8-27b` | **87.5%** | $0.0460 |
-| `google/gemma-3-27b-it` | 50.0% | $0.0011 |
-| `inception/mercury-2.5` | — | — |
+| `zai/glm-4.7` | **83%** | $0.0000 * |
+| `qwen/qwen3.8-27b` | 49% | $0.1038 |
+| `inception/mercury-2.5` | 38% | $0.0052 |
+
+\* glm-4.7 runs on Z.ai's coding-plan endpoint — subscription billing, `costUsd` stays $0.
 
 Raw per-task rows (correct, recall, latency, tokens, cost) live in
 `bench/runs/*.jsonl` — one JSONL row per task, committed as history.
@@ -58,10 +60,11 @@ Raw per-task rows (correct, recall, latency, tokens, cost) live in
 ### Run the benchmarks
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-...        # required — env vars are the only key transport
+export OPENROUTER_API_KEY=sk-or-...        # required for openrouter/* models
+export ZAI_API_KEY=...                     # required for zai/* models (coding endpoint)
 
 bun run bench                              # oolong suite, default model (qwen3.8-27b)
-bun run bench --model openrouter/google/gemma-3-27b-it
+bun run bench --model zai/glm-4.7
 bun run bench --model openrouter/inception/mercury-2.5
 bun run bench --list                       # print tasks, no engine / no key
 ```

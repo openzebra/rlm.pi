@@ -9,7 +9,7 @@ import { THINKING_LEVELS } from "../config/settings.ts";
 
 const CHOICES = Object.freeze({
   maxDepth: Object.freeze(["1", "2", "3", "4"]),
-  maxIterations: Object.freeze(["10", "20", "30", "50"]),
+  maxIterations: Object.freeze(["100", "200", "500", "1000"]),
   execTimeoutS: Object.freeze(["30", "60", "120", "300"]),
   maxConcurrentSubcalls: Object.freeze(["2", "4", "8", "16", "32"]),
   maxConcurrentChildren: Object.freeze(["1", "2", "3", "4", "6", "8"]),
@@ -20,7 +20,6 @@ const CHOICES = Object.freeze({
   compaction: Object.freeze(["on", "off"]),
   compactionThresholdPct: Object.freeze(["50", "65", "80", "90"]),
   rootSamplingMaxTokens: Object.freeze(["4096", "8192", "16384", "32768"]),
-  rootSamplingTemperature: Object.freeze(["0", "0.3", "0.7", "1.0", "default"]),
   smartReasoning: Object.freeze(["default", ...Object.keys(THINKING_LEVELS)]),
   subSamplingMaxTokens: Object.freeze(["1024", "2048", "4096", "8192"]),
   subSamplingTemperature: Object.freeze(["0", "0.3", "0.7", "1.0", "default"]),
@@ -43,7 +42,7 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
   let edited = config;
   const items: SettingItem[] = [
     item("maxDepth", "Max recursion depth", String(config.maxDepth), CHOICES.maxDepth, "rlm_query past this depth degrades to plain llm_query (1 = no recursion)."),
-    item("maxIterations", "Max iterations", String(config.maxIterations), CHOICES.maxIterations, "Maximum root REPL turns before RLM asks the model for a final answer."),
+    item("maxIterations", "Max iterations", String(config.maxIterations), CHOICES.maxIterations, "Maximum root REPL turns before RLM asks the model for a final answer. Large by design — runs end on FINAL/errors/wall-clock first."),
     item("execTimeoutS", "REPL block timeout (s)", String(config.execTimeoutS), CHOICES.execTimeoutS, "Wall-clock limit for one model-authored Python REPL block."),
     item("maxConcurrentSubcalls", "Max concurrent sub-calls", String(config.maxConcurrentSubcalls), CHOICES.maxConcurrentSubcalls, "Concurrency pool size for llm_batch and rlm_batch."),
     item("maxConcurrentChildren", "Max concurrent children", String(config.maxConcurrentChildren), CHOICES.maxConcurrentChildren, "Concurrent rlm_query child engines per depth. Each is a Python process holding its own copy of the inherited context."),
@@ -54,8 +53,6 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
     item("compaction", "Trajectory compaction", config.compaction ? "on" : "off", CHOICES.compaction, "Summarize old turns when history approaches the model context window."),
     item("compactionThresholdPct", "Compaction threshold (%)", String(Math.round(config.compactionThresholdPct * 100)), CHOICES.compactionThresholdPct, "DEPRECATED — ignored: compaction uses the absolute 256k ceiling (COMPACTION_CEILING_TOKENS)."),
     item("rootSamplingMaxTokens", "Root model output cap (tok)", String(config.rootSampling?.maxTokens ?? 16384), CHOICES.rootSamplingMaxTokens, "Max output tokens per root-model turn. Lower values keep each turn lean."),
-    item("rootSamplingTemperature", "Root sampling temperature", config.rootSampling?.temperature === undefined ? "default" : String(config.rootSampling?.temperature), CHOICES.rootSamplingTemperature,
-      "Sampling temperature for RLM root turns, finalize included — 0 = deterministic (the r3 reproducibility setting); 'default' = provider default. Applies to RLM-mode runs, rlm() delegation and child recursion; the native Pi agent loop follows Pi's own session settings."),
     item("smartReasoning", "Root reasoning effort", config.smartReasoning ?? "default", CHOICES.smartReasoning,
       "Thinking effort for the root model ('default' = none). Only models whose registry entry supports reasoning will think; others silently run without it. Reasoning tokens share the output cap — raise the root output cap when thinking is on."),
     item("subSamplingMaxTokens", "Worker output cap (tok)", String(config.subSampling?.maxTokens ?? 8192), CHOICES.subSamplingMaxTokens,
@@ -68,12 +65,6 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
       "Allow add_context() to pull an external dir, file, document, or git repo into context."),
     item("autoSeedCwd", "Auto-seed cwd", config.autoSeedCwd ? "on" : "off", CHOICES.autoSeedCwd,
       "Seed the working directory into context on the first repl() call (otherwise starts empty)."),
-    // R0 (/tmp/ROOT_FULL_SKILLSTATE_PLAN.md): the SKILL.state / Root Σ paradigm flags are
-    // ENFORCED — rendered as a read-only badge so the truth is visible instead of hidden.
-    // No toggle exists: applySetting has no case for them and the validator forces true.
-    item("__sigma_enforced__", "SKILL.state / Root Σ", "enforced", ["enforced"],
-      "ENFORCED (no opt-out): run state, skill state + distill, root context transform, state fences, digest compaction. " +
-        "Override attempts in rlm.json are traced (skillstate.override-ignored) and ignored; RLM_BENCH_NO_ROOTCONTEXT=1 is the dev-only measurement hatch."),
     // R5: the window calibrations are rlm.json-only knobs — shown read-only with live values.
     item("__sigma_window__", "Root Σ window (calibration)",
       `keepTurns=${config.rootContextKeepTurns} · elide=${config.rootContextElideChars} · snapshot=${config.rootContextSnapshot ? "on" : "off"}`,
@@ -138,12 +129,6 @@ export function applySetting(config: RlmConfig, id: string, value: string): RlmC
     case "compactionThresholdPct": return Object.freeze({ ...config, compactionThresholdPct: Number(value) / 100 });
     case "rootSamplingMaxTokens":
       return Object.freeze({ ...config, rootSampling: Object.freeze({ ...config.rootSampling, maxTokens: Number(value) }) });
-    case "rootSamplingTemperature": {
-      const t = optionalTemperature(value);
-      // Reject invalid values (NaN / out of range) — keep the current setting.
-      if (t === undefined && value !== "default") return config;
-      return Object.freeze({ ...config, rootSampling: Object.freeze({ ...config.rootSampling, temperature: t }) });
-    }
     case "smartReasoning":
       if (value === "default") return Object.freeze({ ...config, smartReasoning: undefined });
       return Object.hasOwn(THINKING_LEVELS, value)
