@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.21] — 2026-09-14
+
+### Added
+
+- **Recall package: session archive, honest stubs, Σ write-side (W1–W4)** (`core/session-archive.ts`):
+  elided messages are no longer unrecoverable — `SessionArchive` records every elided payload and
+  materializes segments into the sandbox (`ctx/session-log/turn-<a>-<b>.md`), so the existing
+  `search` / `grep_context` recall them with zero new model-visible functions. Elision stubs are
+  honest per tool (repl payloads cite the sandbox, native payloads cite the archive). Σ write-side:
+  read-path deterministic harvest, tool failures promote only on repeat, `openQuestions` evict
+  before `verifiedFacts`, tool-running turns never grow the idle-degrade ladder, >5-key patches
+  get explicit feedback, string values clamp to 120 chars, and the bare-`{"state_patch"}` scanner
+  skips json-fenced `state_patch` echoes (echo poisoning). Discoverability: `skill_search` + archive-recall lines in
+  the native prompt; `skillStateXiMinScore` (2.0) floor, `skillStateMinScore` 4.0→2.5.
+  Calibration: `keepTurns` 2→4, `elideChars` 1500→3000, digest `[Findings]` dedup,
+  `NEXT_STEP_RE` word-anchored. New `test/phase-session-archive.ts` (unit + real-worker end-to-end
+  recall chain); `bench/recall-eval.ts` reproduces the regression offline (legacy 0/3 needles →
+  archive 3/3).
+- **Tree ×N consolidation, `[rlm.stage]` cards, native `/rlm-stop`, repl code card** (`ui/tree/tree-model.ts`,
+  `ui/stage-cards.ts`): identical sibling `llm` leaves (label+model+status) consolidate into ONE
+  `×N` group row at the first member's position — a 16-item batch failure is one line, not
+  scattered singletons; `GroupRow.reason` shows the shared error first-line; `rlm` nodes NEVER
+  group (view-layer only, store emits one node per item). Stage transitions — digest compactions,
+  tracker degrade/recover, session distill — post as custom messages rendered collapsed-until-ctrl+o
+  in the zebra-catch visual language; digest bodies embed the summary verbatim; the digest card is
+  built inside `session_before_compact` but posted at the next `turn_start` (no re-entrancy).
+  `/rlm-stop` now covers native mode: lazy `getSignal` accessor rotated per stop via
+  `util/abort.ts` `raceAbort` (dispose detaches relays), command messaging reflects what was
+  stopped. Repl card inversion: collapsed shows the cell's Python source (40-line cap), expanding
+  swaps it for the result view. Tests: `phase-tree.ts`, `phase-stage-cards.ts`, `phase-stop.ts`,
+  `phase3-render.ts` repl section.
+- **Python syntax highlighting for the repl card code payload** (`ui/python-highlight.ts`): small
+  honest tokenizer — comments, strings (triple-quoted + f/r/b prefixes), keywords, numbers,
+  decorators — colored from the theme handed each render pass (deliberately not pi's
+  `highlightCode()`, which closes over the module-global theme). Source is sliced to the 40-line
+  cap BEFORE highlighting, so an unterminated triple quote can only fall back to plain.
+  Tests: span-color mapping + byte-for-byte text preservation.
+- **SkillStore A-Mem upgrade** (`config/skillstate.ts`): links, box expansion, relative floors,
+  distill enrichment — deterministic, no embeddings, no LLM evolution call (A-Mem Xu et al.
+  §3.2/§3.3). `SkillNote.links` (bidirectional, ≤4) generated at merge time from BM25 nearest
+  neighbors above a relative floor; link formation co-reinforces the neighbor. Retrieval expansion
+  (the 'box'): a hit's linked notes ride at 0.6× its score, deduped; base hits always outrank.
+  Relative score floors: `max(configured, 0.25 × top score)` with a cold-start ramp (floors halve
+  below 8 notes). Failed AND partial approaches harvest as gotcha notes (≤6) feeding the LLM
+  distill prompt; child engines (depth > 0) skip the LLM distill; child Ξ blocks re-rank against
+  the child's task. 45 checks in `phase-ss-store.ts` incl. legacy note compatibility.
+- **BM25 v2 — stemmed, PRF-expanded, phrase-boosted retrieval with duality parity**
+  (`sandbox/py/retrieval.py`, `util/bm25.ts`): light suffix stemmer at tokenize time in BOTH
+  runtimes; pseudo-relevance-feedback expansion (Rocchio w/o embeddings, top-8 terms at weight
+  0.4, auto-off below 12 docs); adjacent-bigram phrase bonus (0.25 × max-idf) over a bounded
+  re-rank pool; overlapping windows (stride 20 over 40-line windows) with adjacent same-path
+  merges; `path_glob` is a pre-filter now; index truncation surfaced (`index_truncated`); index
+  stamp = id + content fingerprint (head/tail-256 FNV). Duality guarded by
+  `test/phase-bm25-parity.ts`: identical order AND scores across py worker and `bm25Rank`.
+- **Answer quality pack — FINAL repair, leaf prompt v2, finalize contract, verification gate**:
+  `FINAL(x)`/`FINAL_VAR(v)` template repair (paper App. A — prose tags outside repl fences
+  convert to the answer channel with a coach note; `FINAL_VAR` resolves in-sandbox, never raises;
+  dump-sized values refused); leaf system prompt v2 (role + material-grounding, retrieval coach
+  surface-aware — depth>0 children never get the search nudge); finalize contract and
+  verification gate per the RLM paper + Anthropic prompting canon.
+- **Σ economics — unchanged-marker, digest hybrid findings, CJK tokens** (`core/budget.ts`,
+  `core/root-digest.ts`): `SIGMA_UNCHANGED_LINE` — a byte-identical Sigma re-sends as a one-line
+  marker with the patch grammar instead of the full ~3K-token JSON block (full block returns after
+  compaction/rebase/degrade); root digest findings use hybrid selection — BM25 relevance to the
+  live task + recency share replaces pure newest-first (candidates capped at 40, picked
+  chronologically; no-overlap corpora stay byte-compatible); CJK-aware token estimation —
+  kana/ideographs/hangul priced at 1.5 chars/token (was flat /4, a ~2.7× under-count that
+  delayed compaction on CJK content; pure-ASCII inputs byte-identical).
+
+### Changed
+
+- **Bench**: z2 `glm-4.7` oolong full24 run (`bench/runs/z2-glm47-full24.jsonl`, 22/24 = 91.7%);
+  dropped the price-per-task panel (and the 'glm-4.7 unpriced' footer caveat) from the hero chart
+  — two panels now: score + context appetite; `hero.png` regenerated via `bench/hero.py`.
+- **NEXT_STEP_RE tightened** (`core/budget.ts`): bare next/then/will/todo prose no longer hijacks
+  the `[Next]` slot — only colon labels, 'next step', or I'll/we'll commitments match.
+- **Docs**: stale 256k compaction comments → the real 1M ceiling; bench README context-window
+  default 131072 → 1000000.
+
 ## [0.3.20] — 2026-09-12
 
 ### Fixed
