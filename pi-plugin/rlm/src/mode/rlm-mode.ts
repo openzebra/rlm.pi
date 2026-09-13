@@ -120,10 +120,10 @@ export class RlmController {
   }
 
   /** Ξ (Workstream C): BM25 slice of the session SkillState for a root prompt; undefined when
-   *  the store is absent/disabled or nothing is relevant. */
+   *  the store is absent/disabled or nothing is relevant. Recall W3: honors the Ξ score floor. */
   private skillBlockFor(query: string): string | undefined {
     if (this.skillStore === undefined || !this.config.enableSkillState) return undefined;
-    const block = this.skillStore.blockFor(query, this.config.skillStateMaxTokens);
+    const block = this.skillStore.blockFor(query, this.config.skillStateMaxTokens, this.config.skillStateXiMinScore);
     return block === "" ? undefined : block;
   }
 

@@ -49,6 +49,15 @@ Optional env vars:
 | `ZAI_API_KEY` | — | Required for `zai/*` models (Z.ai coding endpoint, e.g. `zai/glm-4.7`); OpenRouter models use `OPENROUTER_API_KEY` only |
 | `RLM_BENCH_CONTEXT_WINDOW` | `131072` | Advertised context window of the model under test (budget math uses it) |
 
+### Recall eval (no API key needed)
+
+`bun run bench/recall-eval.ts` replays the native context transform (elision + Σ splice +
+session archive) over scripted needle transcripts and scores three arms — legacy
+(keepTurns=2, no archive), the recall package (keepTurns=4, archive ON), and the
+`RLM_BENCH_NO_ROOTCONTEXT` ceiling. Deterministic, offline: it proves the elision window
+stays bounded while needle facts remain dereferenceable through `ctx/session-log/*`.
+Live-model end-to-end confirmation still goes through the oolong bench above.
+
 
 ## Artifacts
 

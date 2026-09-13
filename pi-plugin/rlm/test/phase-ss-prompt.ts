@@ -59,7 +59,11 @@ const BLOCK = [
   check("native static snapshot within budget", NATIVE_PROMPT_STATIC.length <= NATIVE_PROMPT_BUDGET,
     `${NATIVE_PROMPT_STATIC.length} <= ${NATIVE_PROMPT_BUDGET}`);
   check("native static snapshot has no Ξ", !NATIVE_PROMPT_STATIC.includes("SkillState"));
-  check("native budget untouched", NATIVE_PROMPT_BUDGET === 9_500);
+  // Recall W3: the native twin lines are deliberate — the archive-recall and skill_search
+  // surface MUST ride the static prompt (the glossary header calls that divergence a bug).
+  check("native prompt documents archive recall", NATIVE_PROMPT_STATIC.includes("ctx/session-log"));
+  check("native prompt documents skill_search", NATIVE_PROMPT_STATIC.includes("skill_search"));
+  check("native budget raised for recall lines", NATIVE_PROMPT_BUDGET === 9_700);
 }
 
 // ── Root Σ WS-1: per-prompt Ξ query + relevance + mid-session freshness ─────────────
@@ -76,17 +80,17 @@ const BLOCK = [
       { text: "retry policy: 15 attempts, 500ms→15s backoff, 429s park on a per-provider cooldown", keywords: ["retry", "cooldown"], tags: ["config"] },
       { text: "gardening: tomatoes want compost and six hours of sun", keywords: ["tomatoes", "compost"], tags: ["gotcha"] },
     ]);
-    const onTopic = store.blockFor("how does the retry policy handle 429s?", 1_200);
+    const onTopic = store.blockFor("how does the retry policy handle 429s?", 1_200, 0);
     check("on-topic prompt selects the retry note", onTopic.includes("retry policy"));
     check("on-topic prompt skips the garden note", !onTopic.includes("tomatoes"));
-    const offTopic = store.blockFor("gardening soil tomatoes compost schedule", 1_200);
+    const offTopic = store.blockFor("gardening soil tomatoes compost schedule", 1_200, 0);
     check("other prompt selects the other note", offTopic.includes("tomatoes") && !offTopic.includes("retry policy"));
 
     // Mid-session freshness: a harvest landing between prompts is visible in the next Ξ.
     store.merge([{ text: "sandbox scaffold now exports stateHarness for tests", keywords: ["stateharness"], tags: ["symbol"] }]);
     check(
       "mid-session merge is visible immediately",
-      store.blockFor("where is stateHarness defined?", 1_200).includes("stateHarness"),
+      store.blockFor("where is stateHarness defined?", 1_200, 0).includes("stateHarness"),
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });

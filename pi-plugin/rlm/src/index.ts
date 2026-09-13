@@ -31,6 +31,7 @@ import { SkillStore, notesFromRunState, xiQuery } from "./config/skillstate.ts";
 import { buildRootDigestCompaction } from "./core/root-digest.ts";
 import { RootStateTracker } from "./core/root-state.ts";
 import { elideStalePayloads, spliceSigmaSnapshot } from "./core/root-context.ts";
+import { SessionArchive } from "./core/session-archive.ts";
 import { agentMessageText, firstLine, textContentOf } from "./text/agent-text.ts";
 import { findStatePatches } from "./text/parsing.ts";
 import { capToolResultText } from "./mode/native-guards.ts";
@@ -113,12 +114,19 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   /** Root Σ (WS-3/4): the native session's digest-level Σ_t — runtime-derived (tool outcomes,
    *  engine mirrors, prompts); lazily born on the first prompt, harvested + dropped at shutdown. */
   let rootTracker: RootStateTracker | undefined;
+  /** Recall W1: elided turns archive here and materialize into the sandbox
+   *  (ctx/session-log/*) so search()/grep_context() recall them. Per-session, closure-only. */
+  const sessionArchive = new SessionArchive(config.rootArchiveMaxChars);
+  /** Archive gate: enabled (chars > 0) AND the context transform actually running. */
+  const archiveActive = (): boolean =>
+    controller.config.rootArchiveMaxChars > 0 && rootContextActive();
   // Root Σ WS-5.1 telemetry — journal counters (trace lines + status widget when tracing).
   let xiCompositions = 0;
   let rootDigests = 0;
   let elidedMessages = 0;
   let sigmaSplices = 0;
   let idleDegrades = 0;
+  let archivedTurns = 0;
   /** R6: Σ counter snapshot for the status line — a fresh readonly object per render. */
   const sigmaTelemetry = (): RootSigmaTelemetry => ({
     xiCompositions,
@@ -173,7 +181,9 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const cfg = controller.config;
     // R0: enableSkillState is enforced (validateEnforcedOn) — no config check remains.
     if (skillStore === undefined) return undefined;
-    const block = skillStore.blockFor(query, cfg.skillStateMaxTokens);
+    // Recall W3: the Ξ block honors the configured score floor (was MIN_VALUE — any
+    // positively-scored stale note rode every prompt).
+    const block = skillStore.blockFor(query, cfg.skillStateMaxTokens, cfg.skillStateXiMinScore);
     return block === "" ? undefined : block;
   };
 
@@ -423,8 +433,13 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const tracker = rootTracker;
     if (tracker === undefined || !controller.config.enableRootStateFences) return;
     if (event.message.role !== "assistant") return;
+    // Recall W2: a turn that ran TOOLS did work — it is never fence-idle (file-editing
+    // sessions were degrading before their first fence landed). Productive turns neither
+    // grow nor reset the idle streak; prose-only turns keep the R4 ladder.
+    const productiveTurn = Array.isArray(event.message.content) &&
+      (event.message.content as Array<{ type?: string }>).some((b) => b?.type === "toolCall");
     const wasActive = tracker.isActive;
-    const outcome = tracker.applyFences(findStatePatches(agentMessageText(event.message)));
+    const outcome = tracker.applyFences(findStatePatches(agentMessageText(event.message)), { productiveTurn });
     // R3 soak observability: per-turn fence outcomes — the soak-B bars (≥50% of turns commit
     // ≥1 accepted delta, rejection storms <10%) are computed from these journal lines.
     if (traceEnabled) {
@@ -486,7 +501,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // ── Context injection: listing of whatever is currently loaded ──
   // Re-inject only when the payload identity changes (seed / add_context), not every turn —
   // the listing can be up to 200 file lines and the plugin exists to shrink the root window.
-  pi.on("context", async (event) => {
+  pi.on("context", async (event, ctx) => {
     const filtered = event.messages.filter(
       (message) =>
         !(message.role === "custom" && message.customType === "rlm-intro")
@@ -499,10 +514,23 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     // then splice exactly one fresh Σ snapshot. Fail-soft: a throw here must never break a turn.
     if (rootContextActive()) {
       try {
-        const elided = elideStalePayloads(filtered, {
-          keepTurns: controller.config.rootContextKeepTurns,
-          elideChars: controller.config.rootContextElideChars,
-        });
+        // Recall W1: every destroyed message's full text rides the sink into the session
+        // archive BEFORE the stub replaces it — elision stays dereferenceable.
+        const sink = archiveActive()
+          ? (entry: { role: "assistant" | "toolResult"; toolName: string | undefined; text: string }) => {
+              const seq = sessionArchive.record(entry);
+              if (seq !== undefined) archivedTurns += 1;
+            }
+          : undefined;
+        const elided = elideStalePayloads(
+          filtered,
+          {
+            keepTurns: controller.config.rootContextKeepTurns,
+            elideChars: controller.config.rootContextElideChars,
+            archiveActive: sink !== undefined,
+          },
+          sink,
+        );
         elidedMessages += elided;
         const tracker = rootTracker;
         // R4 REV (amnesia fix): degrade suspends fence WRITES (applyFences gate) — never Σ
@@ -523,8 +551,31 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           });
           sigmaSplices += 1;
         }
+        // Recall W1 flush: materialize new archive segments into the sandbox — ONLY when a
+        // worker already exists (never spawn Python from a context event) and fail-soft.
+        const pendingSegment = archiveActive() && sandboxManager.isAlive
+          ? sessionArchive.renderPending()
+          : undefined;
+        if (pendingSegment !== undefined) {
+          const cwd = resolve(ctx?.cwd ?? process.cwd());
+          const written = await sandboxManager.upsertArchiveSegment(pendingSegment.path, pendingSegment.text, cwd);
+          if (traceEnabled) {
+            trace("root-archive.flush", {
+              path: pendingSegment.path,
+              chars: pendingSegment.text.length,
+              written,
+              stats: sessionArchive.stats,
+            });
+          }
+        }
         if (traceEnabled && (elided > 0 || sigmaSplices > 0)) {
-          trace("root-context.transform", { elided, total: elidedMessages, splices: sigmaSplices });
+          trace("root-context.transform", {
+            elided,
+            total: elidedMessages,
+            splices: sigmaSplices,
+            archived: archivedTurns,
+            archiveChars: sessionArchive.stats.chars,
+          });
         }
       } catch (err) {
         if (traceEnabled) trace("root-context.fail", { error: errorMessage(err) });
@@ -571,6 +622,13 @@ export default function rlmExtension(pi: ExtensionAPI): void {
         event.isError,
         event.isError ? firstLine(textContentOf(event.content)) : "",
       );
+      // Recall W2 deterministic harvest (commit-at-first-sight, paper §7): successful reads
+      // are Σ facts the moment they happen — previously the only runtime feeds were tool
+      // ERRORS and edits, so the early turns (the ones elided first) never reached Σ.
+      if (!event.isError && event.toolName === "read") {
+        const path = extractEditPaths(event.input)[0];
+        if (path !== undefined) tracker.noteFact(`read ${path}`);
+      }
     }
 
     // ── Keep RLM context fresh after native file mutations ──

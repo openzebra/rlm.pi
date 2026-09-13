@@ -121,6 +121,9 @@ export interface RlmConfig {
   readonly skillStateLeafTokens: number;
   /** BM25 score a note must clear before a leaf prompt gets grounded (below ⇒ byte-identical). */
   readonly skillStateMinScore: number;
+  /** BM25 score a note must clear before it enters the Ξ root block (below ⇒ not injected).
+   *  Was effectively 0 (`Number.MIN_VALUE`) — stale cross-session notes rode every prompt. */
+  readonly skillStateXiMinScore: number;
   /** Per-project note cap; LRU by ts with the top-hits quartile pinned (Workstream B). */
   readonly skillStateNotesPerProject: number;
 
@@ -141,6 +144,9 @@ export interface RlmConfig {
   readonly rootContextKeepTurns: number;
   /** Tool-result payloads older than the keep window are preview-capped at this many chars. */
   readonly rootContextElideChars: number;
+  /** Recall W1: host-memory ring cap (chars) for the session archive that makes elision
+   *  dereferenceable (`ctx/session-log/*` in the sandbox). 0 = archive off (plain stubs). */
+  readonly rootArchiveMaxChars: number;
   /** Splice the RootStateTracker Σ snapshot before the last user message each call. */
   readonly rootContextSnapshot: boolean;
   /** WS-4.2 (default OFF, paper §5.7 fence tax): the root may commit ΔΣ_t via a ```state

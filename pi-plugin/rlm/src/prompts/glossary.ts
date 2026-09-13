@@ -7,6 +7,8 @@
  * about functions that do not exist, or not told about ones that do.
  */
 
+import { ARCHIVE_NAMESPACE } from "../core/session-archive.ts";
+
 export type ContextKind = "files" | "text";
 
 /** "str" (raw string context, e.g. rlm_query children) → text; everything else → files. */
@@ -56,6 +58,15 @@ const SKILL_SEARCH_GLOSSARY_LINES: readonly string[] = Object.freeze([
   "  smells like something already learned — do not re-discover it.",
 ]);
 
+/** W3 recall discoverability: the condensed NATIVE twins. glossary doctrine — divergence
+ *  between the headless and native surfaces is a bug; `skill_search` had no native twin, so
+ *  native models could not discover cross-session recall at all (and the archive line
+ *  teaches the ctx/session-log recall that honest elision stubs point at). */
+export const SKILL_SEARCH_LINE_NATIVE =
+  "- `skill_search(query, k=8) -> [{id, text, tags, score}]` — BM25 over distilled project facts from PRIOR sessions. Free; use before re-discovering a learned config/gotcha/symbol.";
+export const ARCHIVE_RECALL_LINE_NATIVE =
+  `- Elided chat turns are archived in the sandbox: \`search("<keywords>", path_glob="${ARCHIVE_NAMESPACE}*")\` / \`grep_context()\` recall text that scrolled out of your context — free, no sub-LLM call.`;
+
 /** Single source of wording for the injected SkillState block (headless + native, Workstream C).
  *  Takes the dynamic body as an argument — the glossary itself stays static-only. */
 /** One wording source for the skill_search recall hint (Ξ block + root Σ snapshot). */
@@ -64,10 +75,21 @@ export const SKILL_RECALL_LINE =
 
 /** R5 (G4, /tmp/ROOT_FULL_SKILLSTATE_PLAN.md): the one-line replacement for assistant prose
  *  older than the keep window — durable facts live in Σ; the repl sandbox (answers/vars) is
- *  the model-reachable recovery channel — the session log is host-side only, never re-openable
- *  by the model, so stubs must not promise it. */
+ *  the model-reachable recovery channel for repl-owned payloads. Stubs must promise only a
+ *  channel that actually holds the bytes (recall W1): repl-owned payloads → the repl line,
+ *  native payloads → the archive line (searchable `ctx/session-log/`), else the plain line. */
 export const ROOT_TURN_ELIDED_LINE =
   "… turn elided — durable facts live in Σ; your repl sandbox persists: print(answers) / SHOW_VARS() to re-derive";
+export const ROOT_TURN_ELIDED_ARCHIVE_LINE =
+  `… turn elided — durable facts live in Σ; the full text is archived in the sandbox: ` +
+  `search('<keywords>', path_glob='${ARCHIVE_NAMESPACE}*') or grep_context() recalls it`;
+export const ROOT_TURN_ELIDED_PLAIN_LINE =
+  "… turn elided — durable facts live in Σ";
+/** Preview mark twin: payloads kept as head+tail previews point at the same archive. */
+export const ROOT_ELIDE_PREVIEW_MARK =
+  `chars elided — full text archived under ${ARCHIVE_NAMESPACE} (search/grep_context it)`;
+export const ROOT_ELIDE_PREVIEW_MARK_REPL =
+  "chars elided — repl sandbox persists: print(answers[k]) or re-run repl to re-derive";
 
 export function skillStateLines(noteCount: number, body: string): string {
   return [

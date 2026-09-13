@@ -343,10 +343,12 @@ export class SkillStore {
 
   /**
    * Workstream C: the full Ξ block for a root prompt (header via skillStateLines — the single
-   * wording source). "" when nothing is relevant or the store is empty.
+   * wording source). "" when nothing is relevant or the store is empty. Recall W3: `minScore`
+   * gates the block (was `Number.MIN_VALUE` — stale cross-session notes rode every prompt);
+   * 0 keeps the old inject-anything behavior.
    */
-  blockFor(query: string, budgetTokens: number): string {
-    const lines = this.pack(query, 24, Math.max(0, budgetTokens) * 4, Number.MIN_VALUE);
+  blockFor(query: string, budgetTokens: number, minScore: number): string {
+    const lines = this.pack(query, 24, Math.max(0, budgetTokens) * 4, minScore);
     if (lines.length === 0) return "";
     return skillStateLines(lines.length, lines.join("\n"));
   }

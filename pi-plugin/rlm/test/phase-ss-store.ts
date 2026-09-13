@@ -69,12 +69,12 @@ try {
   check("project key stable across stores", reloaded.projectKey === store.projectKey);
 
   // ── BM25 recall paths ──
-  const block = reloaded.blockFor("where is settingsPath defined?", 200);
+  const block = reloaded.blockFor("where is settingsPath defined?", 200, 0);
   check("blockFor composes the Ξ header", block.startsWith("[Project facts — SkillState"));
   check("blockFor carries the matching note", block.includes("settingsPath"));
   check("blockFor mentions skill_search", block.includes("skill_search"));
   check("blockFor respects the budget", block.length <= 200 * 4 + 400); // body + header/footer slack
-  check("irrelevant query → empty block", reloaded.blockFor("qqzzqxx wwwwxxxzz yyzzzqq", 200) === "");
+  check("irrelevant query → empty block", reloaded.blockFor("qqzzqxx wwwwxxxzz yyzzzqq", 200, 0) === "");
 
   const grounded = reloaded.sliceForPrompt("settingsPath definition location", 200, 1.0);
   check("sliceForPrompt attaches above threshold", grounded.includes("settingsPath"));

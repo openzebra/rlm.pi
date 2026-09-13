@@ -124,14 +124,17 @@ export class RootStateTracker {
   }
 
   noteFinding(text: string): void {
-    const trimmed = text.trim();
+    // Runtime-harvested findings are clamped at the source — fence-sourced ones arrive ≤120
+    // via the patch clamp; this is the defense for direct feeds (engine mirrors arrive capped).
+    const trimmed = text.trim().slice(0, 300);
     if (trimmed === "") return;
     this.draft.findings = dedupStrings([...this.draft.findings, trimmed]).slice(-RUN_STATE_LIMITS.findings);
     this.touch();
   }
 
   noteFact(text: string): void {
-    const trimmed = text.trim();
+    // Clamp before dedup (recall W2): a verbose runtime feed must not eat the κ_Σ budget.
+    const trimmed = text.trim().slice(0, 200);
     if (trimmed === "") return;
     this.draft.verifiedFacts = dedupStrings([...this.draft.verifiedFacts, trimmed])
       .slice(-RUN_STATE_LIMITS.verifiedFacts);
@@ -150,17 +153,27 @@ export class RootStateTracker {
     this.touch();
   }
 
-  /** Tool-outcome feed (WS-4 v1 source): failures become approach outcomes, verbatim. */
+  /** Tool-outcome feed (WS-4 v1 source; recall W2 pollution fix): a SINGLE transient failure
+   *  (binary read, typo'd path) no longer writes a `testedApproaches` record — that record
+   *  evicted real approach entries and fired spurious [rectify] hints. Failures always grow
+   *  the rectify counter, but only PROMOTE to Σ once the failure repeats (threshold parity)
+   *  or a record already exists (then the record refreshes, keeping recency truthful). */
   observeToolResult(toolName: string, isError: boolean, reasonFirstLine: string): void {
+    const key = `tool:${toolName}`;
     if (isError) {
-      this.noteOutcome(`tool:${toolName}`, { status: "failed", reason: reasonFirstLine });
+      const streak = (this.failures.get(key) ?? 0) + 1;
+      this.failures.set(key, streak);
+      if (streak >= RECTIFY_FAILURE_THRESHOLD || this.draft.testedApproaches[key] !== undefined) {
+        this.noteOutcome(key, { status: "failed", reason: reasonFirstLine });
+      }
     } else {
       // A success clears the tool's failure streak — the state reflects the newest truth.
-      if (this.draft.testedApproaches[`tool:${toolName}`] !== undefined) {
-        this.noteOutcome(`tool:${toolName}`, { status: "succeeded", evidence: reasonFirstLine });
-      } else {
-        this.failures.delete(`tool:${toolName}`);
+      if (this.draft.testedApproaches[key] !== undefined) {
+        const failures = this.failures.get(key) ?? 0;
+        const evidence = failures > 0 ? `recovered after ${failures} failure(s)` : reasonFirstLine;
+        this.noteOutcome(key, { status: "succeeded", evidence });
       }
+      this.failures.delete(key);
     }
   }
 
@@ -204,14 +217,27 @@ export class RootStateTracker {
    * see the const's soak citation). Any accepted delta resets the streak. In
    * degraded mode fences stop applying and the context transform stops splicing (`isActive`),
    * while runtime `observeToolResult` remains the Σ floor (degrade, never crash).
+   *
+   * Recall W2 amendments (root-only, engine ladder untouched):
+   *  - `productiveTurn` — a turn that RAN TOOLS did work; growing the idle streak over it
+   *    degraded file-editing sessions whose turns legitimately need no fence. Productive
+   *    turns neither grow nor reset the streak (neutral).
+   *  - Retry accounting — a batch that ACCEPTED deltas does not accumulate its problems into
+   *    the session-wide retry counter (real work is never punished for a sibling's malformed
+   *    fence — the observation still reports them); the counter only grows over zero-progress
+   *    batches, so the storm cap stays a storm cap, not a session-lifetime budget.
    */
-  applyFences(fences: readonly StateFenceResult[]): FenceOutcome {
+  applyFences(fences: readonly StateFenceResult[], opts?: { readonly productiveTurn?: boolean }): FenceOutcome {
     // R7-fix (recoverable degrade): a DEGRADED tracker no longer drops fences on the floor.
     // The old early-return turned idle degrade into a one-way amnesia valve — every later
     // fence vanished silently while the context transform kept eliding turns. Now the same
     // validation ladder runs in degraded mode, and a CLEAN batch re-activates compensation.
     // Degrade stays sticky only against zero-progress storms (all-malformed batches).
     if (fences.length === 0) {
+      if (opts?.productiveTurn === true) {
+        // Recall W2: tool-running turns are work, not fence idleness — neutral, no degrade.
+        return { fences: 0, accepted: 0, problems: 0 };
+      }
       // R4 (G6): a fence-free turn on a conditioned loop is IDLE — the contract rode the
       // prompt for nothing. Grow the streak; degrade at the engine's threshold.
       this.idleFenceTurns += 1;
@@ -247,9 +273,10 @@ export class RootStateTracker {
       this.touch();
       return { fences: fences.length, accepted, problems: 0 };
     }
-    // Degraded variant carries `reason`, not `retries` — recovery is clean-batch-only, so a
-    // degraded tracker neither accumulates retries nor re-activates on a partial batch.
-    const retries = (this.mode.kind === "active" ? this.mode.retries : 0) + problems.length;
+    // Recall W2: a productive batch (accepted > 0) starts its retry count at zero instead of
+    // accumulating the session's history — the storm cap then measures CONSECUTIVE failure
+    // storms, not session age. Zero-progress batches accumulate exactly as before.
+    const retries = accepted > 0 ? problems.length : (this.mode.kind === "active" ? this.mode.retries : 0) + problems.length;
     this.pendingObservation = statePatchObservation(problems);
     // Accepted deltas in a partially-failing batch still land — engine parity: real work is
     // never rolled back just because a sibling fence was malformed.
