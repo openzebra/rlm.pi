@@ -50,8 +50,22 @@ const WIRE = '{"state_patch": {"verifiedFacts[+]": "src/f.ts — fence wired"}}'
   check("clean fence recovers the degraded tracker", t.isActive);
   check("recovery fence lands in Σ", t.snapshot().verifiedFacts.includes("after degrade — recovery fence"));
   check("recovery resets the idle streak", t.idleTurns === 0);
+  // Recall W2 pollution fix: ONE transient failure (streak 1) no longer writes a Σ record —
+  // a single binary read used to evict real approach entries and fire spurious [rectify].
   t.observeToolResult("read", true, "ENOENT: no such file or directory");
-  check("observation floor keeps flowing after recovery", t.snapshot().testedApproaches["tool:read"]?.status === "failed");
+  check("single transient failure stays out of Σ", t.snapshot().testedApproaches["tool:read"] === undefined);
+  t.observeToolResult("read", true, "ENOENT: no such file or directory");
+  check("observation floor keeps flowing after recovery (failure repeats → Σ)", t.snapshot().testedApproaches["tool:read"]?.status === "failed");
+  // A promoted tool then RECOVERING records the success with the recovery evidence.
+  t.observeToolResult("read", false, "");
+  check("promoted tool recovering lands succeeded", t.snapshot().testedApproaches["tool:read"]?.status === "succeeded");
+  // Productive turns (toolCalls ran) never grow the idle ladder — file-editing sessions
+  // were degrading before their first fence landed.
+  const p = RootStateTracker.fresh("productive idle", 99);
+  for (let i = 0; i < ROOT_IDLE_DEGRADE_TURNS; i++) {
+    p.applyFences([], { productiveTurn: true });
+  }
+  check("productive turns never degrade the tracker", p.isActive && p.idleTurns === 0);
   // (the degrade reason itself was already asserted right after the degrade fired above —
   //  recovery legitimately clears it, so nothing to check here anymore)
 

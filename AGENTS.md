@@ -221,6 +221,16 @@ the SKILL.state rules above:
   surfaces in the status widget only under trace mode (R6). Two-tier elision (R6 outcome):
   stale toolResults get the §5.3 preview only within a `max(keepTurns, 1)`-turn ring; deeper
   staleness collapses to the glossary stub — previews per stale turn would re-create O(T).
+- **`[rlm.stage]` transcript cards** (UI): stage transitions — root digest compactions,
+  tracker degrade/recover, session distill — post `rlm.stage` custom messages
+  (`ui/stage-cards.ts`) that render collapsed until the user's ctrl+o (the host's
+  `app.tools.expand` re-invokes the renderer via `CustomMessageComponent.setExpanded`).
+  Digest bodies embed the summary VERBATIM (glossary wording — one source). The digest card
+  is built inside `session_before_compact` but posted at the next `turn_start` — never
+  `sendMessage` re-entrantly mid-compaction. R6 status-widget gating is unchanged: the
+  cards, not the status line, are the user-visible stage surface. Tree-side companion:
+  identical sibling `llm` leaves (label+model+status) consolidate into one `×N` group row at
+  the first member's position (`ui/tree/tree-model.ts`); `rlm` nodes NEVER group.
 
 ## Testing
 - Tests live in `pi-plugin/rlm/test/`

@@ -4,7 +4,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { RlmController } from "../mode/rlm-mode.ts";
 import { setRlmModeStatus } from "../ui/status.ts";
 
-export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController): void {
+/**
+ * `stopNative` aborts the native-mode session work (repl cells, child engines, detached
+ * spawn() tasks) and reports whether any was in flight. Optional so tests can register the
+ * bare command; production wires the closure accessors from src/index.ts.
+ */
+export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController, stopNative?: () => boolean): void {
   pi.registerCommand("rlm", {
     description: "Toggle persistent RLM mode (route plain prompts through the RLM engine).",
     handler: async (_args, ctx) => {
@@ -15,14 +20,16 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController):
   });
 
   pi.registerCommand("rlm-stop", {
-    description: "Abort the in-progress RLM run.",
+    description: "Abort in-progress RLM work: RLM runs, native repl cells, background tasks.",
     handler: async (_args, ctx) => {
-      if (!controller.isBusy()) {
-        ctx.ui.notify("No RLM run in progress.", "info");
-        return;
+      const rlmBusy = controller.isBusy();
+      if (rlmBusy) controller.abort();
+      const nativeBusy = stopNative?.() ?? false;
+      if (rlmBusy || nativeBusy) {
+        ctx.ui.notify("RLM work aborted — runs, repl cells and background tasks stopped.", "info");
+      } else {
+        ctx.ui.notify("No RLM work in progress.", "info");
       }
-      controller.abort();
-      ctx.ui.notify("RLM run aborted.", "info");
     },
   });
 

@@ -10,9 +10,12 @@
 
 import { check, failureCount } from "./helpers.ts";
 import { initTheme, Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import type { RlmController } from "../src/mode/rlm-mode.ts";
 import type { RlmDetails } from "../src/tool/rlm-details.ts";
+import type { ReplDetails } from "../src/tool/repl-details.ts";
 import { createRlmTool } from "../src/tool/rlm-tool.ts";
+import { renderReplCode, renderReplCollapsed, replCallView } from "../src/tool/repl-render.ts";
 import { SPINNER } from "../src/ui/theme.ts";
 
 // initTheme seeds the global Theme singleton so getMarkdownTheme() works.
@@ -286,6 +289,83 @@ console.log("\n=== renderResult null details ===");
   );
   const text = renderPlain(result);
   check("null details shows content text", text.includes("no details"));
+}
+
+// ── repl card: collapsed shows the CODE, expanded swaps it for the result ──
+
+console.log("\n=== repl renderCall (code payload) ===");
+
+{
+  // First line exceeds the 80-char header preview, so the marker lines below live ONLY
+  // in the code block — the header can never satisfy the "hides the code" assertions.
+  const code = ["# " + "x".repeat(90), "", "print('== cwd ==')", "print(os.getcwd())"].join("\n");
+  const args = { code };
+
+  const collapsed = renderPlain(replCallView(args, theme));
+  check("repl call collapsed shows the code", collapsed.includes("print('== cwd ==')"));
+  check("repl call collapsed keeps the header preview", collapsed.includes("repl "));
+
+  const expanded = renderPlain(replCallView(args, theme, { expanded: true, argsComplete: true }));
+  check("repl call expanded hides the code", !expanded.includes("print('== cwd ==')"));
+  check("repl call expanded keeps the header", expanded.includes("repl "));
+
+  const streaming = renderPlain(replCallView(args, theme, { expanded: false, argsComplete: false }));
+  check("repl call streaming keeps one-line preview, no code block", streaming.includes("repl ") && !streaming.includes("print('== cwd ==')"));
+}
+
+console.log("\n=== repl renderReplCode (line cap) ===");
+
+{
+  const short = Array.from({ length: 10 }, (_, i) => `line ${String(i)}`).join("\n");
+  check("repl code: short source renders whole", renderPlain(new Text(renderReplCode(short, theme), 0, 0)).includes("line 9"));
+
+  const long = Array.from({ length: 55 }, (_, i) => `line ${String(i)}`).join("\n");
+  const capped = renderPlain(new Text(renderReplCode(long, theme), 0, 0));
+  check("repl code: capped at 40 lines", capped.includes("line 39") && !capped.includes("line 40\n") && capped.includes("+15 more lines"));
+}
+
+console.log("\n=== repl renderReplCode (python highlighting) ===");
+
+{
+  // Wrap-theme makes each colored span assertable by tag.
+  const wrap = { fg: (c: string, s: string) => `[${c}]${s}[/${c}]` } as unknown as Theme;
+  const code = [
+    "# free inventory first",
+    "import os",
+    "x = 42",
+    "name = 'cell'",
+    "@dec",
+    '"""doc"""',
+  ].join("\n");
+  const out = renderReplCode(code, wrap);
+  const plain = out.replace(/\[\/?[A-Za-z]+\]/g, "");
+  check("highlight: text preserved byte-for-byte", plain === code);
+  check("highlight: comment muted", out.includes("[muted]# free inventory first[/muted]"));
+  check("highlight: keyword accent", out.includes("[accent]import[/accent]"));
+  check("highlight: number warning", out.includes("[warning]42[/warning]"));
+  check("highlight: string mdCode", out.includes("[mdCode]'cell'[/mdCode]") && out.includes('[mdCode]"""doc"""[/mdCode]'));
+  check("highlight: decorator mdHeading", out.includes("[mdHeading]@dec[/mdHeading]"));
+
+  // f-string prefix stays inside the string span; comment beats string inside comments.
+  const edge = renderReplCode("s = f'{x}'  # don't", wrap);
+  check("highlight: f-string kept whole", edge.includes("[mdCode]f'{x}'[/mdCode]"));
+  check("highlight: comment wins after code", edge.includes("[muted]# don't[/muted]") && !edge.includes("[mdCode]# don't[/mdCode]"));
+}
+
+console.log("\n=== repl renderReplCollapsed (hint) ===");
+
+{
+  const details: ReplDetails = {
+    status: "done",
+    output: "ok",
+    stderr: "",
+    executionTimeMs: 41,
+    subcalls: [],
+    totals: { tokens: 0 },
+  };
+  const text = renderPlain(renderReplCollapsed(details, theme));
+  check("repl collapsed shows REPL label + status glyph", text.includes("REPL") && text.includes("✓"));
+  check("repl collapsed hint says 'to show result'", text.includes("to show result") && !text.includes("to expand"));
 }
 
 console.log(`\n${failureCount() === 0 ? "ALL PASS" : `${failureCount()} FAILURE(S)`}`);

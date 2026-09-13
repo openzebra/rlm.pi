@@ -109,8 +109,31 @@ const RUN_STATE_FIELDS: ReadonlySet<string> = new Set([
 const ARRAY_FIELDS: ReadonlySet<string> = new Set(["findings", "verifiedFacts", "openQuestions"]);
 const TASK_MAX_CHARS = 200;
 const NEXT_STEP_MAX_CHARS = 300;
+// Recall W2 contract alignment: STATE_FENCE_INSTRUCTION promises "≤ 5 keys per patch, every
+// string value ≤ 120 chars" — the validator now MEANS it. Oversized values are CLAMPED
+// fail-soft (the prose carries the story; Σ carries pointers), while the key count is
+// rejected with an explicit error (a restatement-shaped patch must come back as feedback —
+// §5.7: consistent validator feedback is the small-model bottleneck).
+const STATE_PATCH_MAX_KEYS = 5;
+const STATE_VALUE_MAX_CHARS = 120;
 // `findings` | `findings[+]` | `findings[2]` | `testedApproaches.h1`
 const PATCH_KEY = /^([a-zA-Z_][a-zA-Z0-9_]*)((?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)(\[\+\]|\[\d+\])?$/;
+
+/** Fail-soft contract clamp — every string Σ value honors the promised ≤120 chars. */
+function clampStateValue(value: string): string {
+  return value.length > STATE_VALUE_MAX_CHARS ? value.slice(0, STATE_VALUE_MAX_CHARS) : value;
+}
+
+/** Clamp the string fields of a validated outcome record IN PLACE (string→clamped, everything
+ *  else — explicit `null` deletes included — passes through untouched; the strict-merge null
+ *  semantics live in strictMergeRecord and must never be eaten by the clamp). */
+function clampOutcomeRecord(value: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(value)) {
+    out[key] = typeof field === "string" ? clampStateValue(field) : field;
+  }
+  return out;
+}
 
 export function freshRunState(task: string): RunState {
   return {
@@ -256,18 +279,21 @@ export function enforceCaps(draft: MutableState): Result<RunState, PatchError> {
     artifacts: { ...draft.artifacts },
   };
   // bytesTotal: |Σ_t| must never exceed κ_Σ — deterministic eviction order keeps runs flat.
+  // Order (recall W2): diary entries (findings) go first, SPECULATIVE entries (openQuestions)
+  // next, FOUNDATION (verifiedFacts: paths/symbols/configs) survives longest — losing a
+  // foundational fact is the irreversible-recall failure the paper warns about (§7 case 2).
   let guard = 0;
   while (JSON.stringify(capped).length > RUN_STATE_LIMITS.bytesTotal && guard++ < 10_000) {
     if (capped.findings.length > 0) {
       capped.findings = capped.findings.slice(1);
       continue;
     }
-    if (capped.verifiedFacts.length > 0) {
-      capped.verifiedFacts = capped.verifiedFacts.slice(1);
-      continue;
-    }
     if (capped.openQuestions.length > 0) {
       capped.openQuestions = capped.openQuestions.slice(1);
+      continue;
+    }
+    if (capped.verifiedFacts.length > 0) {
+      capped.verifiedFacts = capped.verifiedFacts.slice(1);
       continue;
     }
     const approach = firstKey(capped.testedApproaches);
@@ -331,7 +357,7 @@ function applyKey(draft: MutableState, rawKey: string, value: unknown): Result<n
     }
     if (op === "[+]") {
       if (typeof value !== "string") return err({ kind: "type", path: rawKey, expected: "string" });
-      list.push(value);
+      list.push(clampStateValue(value));
     } else if (op !== undefined) {
       const index = Number.parseInt(op.slice(1, -1), 10);
       if (value === null) {
@@ -346,11 +372,11 @@ function applyKey(draft: MutableState, rawKey: string, value: unknown): Result<n
       if (index > list.length) {
         return err({ kind: "schema", detail: `${rawKey} would leave a hole (len=${list.length})` });
       }
-      list[index] = value;
+      list[index] = clampStateValue(value);
     } else {
       if (!isStringArray(value)) return err({ kind: "type", path: rawKey, expected: "string[]" });
       list.length = 0;
-      list.push(...dedupStrings(value));
+      list.push(...dedupStrings(value.map(clampStateValue)));
     }
     return ok(null);
   }
@@ -409,15 +435,17 @@ function applyKey(draft: MutableState, rawKey: string, value: unknown): Result<n
     if (!isPlainObject(value) || !isApproachOutcome(value)) {
       return err({ kind: "type", path: rawKey, expected: "ApproachOutcome" });
     }
+    // Contract clamp: outcome strings honor the promised ≤120 chars (nulls stay nulls).
+    const outcome = clampOutcomeRecord(value);
     const prev: unknown = cursor[leaf];
     const merged = isPlainObject(prev)
-      ? strictMergeRecord(prev, value, rawKey)
-      : ok<Record<string, unknown>, PatchError>({ ...value });
+      ? strictMergeRecord(prev, outcome, rawKey)
+      : ok<Record<string, unknown>, PatchError>(outcome);
     if (!merged.ok) return merged;
     refreshOrder(cursor, leaf, merged.value); // last-mention ordering for eviction
   } else {
     if (typeof value !== "string") return err({ kind: "type", path: rawKey, expected: "string" });
-    refreshOrder(cursor, leaf, value);
+    refreshOrder(cursor, leaf, clampStateValue(value));
   }
   commitRecord(draft, root, record);
   return ok(null);
@@ -454,6 +482,14 @@ export function applyPatch(prev: RunState, patch: unknown, t: number): Result<Ru
   }
   const ops = Object.entries(patch.state_patch);
   if (ops.length === 0) return err({ kind: "schema", detail: "empty state_patch" });
+  // Contract alignment (recall W2): the instruction promises ≤ 5 keys — a bigger patch is a
+  // restatement, and restatements must come back as feedback, not silently inflate Σ.
+  if (ops.length > STATE_PATCH_MAX_KEYS) {
+    return err({
+      kind: "schema",
+      detail: `${ops.length} keys — ≤ ${STATE_PATCH_MAX_KEYS} per patch; commit deltas only`,
+    });
+  }
   // Per-turn byte cap (bench rec #1): reject BEFORE the draft clone — a verbose restatement
   // must come back as an error observation, never silently eat output tokens.
   if (JSON.stringify(patch).length > RUN_STATE_LIMITS.patchBytes) {

@@ -28,6 +28,7 @@ import { estimateMessageTokens } from "../text/tokens.ts";
 import { agentMessageText } from "../text/agent-text.ts";
 import { isRecord } from "../util/type-guards.ts";
 import { ROOT_DIGEST_HEADER, ROOT_DIGEST_SECTIONS } from "../prompts/glossary.ts";
+import { trace, traceEnabled } from "../util/trace.ts";
 
 /** Marker persisted on the session's compaction entry — tests and soaks assert on it. */
 export interface RootDigestDetails {
@@ -106,14 +107,25 @@ function taskSection(messages: readonly unknown[]): string {
   return "";
 }
 
-/** [Findings] — newest-first substantive assistant blobs, capped, then chronological. */
+/** [Findings] — newest-first substantive assistant blobs, capped, then chronological.
+ *  Recall W4: prose blobs dedup two ways — exact normalized text (shared dedupStrings)
+ *  and an 80-char content prefix, because assistant restatements of their own finding
+ *  rarely match byte-for-byte and used to spend half the findings cap on echoes. */
 function findingsSection(messages: readonly unknown[]): readonly string[] {
   const findings: string[] = [];
+  const seenExact = new Set<string>();
+  const seenPrefix = new Set<string>();
   for (let i = messages.length - 1; i >= 0 && findings.length < FINDINGS_MAX; i--) {
     const m = messages[i];
     if (!isRecord(m) || m.role !== "assistant") continue;
     const text = agentMessageText(m).trim();
-    if (text.length > FINDINGS_MIN_CHARS) findings.push(text);
+    if (text.length <= FINDINGS_MIN_CHARS) continue;
+    const exactKey = text.toLowerCase().replace(/\s+/g, " ");
+    const prefixKey = exactKey.slice(0, 80);
+    if (seenExact.has(exactKey) || seenPrefix.has(prefixKey)) continue;
+    seenExact.add(exactKey);
+    seenPrefix.add(prefixKey);
+    findings.push(text);
   }
   findings.reverse();
   return findings;
@@ -190,12 +202,17 @@ export function buildRootDigestCompaction(
 
   // Over-cap drop order: [Project facts] → [State] → [Findings]; [Task]/[Next] survive to a
   // final truncate — task continuity beats trivia (paper §3.1 sufficient statistic).
+  // Recall W4: drops are traced (they were invisible before — a fat facts section could
+  // silently eat the entire [State] continuity floor).
+  let dropped = "";
   let summary = render(facts, states, findings);
-  if (summary.length > max) summary = render("", states, findings);
-  if (summary.length > max) summary = render("", [], findings);
+  if (summary.length > max) { summary = render("", states, findings); dropped = "facts"; }
+  if (summary.length > max) { summary = render("", [], findings); dropped += " state"; }
   if (summary.length > max) {
     summary = render("", [], findings.slice(0, Math.max(1, Math.floor(findings.length / 2))));
+    dropped += " findings-half";
   }
+  if (dropped !== "" && traceEnabled) trace("root-digest.drop", { dropped, max, finalChars: summary.length });
   summary = truncateMid(summary, max);
 
   const boundary = cut >= 0 ? args.branchEntries[cut] : undefined;

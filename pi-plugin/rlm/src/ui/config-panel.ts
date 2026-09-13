@@ -67,9 +67,9 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
       "Seed the working directory into context on the first repl() call (otherwise starts empty)."),
     // R5: the window calibrations are rlm.json-only knobs — shown read-only with live values.
     item("__sigma_window__", "Root Σ window (calibration)",
-      `keepTurns=${config.rootContextKeepTurns} · elide=${config.rootContextElideChars} · snapshot=${config.rootContextSnapshot ? "on" : "off"}`,
+      `keepTurns=${config.rootContextKeepTurns} · elide=${config.rootContextElideChars} · snapshot=${config.rootContextSnapshot ? "on" : "off"} · archive=${config.rootArchiveMaxChars > 0 ? `${Math.round(config.rootArchiveMaxChars / 1000)}k` : "off"}`,
       ["rlm.json"],
-      "Query-time window calibrations, rlm.json only: rootContextKeepTurns (1 = strict: Σ + current turn; 2 = default), rootContextElideChars, rootContextSnapshot. " +
+      "Query-time window calibrations, rlm.json only: rootContextKeepTurns (4 = default), rootContextElideChars, rootContextSnapshot, rootArchiveMaxChars (0 = archive off; elided turns are otherwise unrecoverable). " +
         "Session resume/fork: the tracker is reborn lazily and Σ re-grows from live observations — the first call after a resume has an empty Σ by design."),
     item("__save__", "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
   ];

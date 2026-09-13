@@ -8,6 +8,7 @@ import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 import { elideStalePayloads, spliceSigmaSnapshot, type RootMessage } from "../src/core/root-context.ts";
 import { RootStateTracker } from "../src/core/root-state.ts";
 import { runStateRootBlock, STATE_FENCE_INSTRUCTION } from "../src/core/run-state.ts";
+import { SessionArchive } from "../src/core/session-archive.ts";
 import { check, finish } from "./helpers.ts";
 
 type Msg = ContextEvent["messages"][number];
@@ -44,10 +45,12 @@ const BIG = "y".repeat(4_000);
     assistant("turn two response"),
     user("latest ask"),
   ];
-  const elided = elideStalePayloads(messages, { keepTurns: 2, elideChars: 1_500 });
+  const elided = elideStalePayloads(messages, { keepTurns: 2, elideChars: 1_500, archiveActive: true });
   check("one payload elided", elided === 1, String(elided));
   const stale = (messages[0] as { content: { text: string }[] }).content[0].text;
-  check("stale payload became a preview", stale.includes("chars elided — repl sandbox persists"), stale.slice(0, 80));
+  // Recall W1 honest stubs: a native `read` payload points at the session archive, not the
+  // repl sandbox (those bytes never lived there).
+  check("stale payload became a preview (archive mark)", stale.includes("chars elided — full text archived under ctx/session-log"), stale.slice(0, 80));
   check("preview keeps head and tail", stale.startsWith("STALE") && stale.trimEnd().endsWith("y"));
   check("fresh payload untouched", JSON.stringify(messages[4]).includes(`FRESH ${BIG}`));
   check("sigma immune", (messages[1] as { content: unknown }).content === "old snapshot");
@@ -59,6 +62,43 @@ const BIG = "y".repeat(4_000);
     { keepTurns: 2, elideChars: 10 },
   );
   check("fewer turns than window ⇒ zero", none === 0);
+}
+
+// ── Recall W1: honest stub variants + the archive sink ─────────────────────────────
+{
+  const archived: { role: string; toolName: string | undefined; text: string }[] = [];
+  const messages: RootMessage[] = [
+    assistant("old plan prose that will be stubbed"),
+    toolResult("repl", `REPL STDOUT ${BIG}`),
+    toolResult("read", `FILE BODY ${BIG}`),
+    assistant("recent"),
+    user("ask"),
+  ];
+  const elided = elideStalePayloads(
+    messages,
+    { keepTurns: 1, elideChars: 200, archiveActive: true },
+    (entry) => archived.push(entry),
+  );
+  check("sink saw every destroyed message", archived.length === 3, JSON.stringify(archived.map((a) => a.role)));
+  check("sink holds FULL pre-elision text", archived[0]?.text.startsWith("old plan prose") ?? false);
+  check("repl payload keeps the repl stub", JSON.stringify(messages[1]).includes("repl sandbox persists"));
+  check("native payload points at the archive", JSON.stringify(messages[2]).includes("ctx/session-log"));
+  check("prose points at the archive", JSON.stringify(messages[0]).includes("ctx/session-log"));
+  check("count matches", elided === 3, String(elided));
+
+  // archiveActive=false ⇒ stubs promise nothing they cannot deliver.
+  const plain: RootMessage[] = [assistant("old prose"), toolResult("read", `BODY ${BIG}`), assistant("recent"), user("ask")];
+  elideStalePayloads(plain, { keepTurns: 1, elideChars: 200 });
+  check("no archive ⇒ prose stub is the plain line", JSON.stringify(plain[0]).includes("durable facts live in Σ") && !JSON.stringify(plain[0]).includes("ctx/session-log"));
+  // The read payload sits one stale turn back (preview ring) → previewed with the NEUTRAL
+  // mark: no archive promise, no phantom repl-persistence promise.
+  const plainPreview = (plain[1] as { content: { text: string }[] }).content[0].text;
+  check("no archive ⇒ native payload preview is neutral", plainPreview.includes("chars elided") && !plainPreview.includes("ctx/session-log") && !plainPreview.includes("repl sandbox"));
+  // Duplicate records across re-elision collapse (the context event re-runs per call).
+  const archive = new SessionArchive(1_000_000);
+  archive.record({ role: "assistant", toolName: undefined, text: "same old prose" });
+  const seq2 = archive.record({ role: "assistant", toolName: undefined, text: "same old prose" });
+  check("archive dedups re-elided messages", seq2 === undefined);
 }
 
 // ── WS-3a regression: elision must preserve toolCall blocks (provider tool pairing) ──

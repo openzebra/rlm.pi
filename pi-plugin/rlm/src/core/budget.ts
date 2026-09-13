@@ -180,8 +180,10 @@ export const FINDINGS_MIN_CHARS = 20;
 export const STATE_MAX = 8;
 const QUERY_CHARS = 4_000; // full task statement fits; 800 forced the model to "forget" its own goal
 const STATE_NEEDLE = "REPL stdout";
-/** Next-step probe shared by the engine handoff and the root digest (one wording source). */
-export const NEXT_STEP_RE = /next|then|will |todo/i;
+/** Next-step probe shared by the engine handoff and the root digest (one wording source).
+ *  Recall W4: word-boundary anchored — the old bare alternation matched substrings, so
+ *  "annex", "welfare", "willpower" pulled prose bullets in as the next step. */
+export const NEXT_STEP_RE = /\b(next|then|will|todo)\b/i;
 
 /**
  * Deterministic trajectory → handoff (v5 `distill_trajectory`). No LLM call: the model was

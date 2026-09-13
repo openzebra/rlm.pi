@@ -76,6 +76,25 @@ export class SandboxManager {
   }
 
   /**
+   * Recall W1: materialize one SessionArchive segment into the sandbox under
+   * `ctx/session-log/`. Same seam as refreshFileFromDisk (unique segment path ⇒ the upsert
+   * appends), so the worker's free search/grep_context BM25 covers elided history. Fail-soft:
+   * returns false when the worker is absent/dead (the host snapshot still replays on recreate).
+   */
+  async upsertArchiveSegment(segmentPath: string, text: string, cwd: string): Promise<boolean> {
+    this.contextPayload = upsertContextFile(this.contextPayload, segmentPath, text, cwd);
+    if (!this.sandbox || this.disposed) return false;
+    const code = patchContextExecCode(segmentPath, text, cwd);
+    try {
+      await this.execQueued(code);
+      return true;
+    } catch {
+      this.contextLoaded = false;
+      return false;
+    }
+  }
+
+  /**
    * Lazy get-or-create the sandbox. On first call, spawns PythonSandbox with the
    * given handlers. Subsequent calls return the existing sandbox immediately.
    * Deduplicates concurrent calls via initPromise.

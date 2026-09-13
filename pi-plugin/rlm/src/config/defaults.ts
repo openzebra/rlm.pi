@@ -78,7 +78,12 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   enableSkillStateDistill: true, // ENFORCED — see /tmp/ROOT_FULL_SKILLSTATE_PLAN.md R0
   skillStateMaxTokens: 1_200,
   skillStateLeafTokens: 200,
-  skillStateMinScore: 4.0,
+  // 2.5 (was 4.0 — recall W3): at 4.0 grounding silently no-oped on most prompts; 2.5 keeps
+  // the byte-identical-below-threshold contract while letting genuinely-relevant facts land.
+  skillStateMinScore: 2.5,
+  // Ξ block floor (recall W3): was Number.MIN_VALUE — every positively-scored stale note
+  // rode every root prompt. 2.0 admits relevant notes without the cross-session noise.
+  skillStateXiMinScore: 2.0,
   skillStateNotesPerProject: 128,
   // Root Σ integration (WS-2..WS-4): every LLM call assembles A_t = (P, Σ_t, O_t) — discard
   // semantics on stale payloads + exactly one Σ snapshot splice, and model-proposed ΔΣ_t
@@ -89,8 +94,16 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   rootDigestKeepRecentChars: 12_000,
   rootDigestMaxChars: 8_000,
   enableRootContextTransform: true, // ENFORCED — see /tmp/ROOT_FULL_SKILLSTATE_PLAN.md R0 (was soak-OFF pre-v2)
-  rootContextKeepTurns: 2,
-  rootContextElideChars: 1_500,
+  // Recall W4 calibration: 4 verbatim turns (was 2). SKILL.state's budget-matched ablation
+  // (Table 5/11) shows truncated windows collapse recall (0.18 vs structured 0.94); a 2-turn
+  // window sat dangerously close to that shape. Still O(1) per call; the session archive
+  // (rootArchiveMaxChars) makes anything older dereferenceable instead of gone.
+  rootContextKeepTurns: 4,
+  rootContextElideChars: 3_000,
+  // Recall W1: elided turns archive into the sandbox (ctx/session-log/*) so search()/
+  // grep_context() recall them — elision becomes dereferenceable, and the stubs stay honest.
+  // 0 disables the archive (stubs degrade to the plain Σ line).
+  rootArchiveMaxChars: 2_000_000,
   rootContextSnapshot: true,
   enableRootStateFences: true, // ENFORCED — see /tmp/ROOT_FULL_SKILLSTATE_PLAN.md R0 (was soak-OFF pre-v2)
 });

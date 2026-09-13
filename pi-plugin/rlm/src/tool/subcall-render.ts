@@ -64,21 +64,24 @@ export function cardHeader(
  * Deliberately `keyText` + the injected theme rather than pi's `keyHint`: `keyHint` colours via
  * pi's module-global theme, which throws when that global is uninitialized — the same jiti
  * hazard `ui/theme-adapter.ts` exists to avoid. `keyText` only reads the keybinding registry.
+ * Shared by tool cards AND the [rlm.stage] transcript cards (ui/stage-cards.ts).
  */
-function expandHint(theme: Theme): string {
+export function expandHint(theme: Theme, action = "to expand"): string {
   // Empty outside a live pi session (the app installs the real binding registry at startup) —
   // the phrase stays the same, only the key prefix drops out.
   const key = keyText("app.tools.expand");
-  return theme.fg("muted", key ? `${key} to expand` : "to expand");
+  return theme.fg("muted", key ? `${key} ${action}` : action);
 }
 
-/** The collapsed card: header line, then the expand hint once settled. */
+/** The collapsed card: header line, then the expand hint once settled. `action` labels what
+ * expanding reveals — the repl card says "to show result" (collapsed shows the code instead). */
 export function renderCollapsedCard(
   title: string,
   status: SubcallStatus | "aborted" | "done",
   stats: string,
   theme: Theme,
+  action = "to expand",
 ): Text {
-  const hint = status === "running" ? "" : `\n${expandHint(theme)}`;
+  const hint = status === "running" ? "" : `\n${expandHint(theme, action)}`;
   return new Text(`${cardHeader(title, status, stats, theme)}${hint}`, 0, 0);
 }

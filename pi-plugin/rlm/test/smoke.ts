@@ -39,6 +39,12 @@ const SUITES: readonly string[] = Object.freeze([
   "phase-root-digest.ts", "phase-root-context.ts",
   // Root Σ v2 (R0..R7 — /tmp/ROOT_FULL_SKILLSTATE_PLAN.md)
   "phase-root-fences.ts", "phase-root-tokens.ts", "phase-skillstate-enforced.ts",
+  // Recall package (W1..W4 — session archive + honest stubs + Σ write-side)
+  "phase-session-archive.ts",
+  // UI: [rlm.stage] transcript cards (digest / degrade / recover / distill)
+  "phase-stage-cards.ts",
+  // /rlm-stop: raceAbort + stop command composition
+  "phase-stop.ts",
 ]);
 
 async function assertEditSurfaceRemoved(): Promise<void> {

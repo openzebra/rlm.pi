@@ -29,11 +29,18 @@ import type { AddContextHandlerBundle } from "./bridge/add-context.ts";
 import { buildNativeSystemPrompt } from "./prompts/native.ts";
 import { SkillStore, notesFromRunState, xiQuery } from "./config/skillstate.ts";
 import { buildRootDigestCompaction } from "./core/root-digest.ts";
-import { RootStateTracker } from "./core/root-state.ts";
+import { ROOT_IDLE_DEGRADE_TURNS, RootStateTracker } from "./core/root-state.ts";
 import { elideStalePayloads, spliceSigmaSnapshot } from "./core/root-context.ts";
+import { SessionArchive } from "./core/session-archive.ts";
 import { agentMessageText, firstLine, textContentOf } from "./text/agent-text.ts";
 import { findStatePatches } from "./text/parsing.ts";
 import { capToolResultText } from "./mode/native-guards.ts";
+import {
+  STAGE_CUSTOM_TYPE,
+  renderStageCard,
+  stageCardMarkdown,
+  type StageCardDetails,
+} from "./ui/stage-cards.ts";
 import {
   isSubagentChildBypass,
   commitSubagentForceActivation,
@@ -108,17 +115,36 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     hideWhenEmpty: true,
   });
   let treePanelInstalled = false;
+  /**
+   * Native-mode abort: repl cells' child engines, detached spawn() tasks and add_context
+   * loads read this signal lazily (createReplTool getSignal), so /rlm-stop aborts AND
+   * rotates the controller mid-session — work started after a stop sees a fresh signal.
+   */
+  let nativeAbort = new AbortController();
+  const stopNativeWork = (): boolean => {
+    const hadWork = runRegistry.hasActive() || background.pending > 0;
+    nativeAbort.abort();
+    nativeAbort = new AbortController();
+    return hadWork;
+  };
   /** SKILL.state (Workstream B): session store — hydrated at session_start, flushed at shutdown. */
   let skillStore: SkillStore | undefined;
   /** Root Σ (WS-3/4): the native session's digest-level Σ_t — runtime-derived (tool outcomes,
    *  engine mirrors, prompts); lazily born on the first prompt, harvested + dropped at shutdown. */
   let rootTracker: RootStateTracker | undefined;
+  /** Recall W1: elided turns archive here and materialize into the sandbox
+   *  (ctx/session-log/*) so search()/grep_context() recall them. Per-session, closure-only. */
+  const sessionArchive = new SessionArchive(config.rootArchiveMaxChars);
+  /** Archive gate: enabled (chars > 0) AND the context transform actually running. */
+  const archiveActive = (): boolean =>
+    controller.config.rootArchiveMaxChars > 0 && rootContextActive();
   // Root Σ WS-5.1 telemetry — journal counters (trace lines + status widget when tracing).
   let xiCompositions = 0;
   let rootDigests = 0;
   let elidedMessages = 0;
   let sigmaSplices = 0;
   let idleDegrades = 0;
+  let archivedTurns = 0;
   /** R6: Σ counter snapshot for the status line — a fresh readonly object per render. */
   const sigmaTelemetry = (): RootSigmaTelemetry => ({
     xiCompositions,
@@ -127,6 +153,21 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     sigmaSplices,
     idleDegrades,
   });
+  /** [rlm.stage]: post one stage-transition card into the transcript (persisted, ctrl+o-expandable). */
+  const postStageCard = (details: StageCardDetails): void => {
+    try {
+      pi.sendMessage({ customType: STAGE_CUSTOM_TYPE, content: stageCardMarkdown(details), display: true, details });
+    } catch (err) {
+      // Stage cards are decoration — never fail the hook that produced the transition.
+      if (traceEnabled) trace("stage-card.fail", { error: errorMessage(err) });
+    }
+  };
+  /**
+   * Compaction-hook re-entrancy guard: session_before_compact builds the digest card but does
+   * NOT post it from inside the hook (a message appended mid-compaction would fold into the
+   * very span being digested) — the pending card flushes at the next turn_start instead.
+   */
+  let pendingDigestCard: StageCardDetails | undefined;
   // A detached child works in its OWN sandbox, so this one sees no frames and its request
   // watchdog would fire mid-await and SIGKILL a healthy worker, taking the REPL namespace
   // with it. Keep it alive while detached work is genuinely in flight.
@@ -173,7 +214,9 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const cfg = controller.config;
     // R0: enableSkillState is enforced (validateEnforcedOn) — no config check remains.
     if (skillStore === undefined) return undefined;
-    const block = skillStore.blockFor(query, cfg.skillStateMaxTokens);
+    // Recall W3: the Ξ block honors the configured score floor (was MIN_VALUE — any
+    // positively-scored stale note rode every prompt).
+    const block = skillStore.blockFor(query, cfg.skillStateMaxTokens, cfg.skillStateXiMinScore);
     return block === "" ? undefined : block;
   };
 
@@ -189,6 +232,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   pi.registerMessageRenderer("rlm-intro", (message, _options, theme) =>
     new Markdown(textContentOf(message.content), 1, 0, markdownTheme(theme)),
   );
+  // [rlm.stage] cards — orchestrator stage transitions, collapsed until the user's ctrl+o.
+  pi.registerMessageRenderer(STAGE_CUSTOM_TYPE, renderStageCard);
 
   // ── CLI flag: `pi --rlm` / `pi --rlm=false` overrides the persisted mode for this run ──
   pi.registerFlag("rlm", {
@@ -197,7 +242,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   });
 
   // ── Commands ──
-  registerRlmCommand(pi, controller);
+  registerRlmCommand(pi, controller, stopNativeWork);
   registerRlmConfigCommand(pi, controller);
   registerRlmLlmCommand(pi, controller);
   registerRlmRlmCommand(pi, controller);
@@ -322,6 +367,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           background,
           runRegistry,
           skillStore,
+          getSignal: () => nativeAbort.signal,
           onRunState: (state) => { rootTracker?.absorbEngineState(state); },
           getSkillBlock: composeSkillBlock,
           registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
@@ -360,6 +406,14 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // ── Keep the footer's context reading live (RLM exists to shrink this number) ──
   pi.on("turn_end", async (_event, ctx) => {
     setRlmModeStatus(ctx, controller, ctx.getContextUsage(), sigmaTelemetry());
+  });
+
+  // Deferred [rlm.stage] digest card — built inside session_before_compact, posted here.
+  pi.on("turn_start", async () => {
+    const card = pendingDigestCard;
+    if (card === undefined) return;
+    pendingDigestCard = undefined;
+    postStageCard(card);
   });
 
   /** True when the native-mode trade holds: enabled AND repl is in the active tool set. */
@@ -423,8 +477,13 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const tracker = rootTracker;
     if (tracker === undefined || !controller.config.enableRootStateFences) return;
     if (event.message.role !== "assistant") return;
+    // Recall W2: a turn that ran TOOLS did work — it is never fence-idle (file-editing
+    // sessions were degrading before their first fence landed). Productive turns neither
+    // grow nor reset the idle streak; prose-only turns keep the R4 ladder.
+    const productiveTurn = Array.isArray(event.message.content) &&
+      (event.message.content as Array<{ type?: string }>).some((b) => b?.type === "toolCall");
     const wasActive = tracker.isActive;
-    const outcome = tracker.applyFences(findStatePatches(agentMessageText(event.message)));
+    const outcome = tracker.applyFences(findStatePatches(agentMessageText(event.message)), { productiveTurn });
     // R3 soak observability: per-turn fence outcomes — the soak-B bars (≥50% of turns commit
     // ≥1 accepted delta, rejection storms <10%) are computed from these journal lines.
     if (traceEnabled) {
@@ -439,6 +498,12 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     }
     if (wasActive && !tracker.isActive) {
       idleDegrades += 1;
+      postStageCard({
+        kind: "degrade",
+        reason: tracker.degradeReason ?? "unknown",
+        idleTurns: tracker.idleTurns,
+        idleMax: ROOT_IDLE_DEGRADE_TURNS,
+      });
       if (traceEnabled) {
         const reason = tracker.degradeReason ?? "unknown";
         trace(reason.startsWith("idle") ? "root-state.idle-degrade" : "root-state.degrade", {
@@ -446,6 +511,9 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           reason,
         });
       }
+    } else if (!wasActive && tracker.isActive) {
+      // R7-fix recovery observability, user-visible: a degraded tracker accepted a clean batch.
+      postStageCard({ kind: "recover", fencesAccepted: outcome.accepted, fencesTotal: outcome.fences });
     }
   });
 
@@ -462,6 +530,14 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       });
       if (result !== undefined) {
         rootDigests += 1;
+        pendingDigestCard = {
+          kind: "digest",
+          index: rootDigests,
+          turnsFolded: event.preparation.messagesToSummarize.length,
+          tokensBefore: result.compaction.tokensBefore,
+          tokensBeforeRecomputed: result.tokensBeforeRecomputed,
+          summary: result.compaction.summary,
+        };
         if (traceEnabled) {
           // V1 soak probe: host-consumed tokensBefore vs our recomputation over the same span.
           trace("root-digest.built", {
@@ -486,7 +562,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // ── Context injection: listing of whatever is currently loaded ──
   // Re-inject only when the payload identity changes (seed / add_context), not every turn —
   // the listing can be up to 200 file lines and the plugin exists to shrink the root window.
-  pi.on("context", async (event) => {
+  pi.on("context", async (event, ctx) => {
     const filtered = event.messages.filter(
       (message) =>
         !(message.role === "custom" && message.customType === "rlm-intro")
@@ -499,10 +575,23 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     // then splice exactly one fresh Σ snapshot. Fail-soft: a throw here must never break a turn.
     if (rootContextActive()) {
       try {
-        const elided = elideStalePayloads(filtered, {
-          keepTurns: controller.config.rootContextKeepTurns,
-          elideChars: controller.config.rootContextElideChars,
-        });
+        // Recall W1: every destroyed message's full text rides the sink into the session
+        // archive BEFORE the stub replaces it — elision stays dereferenceable.
+        const sink = archiveActive()
+          ? (entry: { role: "assistant" | "toolResult"; toolName: string | undefined; text: string }) => {
+              const seq = sessionArchive.record(entry);
+              if (seq !== undefined) archivedTurns += 1;
+            }
+          : undefined;
+        const elided = elideStalePayloads(
+          filtered,
+          {
+            keepTurns: controller.config.rootContextKeepTurns,
+            elideChars: controller.config.rootContextElideChars,
+            archiveActive: sink !== undefined,
+          },
+          sink,
+        );
         elidedMessages += elided;
         const tracker = rootTracker;
         // R4 REV (amnesia fix): degrade suspends fence WRITES (applyFences gate) — never Σ
@@ -523,8 +612,31 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           });
           sigmaSplices += 1;
         }
+        // Recall W1 flush: materialize new archive segments into the sandbox — ONLY when a
+        // worker already exists (never spawn Python from a context event) and fail-soft.
+        const pendingSegment = archiveActive() && sandboxManager.isAlive
+          ? sessionArchive.renderPending()
+          : undefined;
+        if (pendingSegment !== undefined) {
+          const cwd = resolve(ctx?.cwd ?? process.cwd());
+          const written = await sandboxManager.upsertArchiveSegment(pendingSegment.path, pendingSegment.text, cwd);
+          if (traceEnabled) {
+            trace("root-archive.flush", {
+              path: pendingSegment.path,
+              chars: pendingSegment.text.length,
+              written,
+              stats: sessionArchive.stats,
+            });
+          }
+        }
         if (traceEnabled && (elided > 0 || sigmaSplices > 0)) {
-          trace("root-context.transform", { elided, total: elidedMessages, splices: sigmaSplices });
+          trace("root-context.transform", {
+            elided,
+            total: elidedMessages,
+            splices: sigmaSplices,
+            archived: archivedTurns,
+            archiveChars: sessionArchive.stats.chars,
+          });
         }
       } catch (err) {
         if (traceEnabled) trace("root-context.fail", { error: errorMessage(err) });
@@ -571,6 +683,13 @@ export default function rlmExtension(pi: ExtensionAPI): void {
         event.isError,
         event.isError ? firstLine(textContentOf(event.content)) : "",
       );
+      // Recall W2 deterministic harvest (commit-at-first-sight, paper §7): successful reads
+      // are Σ facts the moment they happen — previously the only runtime feeds were tool
+      // ERRORS and edits, so the early turns (the ones elided first) never reached Σ.
+      if (!event.isError && event.toolName === "read") {
+        const path = extractEditPaths(event.input)[0];
+        if (path !== undefined) tracker.noteFact(`read ${path}`);
+      }
     }
 
     // ── Keep RLM context fresh after native file mutations ──
@@ -617,14 +736,25 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const tracker = rootTracker;
     if (skillStore !== undefined && tracker !== undefined && tracker.dirty) {
       try {
-        skillStore.merge(notesFromRunState(tracker.snapshot()));
-        if (traceEnabled) trace("root-harvest.merged", { notes: tracker.snapshot().verifiedFacts.length });
+        const merged = notesFromRunState(tracker.snapshot());
+        skillStore.merge(merged);
+        if (merged.length > 0) {
+          // One-line stage card: what this session taught the store (tag histogram via stats()).
+          postStageCard({
+            kind: "distill",
+            merged,
+            total: skillStore.noteCount,
+            byTag: skillStore.stats().byTag,
+          });
+        }
+        if (traceEnabled) trace("root-harvest.merged", { notes: merged.length });
       } catch (err) {
         if (traceEnabled) trace("root-harvest.fail", { error: errorMessage(err) });
       }
     }
     await skillStore?.flush(); // SKILL.state (Workstream B): persist distilled notes
     controller.abort();
+    nativeAbort.abort(); // detach engines/spawns still holding the session signal
     clearInterval(watchdogHeartbeat);
     background.dispose();
     await sandboxManager.dispose();

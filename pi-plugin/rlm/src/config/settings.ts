@@ -167,6 +167,8 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (skillStateLeafTokens !== undefined) out.skillStateLeafTokens = skillStateLeafTokens;
   const skillStateMinScore = validateNumber(r.skillStateMinScore, 0);
   if (skillStateMinScore !== undefined) out.skillStateMinScore = skillStateMinScore;
+  const skillStateXiMinScore = validateNumber(r.skillStateXiMinScore, 0);
+  if (skillStateXiMinScore !== undefined) out.skillStateXiMinScore = skillStateXiMinScore;
   const skillStateNotesPerProject = validateNumber(r.skillStateNotesPerProject, 1);
   if (skillStateNotesPerProject !== undefined) out.skillStateNotesPerProject = skillStateNotesPerProject;
   // Root Σ integration (WS-2..WS-4) — paradigm flags ENFORCED (R0); the window/byte knobs
@@ -181,6 +183,10 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (rootContextKeepTurns !== undefined) out.rootContextKeepTurns = rootContextKeepTurns;
   const rootContextElideChars = validateNumber(r.rootContextElideChars, 100);
   if (rootContextElideChars !== undefined) out.rootContextElideChars = rootContextElideChars;
+  // Recall W1 archive calibration: 0 legitimately disables the archive (plain stubs), so the
+  // floor differs from the other char knobs.
+  const rootArchiveMaxChars = validateNumber(r.rootArchiveMaxChars, 0);
+  if (rootArchiveMaxChars !== undefined) out.rootArchiveMaxChars = rootArchiveMaxChars;
   const rootContextSnapshot = validateBoolean(r.rootContextSnapshot);
   if (rootContextSnapshot !== undefined) out.rootContextSnapshot = rootContextSnapshot;
   out.enableRootStateFences = validateEnforcedOn(r.enableRootStateFences, "enableRootStateFences");

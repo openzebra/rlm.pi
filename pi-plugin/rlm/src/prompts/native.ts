@@ -6,11 +6,13 @@
  */
 
 import {
+  ARCHIVE_RECALL_LINE_NATIVE,
   CHUNKED_GLOSSARY_LINE_NATIVE,
   ENV_TIPS_CONDENSED,
   LARGE_FILE_RULE_NATIVE,
   DEFAULT_PROMPT_CAP,
   promptCapTokensK,
+  SKILL_SEARCH_LINE_NATIVE,
 } from "./glossary.ts";
 import { STATE_FENCE_INSTRUCTION } from "../core/run-state.ts";
 
@@ -25,6 +27,7 @@ function nativeReplGlossary(): string {
     "- `search(query, k=10, path_glob=None) -> [{path, line, score, snippet, text}]` — BM25 pointers, not bodies",
     "- `grep_context(pattern, k=50, …) -> {hits, counts, total, truncated}` — regex / lexical needles",
     "- `outline(path) -> str` — definition skeleton (~200 chars)",
+    ARCHIVE_RECALL_LINE_NATIVE,
     "",
     "### Always-spawn fan-out (return Task + run ↯bg — NEVER the answer)",
     "| Call | await_task → | When | NOT for |",
@@ -47,6 +50,7 @@ function nativeReplGlossary(): string {
     "- `answers` / `plan` — persistent dicts for **collected** results. Task handles are REPL vars (`t`), not `answers` keys.",
     "- `add_context(source) -> dict` — append external dir/file/doc/git under `ctx/<id>/…` (metadata only).",
     "- `list_claims()` — the live `[ledger]` table of agent work.",
+    SKILL_SEARCH_LINE_NATIVE,
     "- `SHOW_VARS()` — list REPL vars (Tasks as `<Task …>`). `list_tasks()` finds Task handles. `answer[\"ready\"]=True` only for headless finalize (native: write a normal message).",
     "",
     ENV_TIPS_CONDENSED,
@@ -189,8 +193,10 @@ export function buildNativeSystemPrompt(opts?: { readonly stateFences?: boolean 
   ].join("\n");
 }
 
-/** Soft cap on the static native prompt. Raised for v5-style contract/routing/examples. */
-export const NATIVE_PROMPT_BUDGET = 9_500;
+/** Soft cap on the static native prompt. Raised for v5-style contract/routing/examples;
+ *  recall W3 raised it again (+200) for the archive-recall + skill_search twin lines —
+ *  the model cannot recall elided turns or prior-session facts it is never told about. */
+export const NATIVE_PROMPT_BUDGET = 9_700;
 
 /** Exported for tests — prompt length without context metadata (which is injected separately). */
 export const NATIVE_PROMPT_STATIC = buildNativeSystemPrompt();

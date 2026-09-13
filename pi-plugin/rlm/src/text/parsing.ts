@@ -55,6 +55,31 @@ const STATE_FENCE = /(`{3,})[ \t]*state[ \t]*\r?\n([\s\S]*?)\1/g;
  *  example JSON never trips the scanner. */
 const BARE_PATCH = /\{"state_patch"\s*:/g;
 
+/** Recall W2 fence-echo fix: ```json fences are the EXAMPLE/quote channel — the system
+ *  prompt itself shows `{"state_patch": …}` in a json-fenced example, and models echo it.
+ *  A bare-object candidate inside a ```json fence is a quotation, never a commit; only
+ *  fence-free (mangled) payloads or ```state bodies are authoring. One span scanner serves
+ *  both the parse path (findStatePatches) and the answer-scrub path (stripStateFences). */
+const JSON_FENCE = /(`{3,})[ \t]*json\b[^\r\n]*\r?\n[\s\S]*?\1/g;
+
+function jsonFenceSpans(text: string): readonly { readonly start: number; readonly end: number }[] {
+  const spans: { start: number; end: number }[] = [];
+  let m: RegExpExecArray | null;
+  JSON_FENCE.lastIndex = 0;
+  while ((m = JSON_FENCE.exec(text)) !== null) {
+    spans.push({ start: m.index, end: m.index + m[0].length });
+  }
+  return spans;
+}
+
+function insideSpans(spans: readonly { readonly start: number; readonly end: number }[], index: number): boolean {
+  for (let i = 0; i < spans.length; i++) {
+    const span = spans[i];
+    if (span !== undefined && index >= span.start && index < span.end) return true;
+  }
+  return false;
+}
+
 /** String-aware balanced-brace scan from `start` (an index of `{`). Honors string literals and
  *  backslash escapes so braces inside JSON strings cannot unbalance the count. Returns the
  *  complete object slice, or undefined when braces never balance before EOF. */
@@ -113,9 +138,13 @@ export function findStatePatches(text: string): readonly StateFenceResult[] {
     }
   }
   // Tolerant harvest over fence-free remainder (well-formed payloads already taken above).
+  // Candidates inside ```json fences are quotes/examples (recall W2) — skipped, so the
+  // contract example a model echoes cannot burn session-wide patch retries.
   const rest = sansFences(text);
+  const jsonSpans = jsonFenceSpans(rest);
   BARE_PATCH.lastIndex = 0;
   while ((m = BARE_PATCH.exec(rest)) !== null) {
+    if (insideSpans(jsonSpans, m.index)) continue;
     const obj = balancedJsonObject(rest, m.index);
     if (obj === undefined) continue;
     try {
@@ -137,9 +166,13 @@ export function stripStateFences(text: string): string {
   let out = sansFences(text);
   const parts: string[] = [];
   let cursor = 0;
+  // A {"state_patch"…} inside a ```json fence is a quotation (recall W2) — must survive in
+  // the answer, not be scrubbed as leaked bookkeeping.
+  const jsonSpans = jsonFenceSpans(out);
   BARE_PATCH.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = BARE_PATCH.exec(out)) !== null) {
+    if (insideSpans(jsonSpans, m.index)) continue;
     const obj = balancedJsonObject(out, m.index);
     if (obj === undefined) continue;
     // Glom any immediately-preceding bare `state`/`.state` token (prose like "...report.state {").
