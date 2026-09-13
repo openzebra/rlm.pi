@@ -7,6 +7,9 @@
  */
 
 const CHARS_PER_TOKEN = 4;
+// CJK ideographs/kana/hangul encode ~1.5 chars per token — the flat /4 heuristic under-counts
+// CJK-heavy content ~2.7x, delaying compaction and budget walls until near overflow.
+const CJK_CHARS_PER_TOKEN = 1.5;
 
 /** Rough token count for a character length (≈4 chars/token). Always ≥ 1 for non-empty text. */
 export function estimateTokens(charCount: number): number {
@@ -14,11 +17,43 @@ export function estimateTokens(charCount: number): number {
   return Math.ceil(charCount / CHARS_PER_TOKEN);
 }
 
-/** Rough token count for a list of role/content messages. */
+/** CJK codepoints (kana, ideographs, hangul, compatibility forms) in `text`. */
+function cjkChars(text: string): number {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (
+      (c >= 0x3040 && c <= 0x30ff) || // kana
+      (c >= 0x3400 && c <= 0x9fff) || // ideograph extensions + unified ideographs
+      (c >= 0xac00 && c <= 0xd7af) || // hangul syllables
+      (c >= 0xf900 && c <= 0xfaff) // compatibility ideographs
+    ) {
+      n += 1;
+    }
+  }
+  return n;
+}
+
+/** Blended token estimate for actual TEXT: ASCII at 4 chars/token, CJK at 1.5. Pure-ASCII
+ *  input is byte-identical to estimateTokens(length) — only non-English content moves. */
+export function estimateTextTokens(text: string): number {
+  const cjk = cjkChars(text);
+  if (cjk === 0) return estimateTokens(text.length);
+  const ascii = text.length - cjk;
+  return Math.ceil(ascii / CHARS_PER_TOKEN + cjk / CJK_CHARS_PER_TOKEN);
+}
+
+/** Rough token count for a list of role/content messages (script-aware — see estimateTextTokens). */
 export function estimateMessageTokens(messages: { content: string }[]): number {
-  let chars = 0;
-  for (const m of messages) chars += m.content.length + 8; // small per-message overhead
-  return estimateTokens(chars);
+  let ascii = 0;
+  let cjk = 0;
+  for (const m of messages) {
+    ascii += m.content.length + 8; // small per-message overhead
+    cjk += cjkChars(m.content);
+  }
+  if (cjk === 0) return estimateTokens(ascii);
+  const nonCjk = ascii - cjk;
+  return nonCjk <= 0 ? 0 : Math.ceil(nonCjk / CHARS_PER_TOKEN + cjk / CJK_CHARS_PER_TOKEN);
 }
 
 /**

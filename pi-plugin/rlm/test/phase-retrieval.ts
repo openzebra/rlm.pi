@@ -94,8 +94,14 @@ async function main(): Promise<void> {
     check("search returns [] for a miss", JSON.stringify(parsePrinted(r.stdout)) === "[]", r.stdout.trim());
 
     r = await sandbox.exec('h = search("resolve model id", k=1)[0]\nprint(json.dumps(sorted(h.keys())))');
-    check("search hit shape is {line, path, score, snippet, text}",
-      JSON.stringify(parsePrinted(r.stdout)) === '["line","path","score","snippet","text"]', r.stdout.trim());
+    check("search hit shape is {end, line, path, score, snippet, text}",
+      JSON.stringify(parsePrinted(r.stdout)) === '["end","line","path","score","snippet","text"]', r.stdout.trim());
+
+    // ── BM25 v2: stemming recall (twin rules with util/bm25.ts) ────────────────────────────
+    r = await sandbox.exec('print(json.dumps([h["path"] for h in search("creates engines", k=3)]))');
+    got = parsePrinted(r.stdout);
+    check("search stems morphology (creates/engines match createEngine)",
+      Array.isArray(got) && (got as string[])[0] === "src/core/engine.ts", JSON.stringify(got));
 
     // ── grep_context: capped hits, complete counts ────────────────────────────────────────
     r = await sandbox.exec(
@@ -153,6 +159,16 @@ async function main(): Promise<void> {
     );
     check("search index invalidates when context grows (add_context path)",
       JSON.stringify(parsePrinted(r.stdout)) === '["lib/x/a.py"]', r.stdout.trim());
+
+    // Same-length in-place edit: id+length stamp cannot see it — the content fingerprint must.
+    r = await sandbox.exec(
+      'import json\n'
+      + '_e = context[0]\n'
+      + 'context[0] = dict(_e, content="brandnewsymbol2" + _e["content"][15:])\n'
+      + 'print(json.dumps([h["path"] for h in search("brandnewsymbol2", k=2)]))',
+    );
+    check("search index invalidates on a same-length in-place edit (fingerprint stamp)",
+      JSON.stringify(parsePrinted(r.stdout)) === '["src/config/settings.ts"]', r.stdout.trim());
 
     // ── map_files: always Task; one batch, not one call per file ─────────────────────────
     batchCalls = 0; batchSizes = [];
@@ -232,6 +248,35 @@ async function main(): Promise<void> {
     r = await sandbox.exec('print(json.dumps(sorted(n for n in SHOW_VARS().split() if "answers" in n or "plan" in n)))');
     check("answers/plan are user-visible in SHOW_VARS (so they get snapshotted)",
       r.stdout.includes("answers") && r.stdout.includes("plan"), r.stdout.trim());
+
+    // ── adjacent-window merge: one file cannot flood k with overlapping windows ────────────
+    const wideLines = Array.from({ length: 100 }, (_, i) =>
+      i === 9 || i === 49 ? "MERGE_NEEDLE marks the span" : `filler ${i} plain words`);
+    await sandbox.loadContext([
+      { path: "wide/needle.md", content: wideLines.join("\n"), tokens: 300 },
+      { path: "other/file.md", content: "unrelated prose entirely\n", tokens: 5 },
+    ]);
+    r = await sandbox.exec(
+      'import json\nhits = search("MERGE_NEEDLE", k=5)\n'
+      + 'print(json.dumps([[h["path"], h["line"], h["end"]] for h in hits]))',
+    );
+    got = parsePrinted(r.stdout);
+    const mergedHits = Array.isArray(got) ? (got as [string, number, number][]) : [];
+    check("adjacent windows of one file merge into a single wide hit",
+      mergedHits.length === 1 && mergedHits[0][0] === "wide/needle.md" && mergedHits[0][2] > mergedHits[0][1] + 30,
+      JSON.stringify(mergedHits));
+
+    // ── index_truncated: an over-cap index must say so on every hit ────────────────────────
+    r = await sandbox.exec(
+      'import json, retrieval\n'
+      + 'retrieval._INDEX_MAX_WINDOWS = 3\n'
+      + 'entries = [(f"f{i}.txt", f"uniquetoken{i} body\\n") for i in range(6)]\n'
+      + 'idx = retrieval._Bm25Index(entries)\n'
+      + 'hits = retrieval.search(entries, idx, "uniquetoken1", k=5)\n'
+      + 'print(json.dumps([len(hits), all(h.get("index_truncated") for h in hits)]))',
+    );
+    check("search flags index_truncated when the window cap drops context",
+      JSON.stringify(parsePrinted(r.stdout)) === "[1,true]", r.stdout.trim());
 
     // ── H1: search snippets center on the earliest matched term, not the chunk head ───────
     const fillerLine = "lorem ipsum padding filler vocabulary line";

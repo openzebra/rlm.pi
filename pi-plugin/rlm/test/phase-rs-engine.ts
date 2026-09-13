@@ -7,6 +7,7 @@
  */
 
 import { createEngine } from "../src/core/engine.ts";
+import { SIGMA_UNCHANGED_LINE } from "../src/core/run-state.ts";
 import { COMPACTION_CEILING_TOKENS } from "../src/core/limits.ts";
 import { DEFAULT_CONFIG } from "../src/config/defaults.ts";
 import type { RlmConfig } from "../src/core/types.ts";
@@ -14,7 +15,7 @@ import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { captureComplete, check, finish, MOCK_MODEL, MOCK_REGISTRY, repl, runSuite } from "./helpers.ts";
 
 function cfg(over: Partial<RlmConfig> = {}): RlmConfig {
-  return { ...DEFAULT_CONFIG, enableLedger: false, ...over };
+  return { ...DEFAULT_CONFIG, enableLedger: false, enableVerificationNudge: false, ...over };
 }
 
 const FACT = "src/retry.ts — backoff lives here";
@@ -93,6 +94,29 @@ async function main(): Promise<void> {
     check("disabled: no Σ injection", !everything.includes("[Σ]"));
     check("disabled: no fence instruction", !everything.includes("[state]"));
     check("disabled: patches ignored (no rejection text)", !everything.includes("state patch rejected"));
+  }
+
+  // ── Σ economics: an unchanged Σ re-sends as the one-line marker ──
+  {
+    // Turns at index 2 and 3 are fence-free repl work; index 2 gets the full Σ block (first
+    // conditional turn), index 3 changes nothing — its prompt must carry the marker, not the
+    // JSON, not the contract. The finalize comes last.
+    const captured = captureComplete([RESP0, RESP1, repl('print("still working")'), repl('print("more")'), RESP2]);
+    const engine = createEngine({
+      model: MOCK_MODEL,
+      llmModel: MOCK_MODEL,
+      registry: MOCK_REGISTRY,
+      config: cfg({ compaction: false, enableVerificationNudge: false }),
+      emitter: new RlmEmitter(),
+      complete: captured.complete,
+    });
+    await engine({ rootPrompt: "find the backoff policy", context: "ctx", depth: 0 });
+    const calls = captured.calls;
+    const full = calls[2].messages.at(-1)?.content ?? "";
+    const after = calls[3].messages.at(-1)?.content ?? "";
+    check("Σ economics: first conditional turn carries the full block", full.includes("[Σ]") && full.includes(FACT));
+    check("Σ economics: unchanged Σ re-sends as the marker", after.includes(SIGMA_UNCHANGED_LINE));
+    check("Σ economics: marker omits the full JSON + contract", !after.includes(FACT) && !after.includes("[state]"));
   }
 
   // ── narrative (history-as-deliverable): RunState never activates ──

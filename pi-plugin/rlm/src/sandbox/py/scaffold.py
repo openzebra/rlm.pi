@@ -261,15 +261,30 @@ class WorkerScaffold:
     def _entries(self) -> list[tuple[str, str]]:
         return _context_entries(self.ns.get("context"))
 
-    def _get_index(self) -> _Bm25Index:
-        """Build the BM25 index on first use; rebuild when `context` was replaced or resized.
+    @staticmethod
+    def _fingerprint(entries: list[tuple[str, str]]) -> int:
+        """FNV-1a over per-entry (path, length, head-256, tail-256) — catches in-place edits.
 
-        Identity+length is a cheap stamp that catches the two ways context actually changes:
-        add_context() extending the list, and the model re-binding the name. In-place edits
-        that preserve length are not detected — documented, and rare in practice.
+        Sampling keeps this O(entries) even for 64MB payloads; a mid-file same-length edit that
+        dodges both sampled ends is accepted residual risk (the old id+length stamp missed ALL
+        same-length edits, not just unsampled ones).
+        """
+        h = 0x811C9DC5
+        for path, content in entries:
+            sample = path + "\x00" + content[:256] + "\x00" + (content[-256:] if len(content) > 256 else "")
+            for byte in sample.encode("utf-8", "replace"):
+                h = ((h ^ byte) * 0x01000193) & 0xFFFFFFFF
+            h = ((h ^ (len(content) & 0xFFFFFFFF)) * 0x01000193) & 0xFFFFFFFF
+        return h
+
+    def _get_index(self) -> _Bm25Index:
+        """Build the BM25 index on first use; rebuild when `context` changed in any detectable way.
+
+        Identity + content fingerprint: catches add_context() growth, model re-binds, AND
+        same-length in-place edits at the sampled ends (the old stamp caught only the first two).
         """
         ctx = self.ns.get("context")
-        stamp = (id(ctx), len(ctx) if isinstance(ctx, (list, str)) else 0)
+        stamp = (id(ctx), self._fingerprint(self._entries()))
         if self._index is None or self._index_stamp != stamp:
             self._index = _Bm25Index(self._entries())
             self._index_stamp = stamp

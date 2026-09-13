@@ -47,7 +47,7 @@ Optional env vars:
 |-----|---------|---------|
 | `RLM_BENCH_MODEL` | `openrouter/qwen/qwen3.8-27b` | Model under test — one of the three-model panel (`qwen3.8-27b` / `mercury-2.5` / `glm-4.7`). A full oolong run costs ≈ $0.03–0.30 by model. Free pools die mid-stream (`finish_reason:"error"` with no payload) |
 | `ZAI_API_KEY` | — | Required for `zai/*` models (Z.ai coding endpoint, e.g. `zai/glm-4.7`); OpenRouter models use `OPENROUTER_API_KEY` only |
-| `RLM_BENCH_CONTEXT_WINDOW` | `131072` | Advertised context window of the model under test (budget math uses it) |
+| `RLM_BENCH_CONTEXT_WINDOW` | `1000000` | Advertised context window of the model under test (budget math uses it) |
 
 ### Recall eval (no API key needed)
 

@@ -26,11 +26,11 @@ import { PythonSandbox, SANDBOX_WATCHDOG_HEARTBEAT_MS } from "../sandbox/sandbox
 import type { ReplResult } from "../sandbox/protocol.ts";
 import { pinContext, type PinnedContext } from "../sandbox/context-file.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
-import { findReplBlocks, stripStateFences } from "../text/parsing.ts";
+import { finalVarRepairCode, findFinalTag, findReplBlocks, stripStateFences } from "../text/parsing.ts";
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, latestStdoutOf, turnHadError } from "./answer.ts";
 import { compactHistory, elideOldToolPayloads, rebaseWithState, shouldCompact } from "./compaction.ts";
-import { applyStatePatches, freshRunState, runStateTurnBlock, type RunState, type RunStateMode } from "./run-state.ts";
+import { applyStatePatches, compactJSON, freshRunState, runStateTurnBlock, SIGMA_UNCHANGED_LINE, type RunState, type RunStateMode } from "./run-state.ts";
 import { findStatePatches } from "../text/parsing.ts";
 import { complete1, completeDeps } from "../bridge/handlers/completion.ts";
 import type { SubcallHandlerDeps } from "../bridge/handlers/types.ts";
@@ -202,12 +202,27 @@ export function createEngine(deps: EngineDeps): RunRlm {
           if (detachedInFlight === 0) detachedIdle?.();
         }
       },
-      // SKILL.state: leaf grounding (Workstream D, DRY #1) + the parent Ξ for children (C, DRY #6).
+      // SKILL.state: leaf grounding (Workstream D, DRY #1) + the Ξ block for children (C, DRY #6).
       groundLeaf:
         skillStore === undefined || !deps.config.enableSkillState
           ? undefined
           : (prompt: string) => groundLeafPrompt(skillStore, deps.config, prompt),
-      getSkillBlock: () => input.skillBlock,
+      // The child's Ξ is re-ranked against the CHILD's task from the live store — inheriting
+      // the parent's block verbatim wasted the Ξ budget on facts ranked for someone else's
+      // question. Falls back to the inherited block when re-ranking comes up empty (or for
+      // the degenerate same-task call), and to `undefined` semantics when the store is off.
+      getSkillBlock:
+        skillStore === undefined || !deps.config.enableSkillState
+          ? () => input.skillBlock
+          : (task: string): string | undefined => {
+              if (task === input.rootPrompt || task.trim() === "") return input.skillBlock;
+              const block = skillStore.blockFor(
+                task,
+                deps.config.skillStateMaxTokens,
+                deps.config.skillStateXiMinScore,
+              );
+              return block !== "" ? block : input.skillBlock;
+            },
     } satisfies SubcallHandlerDeps;
     const subcalls = createSubcallHandlers(subcallDeps, taskRegistry);
 
@@ -220,8 +235,13 @@ export function createEngine(deps: EngineDeps): RunRlm {
       // off (one source, two sinks; never a second harvest implementation).
       deps.onRunState?.(runStateMode.state);
       if (skillStore === undefined || !deps.config.enableSkillState) return;
-      skillStore.merge(notesFromRunState(runStateMode.state));
+      // Depth-tagged deterministic harvest runs at every depth; the LLM distill is ROOT-ONLY —
+      // every child distilling into the same project section crowded the note cap with
+      // sub-task fragments (A-Mem store hygiene). Fail-soft: a distill failure must never
+      // damage a finished run.
+      skillStore.merge(notesFromRunState(runStateMode.state, input.depth));
       if (!deps.config.enableSkillStateDistill || deps.signal?.aborted === true) return;
+      if (input.depth > 0) return;
       try {
         const raw = await complete1(
           invocation,
@@ -229,7 +249,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           () => {},
           completeDeps(subcallDeps),
         );
-        const parsed = parseDistilledNotes(raw);
+        const parsed = parseDistilledNotes(raw, runStateMode.state.task);
         if (parsed.length > 0) skillStore.merge(parsed);
       } catch {
         // fail-soft by design
@@ -281,6 +301,11 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let softNoteTurn = -1;
     // H3: retrieval-discipline coach — one-shot per run; children inherit it via the same loop.
     let sawRetrieval = false;
+    let sawDelegation = false;
+    // Σ economics: the compact JSON of the Σ last sent to the model — an unchanged Σ
+    // re-sends as SIGMA_UNCHANGED_LINE instead of the full block. Reset by compaction/rebase
+    // (the rebase message re-anchors Σ verbatim) and by degrade (no more Σ blocks at all).
+    let lastSigmaSent: string | undefined;
     let retrievalNudged = false;
     // Verification-discipline coach (enableVerificationNudge, default OFF): one coached redo
     // when an early finalize looks like the confident-wrong bench shape.
@@ -368,8 +393,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
           history = elideOldToolPayloads(history);
           const compactionDeps = {
             // Summarisation is done by the cheap worker model; compaction fires on the ABSOLUTE
-            // COMPACTION_CEILING_TOKENS (limits.ts): ≤256k windows never compact, larger ones
-            // compact exactly at 256k (LO rule 2025-09-09).
+            // COMPACTION_CEILING_TOKENS (limits.ts): ≤1M windows never compact, larger ones
+            // compact exactly at 1M (LO rule 2025-09-09).
             model: deps.llmModel,
             registry: deps.registry,
             contextWindow: model.contextWindow,
@@ -382,6 +407,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
             history = runStateMode.kind === "active"
               ? rebaseWithState(history, runStateMode.state, ++compactions)
               : await compactHistory(history, compactionDeps, ++compactions, (u) => limits.addUsage(u));
+            lastSigmaSent = undefined; // the rebase message re-anchors Σ — full block next turn
           }
         }
 
@@ -401,15 +427,22 @@ export function createEngine(deps: EngineDeps): RunRlm {
 
         // v5 [ledger] blackboard — silent ("") when it has nothing to say.
         const ledgerBlock = deps.config.enableLedger ? runLedger.injectBlock() : "";
+        const sigmaJson = runStateMode.kind === "active" ? compactJSON(runStateMode.state) : "";
         // H3: after two retrieval-free turns, inject the coach nudge exactly once, for one turn.
-        const nudgeNow = i >= 2 && !sawRetrieval && !retrievalNudged;
+        // Surface-aware: delegation children (depth > 0) have NO search/grep_context — nudging
+        // them taught a tool their prompt elsewhere forbids (NameError bait).
+        const nudgeNow = input.depth === 0 && i >= 2 && !sawRetrieval && !retrievalNudged;
         if (nudgeNow) retrievalNudged = true;
         const notes =
           [
             i === softNoteTurn ? WRAP_UP_BUDGET : undefined,
             // Workstream A: from iteration 3 the run conditions on Σ (A_t = (P, Σ_t, O_t)) and
             // the state fence is requested — exploratory cold-start stays as-built (§12.2).
-            runStateMode.kind === "active" && i >= 2 ? runStateTurnBlock(runStateMode.state) : undefined,
+            // Σ economics: an unchanged Σ re-sends as a one-line marker, not the full JSON —
+            // full re-send happens only after compaction/rebase (lastSigmaSent reset below).
+            runStateMode.kind === "active" && i >= 2
+              ? (sigmaJson === lastSigmaSent ? SIGMA_UNCHANGED_LINE : runStateTurnBlock(runStateMode.state))
+              : undefined,
             ledgerBlock === "" ? undefined : ledgerBlock,
             nudgeNow ? RETRIEVAL_NUDGE : undefined,
             verificationNudgePending ? VERIFICATION_NUDGE : undefined,
@@ -424,6 +457,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
             .filter((s): s is string => s !== undefined)
             .join("\n\n") || undefined;
         verificationNudgePending = false;
+        if (runStateMode.kind === "active" && i >= 2) lastSigmaSent = sigmaJson;
         appendUserMessage(history, buildTurnPrompt(i, deps.config.maxIterations, notes));
 
         const turn = await runTurn(history, sandbox, {
@@ -439,6 +473,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           onPhase: reportPhase,
         });
         if (turn.blocks.some((b) => /\b(?:search|grep_context)\s*\(/.test(b))) sawRetrieval = true;
+        if (turn.blocks.some((b) => /\b(?:llm_query|llm_batch|rlm_query|rlm_batch|map_files|llm_query_chunked|llm_map_reduce|spawn)\s*\(/.test(b))) sawDelegation = true;
         const allBlocks = turn.blocks.length > 0
           ? turn.blocks.map((b) => previewText(b, 400)).join("\n")
           : previewText(turn.response, 400);
@@ -465,13 +500,33 @@ export function createEngine(deps: EngineDeps): RunRlm {
         const turnStdout = latestStdoutOf(turn.results);
         if (turnStdout) lastStdout = turnStdout;
         completedTurns = i + 1;
-        const final = finalAnswerOf(turn.results);
+        let final = finalAnswerOf(turn.results);
+        // RLM-paper App. A template repair: a finalize written as FINAL(x) / FINAL_VAR(v)
+        // instead of an `answer` flip is converted (16%/13% of small-model turns in the
+        // paper). The repair note rides the next observation so the model learns the channel.
+        let repairNote: string | undefined;
+        if (final == null && sandbox !== undefined) {
+          const tag = findFinalTag(turn.response);
+          if (tag?.kind === "final") {
+            final = tag.value;
+            repairNote = "[runtime] Converted FINAL(...) from your prose into the final answer — flip `answer[\"ready\"]` directly next time.";
+          } else if (tag?.kind === "final_var") {
+            const repaired = await sandbox.exec(finalVarRepairCode(tag.value));
+            const recovered = finalAnswerOf([repaired]);
+            if (recovered !== null && !recovered.startsWith("Error:")) {
+              final = recovered;
+              repairNote = `[runtime] Converted FINAL_VAR(${tag.value}) into the final answer — flip \`answer["ready"]\` directly next time.`;
+            } else if (recovered !== null) {
+              repairNote = recovered;
+            }
+          }
+        }
         if (final != null) {
-          // Verification-discipline nudge (enableVerificationNudge, default OFF): an early
-          // finalize whose answer is a bare number / short label is the confident-wrong shape
-          // that dominated bench failures. ONE coached redo, then the answer is accepted.
+          // Verification-discipline nudge (default ON — bench: 28/33 failures were early
+          // confident wrong answers): a finalize that is bare, or arrived without any
+          // inspection of the context, gets ONE coached redo, then the answer is accepted.
           if (deps.config.enableVerificationNudge === true && !verificationNudged
-            && completedTurns < VERIFICATION_NUDGE_TURN_CAP && isBareAnswer(final)) {
+            && completedTurns < VERIFICATION_NUDGE_TURN_CAP && isBareAnswer(final, sawRetrieval, sawDelegation)) {
             verificationNudged = true;
             verificationNudgePending = true;
           } else {
@@ -484,6 +539,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
         limits.observe(turnHadError(turn.results));
         history.push({ role: "assistant", content: turn.response });
         pendingReplOutputs = formatReplOutputs(turn.results, turn.skippedBlocks);
+        if (repairNote !== undefined) {
+          pendingReplOutputs = `${pendingReplOutputs}\n\n${repairNote}`;
+        }
         // ── Workstream A: apply ΔΣ_t AFTER the environment reply — Algorithm 1 ordering:
         // state reflects intended effects; feedback arrives as the next O_t. Rejections roll
         // back and lead the next observation (error-as-observation retry); retries exhausted
@@ -495,6 +553,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
             i + 1,
             deps.config,
             i >= 2, // the fence was requested this turn → empty turns count as idle (bench rec #2)
+            // Productive-turn parity (root tracker, recall W2): executed work that neither
+            // raised nor skipped resets the idle streak — repl progress is progress.
+            turn.blocks.length > 0 && !turnHadError(turn.results) && turn.skippedBlocks === 0,
           );
           runStateMode = applied.mode;
           if (applied.observation !== undefined) {
@@ -639,11 +700,18 @@ function contextWindowOrFallback(model: Model<Api>, registry: ModelContextRegist
   return registry.limitFor(`${model.provider}/${model.id}`);
 }
 
-/** Bare number / short label — the early-confident answer shape the verification nudge
- *  targets (28/33 bench failures were early confident wrong answers). */
-function isBareAnswer(answer: string): boolean {
+/** Early-confident answer shape — the target of the verification nudge (28/33 bench failures
+ *  were early confident wrong answers). Bare when: tiny, ≤3 words, a pure number/date/label,
+ *  or — strongest signal — the run NEVER inspected its context (no retrieval, no delegation):
+ *  the answer was then guessed, whatever its length. */
+function isBareAnswer(answer: string, sawRetrieval: boolean, sawDelegation: boolean): boolean {
   const t = answer.trim();
-  return t.length <= 12 || /^[-+$(€£¥]?\d+(?:[.,]\d+)*\s*%?$/.test(t);
+  if (t.length === 0) return true;
+  if (!sawRetrieval && !sawDelegation) return true;
+  if (t.length <= 12) return true;
+  if (t.split(/\s+/).length <= 3) return true;
+  if (/^[-+$(€£¥]?\d+(?:[.,]\d+)*\s*%?$/.test(t)) return true;
+  return false;
 }
 
 /** Out of turns: ask the model for its best final answer. FINALIZE_PROMPT asks for a fenced

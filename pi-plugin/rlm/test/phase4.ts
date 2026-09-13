@@ -386,7 +386,7 @@ async function testEmptyReadyDoesNotEndRun(): Promise<boolean> {
     model: MOCK_MODEL,
     llmModel: MOCK_MODEL,
     registry: MOCK_REGISTRY,
-    config: { ...DEFAULT_CONFIG, maxIterations: 4, compaction: false },
+    config: { ...DEFAULT_CONFIG, maxIterations: 4, compaction: false, enableVerificationNudge: false },
     complete,
   })({ rootPrompt: "empty ready", context: "ctx", depth: 0 });
   log("H2: empty ready-capture does not end the run", calls === 2, `calls=${calls}`);

@@ -25,6 +25,7 @@ import type { CompactionResult, SessionEntry } from "@earendil-works/pi-coding-a
 import type { RlmConfig } from "./types.ts";
 import { DEFAULT_NEXT_STEP, FINDINGS_MAX, FINDINGS_MIN_CHARS, NEXT_STEP_RE, STATE_MAX, truncateMid } from "./budget.ts";
 import { estimateMessageTokens } from "../text/tokens.ts";
+import { bm25Rank } from "../util/bm25.ts";
 import { agentMessageText } from "../text/agent-text.ts";
 import { isRecord } from "../util/type-guards.ts";
 import { ROOT_DIGEST_HEADER, ROOT_DIGEST_SECTIONS } from "../prompts/glossary.ts";
@@ -107,15 +108,18 @@ function taskSection(messages: readonly unknown[]): string {
   return "";
 }
 
-/** [Findings] — newest-first substantive assistant blobs, capped, then chronological.
- *  Recall W4: prose blobs dedup two ways — exact normalized text (shared dedupStrings)
- *  and an 80-char content prefix, because assistant restatements of their own finding
- *  rarely match byte-for-byte and used to spend half the findings cap on echoes. */
-function findingsSection(messages: readonly unknown[]): readonly string[] {
-  const findings: string[] = [];
+/** [Findings] — hybrid selection, then chronological render. Candidates keep the dedup
+ *  discipline (recall W4: exact + 80-char prefix), but the final pick is no longer pure
+ *  recency: each candidate scores `BM25(task) normalized + recency share`, so load-bearing
+ *  findings outrank newer rambles while recency breaks ties (and keeps no-overlap corpora
+ *  byte-compatible with the old newest-first behavior). */
+const FINDING_CANDIDATES_MAX = 40;
+
+function findingsSection(messages: readonly unknown[], task: string): readonly string[] {
+  const candidates: string[] = [];
   const seenExact = new Set<string>();
   const seenPrefix = new Set<string>();
-  for (let i = messages.length - 1; i >= 0 && findings.length < FINDINGS_MAX; i--) {
+  for (let i = messages.length - 1; i >= 0 && candidates.length < FINDING_CANDIDATES_MAX; i--) {
     const m = messages[i];
     if (!isRecord(m) || m.role !== "assistant") continue;
     const text = agentMessageText(m).trim();
@@ -125,10 +129,26 @@ function findingsSection(messages: readonly unknown[]): readonly string[] {
     if (seenExact.has(exactKey) || seenPrefix.has(prefixKey)) continue;
     seenExact.add(exactKey);
     seenPrefix.add(prefixKey);
-    findings.push(text);
+    candidates.push(text);
   }
-  findings.reverse();
-  return findings;
+  if (candidates.length <= FINDINGS_MAX) {
+    candidates.reverse();
+    return candidates;
+  }
+  // Hybrid rank: BM25 relevance to the live task + recency share (newest ≈ 1, oldest ≈ 0).
+  // `candidates` is collected newest-first, so recency decays with the index.
+  const ranked = bm25Rank(task, candidates.map((text) => ({ item: text, text })), candidates.length);
+  const relevance = new Map<string, number>();
+  const maxRel = ranked[0]?.score ?? 0;
+  for (const { item, score } of ranked) relevance.set(item, maxRel > 0 ? score / maxRel : 0);
+  const n = candidates.length;
+  const scored = candidates.map((text, i) => ({
+    text,
+    hybrid: (relevance.get(text) ?? 0) + (n - i) / n,
+  }));
+  scored.sort((a, b) => b.hybrid - a.hybrid);
+  const picked = new Set(scored.slice(0, FINDINGS_MAX).map((s) => s.text));
+  return candidates.filter((text) => picked.has(text));
 }
 
 /** [State] — newest-first toolResult first-lines (the last observed machinery state). */
@@ -175,10 +195,10 @@ export function buildRootDigestCompaction(
 
   const max = Math.max(200, args.config.rootDigestMaxChars);
   const task = truncateMid(taskSection(messages), Math.floor(max * TASK_FRACTION));
-  const findings = findingsSection(messages).map((f) => truncateMid(f, BULLET_CHARS));
+  const findings = findingsSection(messages, task).map((f) => truncateMid(f, BULLET_CHARS));
   const states = stateSection(messages);
   // Next-step probe mirrors distillTrajectory: newest-first scan, chronological render.
-  const next = findings.find((f) => NEXT_STEP_RE.test(f)) ?? DEFAULT_NEXT_STEP;
+  const next = [...findings].reverse().find((f) => NEXT_STEP_RE.test(f)) ?? DEFAULT_NEXT_STEP;
   const facts = args.store === undefined
     ? ""
     : args.store.sliceForPrompt(

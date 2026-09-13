@@ -141,4 +141,12 @@ try {
   // no /tmp, no problem
 }
 
+// ── CJK-aware estimation (knowlange): kana/ideographs/hangul at ~1.5 chars/token ──
+import { estimateMessageTokens, estimateTextTokens } from "../src/text/tokens.ts";
+check("estimateTextTokens: pure ascii matches the flat heuristic", estimateTextTokens("abcd") === 1);
+check("estimateTextTokens: CJK at 1.5 chars/token", estimateTextTokens("初語語") === 2);
+check("estimateMessageTokens: CJK content priced per script",
+  estimateMessageTokens([{ content: "初".repeat(30) }]) === 22, // 30 CJK / 1.5 + 8 overhead / 4
+);
+
 finish();
