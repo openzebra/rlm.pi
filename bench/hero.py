@@ -3,11 +3,12 @@
 
 Single source of truth: the bench journals in bench/runs/*.jsonl. For each
 model only the NEWEST journal that contains its rows is charted (older files
-are stale history). Three panels:
+are stale history). Two panels:
 
   1. Score (%)            — mean(correct) over all (task, run) rows
   2. Avg tokens / task    — stacked input+output tokens per completed task
-  3. Avg cost / task ($)  — mean(costUsd) per row, straight from the journal
+
+(The old cost/price panel was dropped by request — hero is a quality chart.)
 
 The header names the benchmark and its hardness so the chart is self-describing:
 OOLONG (oolong-synth) · 24 tasks x 3 runs · context <= 65,536 tok · max 16
@@ -100,14 +101,12 @@ def aggregate(rows):
         score = sum(1 for r in mine if r.get("correct") is True) / n * 100.0
         in_tok = sum(float(r.get("inputTokens") or 0) for r in mine) / n
         out_tok = sum(float(r.get("outputTokens") or 0) for r in mine) / n
-        cost = sum(float(r.get("costUsd") or 0) for r in mine) / n
         stats.append({
             "model": m,
             "label": short_model(m),
             "score": score,
             "in_tok": in_tok,
             "out_tok": out_tok,
-            "cost": cost,
             "n": n,
         })
     stats.sort(key=lambda s: (-s["score"], s["label"]))
@@ -115,7 +114,7 @@ def aggregate(rows):
 
 
 def render(stats, out_path: str) -> None:
-    fig, axes = plt.subplots(1, 3, figsize=(15.5, 5.6))
+    fig, axes = plt.subplots(1, 2, figsize=(11.0, 5.6))
     fig.patch.set_facecolor("white")
 
     fig.suptitle(TITLE, fontsize=17, fontweight="bold", y=0.985)
@@ -157,17 +156,6 @@ def render(stats, out_path: str) -> None:
     ax.set_title("Context appetite (in + out)", fontsize=12, pad=10)
     ax.legend(loc="upper left", fontsize=8.5, frameon=False)
 
-    # Panel 3 — Avg cost per task
-    ax = axes[2]
-    costs = [s["cost"] for s in stats]
-    bars = ax.bar(labels, costs, color=colors, width=0.62)
-    for b, v in zip(bars, costs):
-        ax.text(b.get_x() + b.get_width() / 2, v + max(costs) * 0.03,
-                f"${v:.4f}", ha="center", fontsize=12, fontweight="bold")
-    ax.set_ylim(0, max(costs) * 1.18 if max(costs) > 0 else 1)
-    ax.set_ylabel("Avg cost / task ($)", fontsize=11)
-    ax.set_title("Price per task", fontsize=12, pad=10)
-
     for ax in axes:
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
@@ -176,7 +164,7 @@ def render(stats, out_path: str) -> None:
         ax.grid(axis="y", color="#eceff1", linewidth=0.8)
 
     fig.text(0.5, 0.035,
-             "canonical set: qwen3.8-27b · mercury-2.5 · zai/glm-4.7   ·   n = scored rows   ·   glm-4.7 unpriced (cost $0)",
+             "canonical set: qwen3.8-27b · mercury-2.5 · zai/glm-4.7   ·   n = scored rows",
              ha="center", fontsize=8, color="#90a4ae")
     fig.text(0.5, 0.012,
              "rows: bench/runs/*.jsonl (latest journal per model) · regenerate: python3 bench/hero.py",
