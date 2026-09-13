@@ -204,4 +204,35 @@ const BIG = "x".repeat(3_000);
   check("garbage span still yields a digest (or undefined) without throwing", result !== undefined || true);
 }
 
+{
+  // ── hybrid findings selection (knowlange): relevance beats pure recency ──
+  // 14 substantive assistant blobs; the ONLY task-relevant one is the OLDEST. Pure
+  // newest-first would evict it; the hybrid rank keeps it and drops newer filler.
+  const taskMsg = msgEntry("user", "audit the retry backoff ladder");
+  const relevant = msgEntry("assistant", "The retry backoff ladder lives in util/retry.ts: 500ms base doubling to a 15s cap across 15 attempts.");
+  const filler: SessionEntry[] = [];
+  for (let i = 0; i < 13; i++) {
+    filler.push(msgEntry("assistant", `Unrelated probe ${i}: the weather module shipped quokka documentation revision ${i} today for the quarterly brochure.`));
+  }
+  const entries = [taskMsg, relevant, ...filler];
+  const res = buildRootDigestCompaction({
+    preparation: prep({
+      firstKeptEntryId: "e999999",
+      messagesToSummarize: entries.map((e) => (e as { message: unknown }).message),
+    }),
+    branchEntries: [],
+    config: CONFIG,
+    store: undefined,
+  });
+  const summary = res?.compaction.summary ?? "";
+  check("hybrid findings: task-relevant oldest finding survives", summary.includes("util/retry.ts"));
+  // 14 candidates − 12 picked: the two dropped must be the OLDEST filler (lowest recency
+  // share, zero relevance) — "probe 0" and "probe 1" — not the relevant finding. Word-boundary
+  // match: "probe 1" is a substring of the surviving "probe 10/11/12".
+  const hasProbe = (s: string): boolean => new RegExp(`\\bprobe ${s}\\b`).test(summary);
+  check("hybrid findings: the evicted two are the oldest filler",
+    !hasProbe("0") && !hasProbe("1") && hasProbe("2") && hasProbe("3"),
+    String((summary.match(/quokka/g) ?? []).length));
+}
+
 finish();

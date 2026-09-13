@@ -640,6 +640,17 @@ export function runStateTurnBlock(state: RunState): string {
 }
 
 /**
+ * Σ economics: re-sending a byte-identical Σ every turn is up to ~3K tokens of attention tax
+ * that carries zero new information — the model saw it one turn ago. The marker keeps the
+ * patch grammar within reach (a small model without it stops committing at all) while cutting
+ * the block ~10x. Callers must re-send the FULL block after compaction/rebase or degrade.
+ */
+export const SIGMA_UNCHANGED_LINE =
+  "[Σ] unchanged since last turn — deltas apply against it. Grammar: dotted keys, [+] append, " +
+  "[N] set slot, null delete; ≤ 5 keys per patch, every value ≤ 120 chars. Fence only NEW " +
+  "durable facts; an absent fence is free.";
+
+/**
  * Root Σ (WS-3b): the ROOT's A_t block. R2 (G2): with `withContract` the splice carries the
  * SAME fence contract (delegating to the one composer above — no re-wording), making the
  * splice paper-faithful A.4 authoring mode; without it, byte-identical to the v1

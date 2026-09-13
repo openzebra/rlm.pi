@@ -117,7 +117,7 @@ export class TokenBudget {
 /**
  * Minimum context window (tokens) for the token-budget cascade to engage at all.
  *
- * LO rule (2025-09-09): windows at/below COMPACTION_CEILING_TOKENS (256k) are never
+ * LO rule (2025-09-09): windows at/below COMPACTION_CEILING_TOKENS (1M) are never
  * budget-amputated — the derived share would shrink below a task's FIXED overhead (system
  * prompt + per-turn history re-send + sub-LLM calls); a 32k window would cap a task at 8k
  * tokens, less than the protocol scaffolding alone. Windows above the ceiling are budgeted
@@ -182,8 +182,10 @@ const QUERY_CHARS = 4_000; // full task statement fits; 800 forced the model to 
 const STATE_NEEDLE = "REPL stdout";
 /** Next-step probe shared by the engine handoff and the root digest (one wording source).
  *  Recall W4: word-boundary anchored — the old bare alternation matched substrings, so
- *  "annex", "welfare", "willpower" pulled prose bullets in as the next step. */
-export const NEXT_STEP_RE = /\b(next|then|will|todo)\b/i;
+ *  "annex", "welfare", "willpower" pulled prose bullets in as the next step. Knowlange
+ *  tightening: bare "next/then/will/todo" prose still hijacked ("the next release will…"),
+ *  so only explicit step shapes match now — colon labels, "next step", or commitments. */
+export const NEXT_STEP_RE = /\b(?:(?:next|then|todo)\s*:|next step\b|(?:i|we)\s+(?:will|'ll|’ll)\b)/i;
 
 /**
  * Deterministic trajectory → handoff (v5 `distill_trajectory`). No LLM call: the model was

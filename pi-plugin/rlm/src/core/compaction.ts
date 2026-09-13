@@ -31,8 +31,8 @@ interface CompactionDeps {
 
 /**
  * True if the history is at/over the compaction threshold — the ABSOLUTE
- * COMPACTION_CEILING_TOKENS (LO rule 2025-09-09): windows ≤ 256k never compact; larger
- * windows compact exactly at 256k. `contextWindow`/`thresholdPct` percentage math is gone.
+ * COMPACTION_CEILING_TOKENS (LO rule 2025-09-09): windows ≤ 1M never compact; larger
+ * windows compact exactly at 1M. `contextWindow`/`thresholdPct` percentage math is gone.
  */
 export function shouldCompact(history: ChatMsg[]): boolean {
   return estimateMessageTokens(history) >= COMPACTION_CEILING_TOKENS;

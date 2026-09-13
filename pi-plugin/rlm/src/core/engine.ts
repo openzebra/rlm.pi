@@ -30,7 +30,7 @@ import { finalVarRepairCode, findFinalTag, findReplBlocks, stripStateFences } fr
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, latestStdoutOf, turnHadError } from "./answer.ts";
 import { compactHistory, elideOldToolPayloads, rebaseWithState, shouldCompact } from "./compaction.ts";
-import { applyStatePatches, freshRunState, runStateTurnBlock, type RunState, type RunStateMode } from "./run-state.ts";
+import { applyStatePatches, compactJSON, freshRunState, runStateTurnBlock, SIGMA_UNCHANGED_LINE, type RunState, type RunStateMode } from "./run-state.ts";
 import { findStatePatches } from "../text/parsing.ts";
 import { complete1, completeDeps } from "../bridge/handlers/completion.ts";
 import type { SubcallHandlerDeps } from "../bridge/handlers/types.ts";
@@ -302,6 +302,10 @@ export function createEngine(deps: EngineDeps): RunRlm {
     // H3: retrieval-discipline coach — one-shot per run; children inherit it via the same loop.
     let sawRetrieval = false;
     let sawDelegation = false;
+    // Σ economics: the compact JSON of the Σ last sent to the model — an unchanged Σ
+    // re-sends as SIGMA_UNCHANGED_LINE instead of the full block. Reset by compaction/rebase
+    // (the rebase message re-anchors Σ verbatim) and by degrade (no more Σ blocks at all).
+    let lastSigmaSent: string | undefined;
     let retrievalNudged = false;
     // Verification-discipline coach (enableVerificationNudge, default OFF): one coached redo
     // when an early finalize looks like the confident-wrong bench shape.
@@ -389,8 +393,8 @@ export function createEngine(deps: EngineDeps): RunRlm {
           history = elideOldToolPayloads(history);
           const compactionDeps = {
             // Summarisation is done by the cheap worker model; compaction fires on the ABSOLUTE
-            // COMPACTION_CEILING_TOKENS (limits.ts): ≤256k windows never compact, larger ones
-            // compact exactly at 256k (LO rule 2025-09-09).
+            // COMPACTION_CEILING_TOKENS (limits.ts): ≤1M windows never compact, larger ones
+            // compact exactly at 1M (LO rule 2025-09-09).
             model: deps.llmModel,
             registry: deps.registry,
             contextWindow: model.contextWindow,
@@ -403,6 +407,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
             history = runStateMode.kind === "active"
               ? rebaseWithState(history, runStateMode.state, ++compactions)
               : await compactHistory(history, compactionDeps, ++compactions, (u) => limits.addUsage(u));
+            lastSigmaSent = undefined; // the rebase message re-anchors Σ — full block next turn
           }
         }
 
@@ -422,6 +427,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
 
         // v5 [ledger] blackboard — silent ("") when it has nothing to say.
         const ledgerBlock = deps.config.enableLedger ? runLedger.injectBlock() : "";
+        const sigmaJson = runStateMode.kind === "active" ? compactJSON(runStateMode.state) : "";
         // H3: after two retrieval-free turns, inject the coach nudge exactly once, for one turn.
         // Surface-aware: delegation children (depth > 0) have NO search/grep_context — nudging
         // them taught a tool their prompt elsewhere forbids (NameError bait).
@@ -432,7 +438,11 @@ export function createEngine(deps: EngineDeps): RunRlm {
             i === softNoteTurn ? WRAP_UP_BUDGET : undefined,
             // Workstream A: from iteration 3 the run conditions on Σ (A_t = (P, Σ_t, O_t)) and
             // the state fence is requested — exploratory cold-start stays as-built (§12.2).
-            runStateMode.kind === "active" && i >= 2 ? runStateTurnBlock(runStateMode.state) : undefined,
+            // Σ economics: an unchanged Σ re-sends as a one-line marker, not the full JSON —
+            // full re-send happens only after compaction/rebase (lastSigmaSent reset below).
+            runStateMode.kind === "active" && i >= 2
+              ? (sigmaJson === lastSigmaSent ? SIGMA_UNCHANGED_LINE : runStateTurnBlock(runStateMode.state))
+              : undefined,
             ledgerBlock === "" ? undefined : ledgerBlock,
             nudgeNow ? RETRIEVAL_NUDGE : undefined,
             verificationNudgePending ? VERIFICATION_NUDGE : undefined,
@@ -447,6 +457,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
             .filter((s): s is string => s !== undefined)
             .join("\n\n") || undefined;
         verificationNudgePending = false;
+        if (runStateMode.kind === "active" && i >= 2) lastSigmaSent = sigmaJson;
         appendUserMessage(history, buildTurnPrompt(i, deps.config.maxIterations, notes));
 
         const turn = await runTurn(history, sandbox, {
