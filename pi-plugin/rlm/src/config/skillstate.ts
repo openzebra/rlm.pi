@@ -22,9 +22,14 @@ import { bm25Rank } from "../util/bm25.ts";
 import { deepMergeWithNullDeletion } from "../util/state-merge.ts";
 import { formatError } from "../util/errors.ts";
 import { isRecord } from "../util/type-guards.ts";
-import type { RunState } from "../core/run-state.ts";
+import type { ApproachOutcome, RunState } from "../core/run-state.ts";
 import type { RlmConfig } from "../core/types.ts";
 import { skillStateLines } from "../prompts/glossary.ts";
+
+/** The outcome detail text per union member (filter can't narrow; this keeps it one switch). */
+function outcomeDetail(outcome: ApproachOutcome): string {
+  return outcome.status === "failed" ? outcome.reason : outcome.status === "partial" ? outcome.note : outcome.evidence;
+}
 
 export const SKILL_STATE_FILE = "rlm-skillstate.json";
 
@@ -43,6 +48,10 @@ export interface SkillNote {
   /** Reinforcement count: a duplicate write bumps this instead of duplicating. */
   readonly hits: number;
   readonly ts: number;
+  /** A-Mem links — note ids of BM25-nearest neighbors at merge time (bidirectional, ≤LINK_MAX). */
+  readonly links?: readonly string[];
+  /** Recursion depth of the run that harvested this note (0 = root; child notes crowd less). */
+  readonly depth?: number;
 }
 
 export interface SkillStateFile {
@@ -60,6 +69,21 @@ const TAGS: ReadonlySet<string> = new Set(["config", "gotcha", "symbol", "recipe
 const NOTE_MAX_CHARS = 240;
 const CONTEXT_MAX_CHARS = 120;
 const KEYWORDS_MAX = 6;
+
+/**
+ * A-Mem link/retrieval constants (frozen; cited by tests). Link generation at merge time is
+ * A-Mem §3.2 with BM25 in place of embeddings; retrieval expansion (§Fig. 2 "box") pulls a
+ * hit's linked notes back at a discounted score. The floor ramp fixes the cold-start no-op:
+ * absolute BM25 floors barely clear on a young store, so they halve below COLD_STORE_NOTES,
+ * and the relative factor trims the long tail against the corpus-independent top score.
+ */
+export const LINK_TOP_K = 3;
+export const LINK_MAX = 4;
+export const LINK_REL_FLOOR = 0.3;
+export const LINK_EXPANSION_FACTOR = 0.6;
+export const REL_FLOOR_FACTOR = 0.25;
+export const COLD_STORE_NOTES = 8;
+export const GOTCHA_NOTES_MAX = 6;
 
 export function skillStatePath(dir?: string): string {
   return join(dir ?? getAgentDir(), SKILL_STATE_FILE);
@@ -106,15 +130,21 @@ function normalizeTags(tags: readonly string[] | undefined): readonly string[] {
 
 export function isSkillNote(value: unknown): value is SkillNote {
   if (!isRecord(value)) return false;
-  return (
-    typeof value.id === "string" &&
-    typeof value.text === "string" &&
-    isStringArray(value.keywords) &&
-    isStringArray(value.tags) &&
-    typeof value.context === "string" &&
-    typeof value.hits === "number" &&
-    typeof value.ts === "number"
-  );
+  if (
+    typeof value.id !== "string" ||
+    typeof value.text !== "string" ||
+    !isStringArray(value.keywords) ||
+    !isStringArray(value.tags) ||
+    typeof value.context !== "string" ||
+    typeof value.hits !== "number" ||
+    typeof value.ts !== "number"
+  ) {
+    return false;
+  }
+  // Optional A-Mem fields: absent on pre-link notes (fail-soft read — old files stay valid).
+  if (value.links !== undefined && !isStringArray(value.links)) return false;
+  if (value.depth !== undefined && typeof value.depth !== "number") return false;
+  return true;
 }
 
 export function isSkillStateFile(value: unknown): value is SkillStateFile {
@@ -162,6 +192,8 @@ export interface SkillNoteInput {
   readonly keywords?: readonly string[];
   readonly tags?: readonly string[];
   readonly context?: string;
+  /** Recursion depth of the harvesting run (0 = root). Recorded, not yet eviction-weighted. */
+  readonly depth?: number;
 }
 
 const PATH_TOKEN = /(?:[\w@.-]+\/)+[\w@.-]+/g;
@@ -186,9 +218,11 @@ function keywordsOf(text: string): readonly string[] {
 
 /**
  * Workstream B Hook 1 (deterministic half): harvest Σ into note inputs — zero extra tokens.
- * verifiedFacts → "symbol" notes; successful approaches → "recipe" notes.
+ * verifiedFacts → "symbol" notes; successful approaches → "recipe" notes; the most recent
+ * failed approaches → "gotcha" notes (the reusable don't-do-this-again material, capped so a
+ * failure-heavy run cannot flood the store).
  */
-export function notesFromRunState(state: RunState): readonly SkillNoteInput[] {
+export function notesFromRunState(state: RunState, depth = 0): readonly SkillNoteInput[] {
   const notes: SkillNoteInput[] = [];
   for (const fact of state.verifiedFacts) {
     if (fact.trim().length < 8) continue;
@@ -197,6 +231,7 @@ export function notesFromRunState(state: RunState): readonly SkillNoteInput[] {
       keywords: keywordsOf(fact),
       tags: ["symbol"],
       context: state.task.slice(0, CONTEXT_MAX_CHARS),
+      depth,
     });
   }
   for (const [key, outcome] of Object.entries(state.testedApproaches)) {
@@ -207,14 +242,37 @@ export function notesFromRunState(state: RunState): readonly SkillNoteInput[] {
       keywords: keywordsOf(text),
       tags: ["recipe"],
       context: state.task.slice(0, CONTEXT_MAX_CHARS),
+      depth,
+    });
+  }
+  const failed = Object.entries(state.testedApproaches)
+    .filter(([, outcome]) => outcome.status !== "succeeded")
+    .slice(-GOTCHA_NOTES_MAX);
+  for (const [key, outcome] of failed) {
+    const text = `${key} — ${outcomeDetail(outcome)}`.slice(0, NOTE_MAX_CHARS);
+    notes.push({
+      text,
+      keywords: keywordsOf(text),
+      tags: ["gotcha"],
+      context: state.task.slice(0, CONTEXT_MAX_CHARS),
+      depth,
     });
   }
   return notes;
 }
 
-/** A-Mem phrasing prompt (Hook 1, LLM half — enableSkillStateDistill, default ON). */
+/**
+ * A-Mem phrasing prompt (Hook 1, LLM half — enableSkillStateDistill, default ON). Failed and
+ * partial approaches ride along: they are usually the most reusable gotcha/recipe material,
+ * and feeding only verifiedFacts starved the store of exactly that.
+ */
 export function distillPromptFor(state: RunState): string {
-  return [
+  const approaches = Object.entries(state.testedApproaches)
+    .filter(([, outcome]) => outcome.status !== "succeeded")
+    .slice(-8)
+    .map(([key, outcome]) =>
+      `- ${key} — ${outcomeDetail(outcome)} (${outcome.status})`);
+  const lines = [
     "Distill AT MOST 6 durable, reusable project facts from this run. One per line, exactly:",
     "text | kw1, kw2 | tag",
     'tag ∈ {config, gotcha, symbol, recipe}. text ≤240 chars, factual, path-anchored. No preamble.',
@@ -222,12 +280,24 @@ export function distillPromptFor(state: RunState): string {
     `Run task: ${state.task}`,
     "Verified facts:",
     ...state.verifiedFacts.slice(-12).map((f) => `- ${f}`),
-  ].join("\n");
+  ];
+  if (approaches.length > 0) {
+    lines.push("Failed or partial approaches (gotcha candidates — what NOT to retry):", ...approaches);
+  }
+  if (state.nextStep.trim() !== "") {
+    lines.push(`Next step at run end: ${state.nextStep}`);
+  }
+  return lines.join("\n");
 }
 
-/** Defensive parser for the distill leaf's output — anything malformed is dropped. */
-export function parseDistilledNotes(raw: string): readonly SkillNoteInput[] {
+/**
+ * Defensive parser for the distill leaf's output — anything malformed is dropped. `context`
+ * (the run task) is supplied by the caller so distilled notes carry a non-empty A-Mem X_i;
+ * an empty context weakened BM25 ranking for every LLM-distilled note.
+ */
+export function parseDistilledNotes(raw: string, context = ""): readonly SkillNoteInput[] {
   const out: SkillNoteInput[] = [];
+  const contextSlice = context.slice(0, CONTEXT_MAX_CHARS);
   for (const line of raw.split("\n")) {
     const trimmed = line.trim().replace(/^-\s*/, "");
     if (trimmed === "") continue;
@@ -244,7 +314,12 @@ export function parseDistilledNotes(raw: string): readonly SkillNoteInput[] {
       .split(/[\s,]+/)
       .map((t) => t.trim())
       .filter((t) => TAGS.has(t));
-    out.push({ text: text.slice(0, NOTE_MAX_CHARS), keywords, tags: normalizeTags(tags) });
+    out.push({
+      text: text.slice(0, NOTE_MAX_CHARS),
+      keywords,
+      tags: normalizeTags(tags),
+      context: contextSlice,
+    });
     if (out.length >= 6) break;
   }
   return out;
@@ -254,6 +329,53 @@ export function parseDistilledNotes(raw: string): readonly SkillNoteInput[] {
 
 function noteCorpus(note: SkillNote): string {
   return `${note.text} ${note.keywords.join(" ")} ${note.tags.join(" ")} ${note.context}`;
+}
+
+/**
+ * A-Mem §3.2/§3.3, deterministic (no embeddings, no LLM): each NEW note links its
+ * BM25-nearest neighbors above a relative floor (bidirectional, LINK_MAX cap), and each
+ * formed link co-reinforces the neighbor (hits bump + ts touch — the store-side analog of
+ * A-Mem memory evolution). Pure over its inputs; `now` is the merge timestamp.
+ */
+function linkNewNotes(
+  notes: readonly SkillNote[],
+  newIds: ReadonlySet<string>,
+  now: number,
+): readonly SkillNote[] {
+  if (newIds.size === 0 || notes.length < 2) return notes;
+  const byId = new Map(notes.map((note) => [note.id, note]));
+  const updated = new Map<string, SkillNote>();
+  const current = (id: string): SkillNote | undefined => updated.get(id) ?? byId.get(id);
+  for (const id of newIds) {
+    const note = current(id);
+    if (note === undefined) continue;
+    const candidates = notes.filter((other) => other.id !== id);
+    const ranked = bm25Rank(
+      noteCorpus(note),
+      candidates.map((other) => ({ item: other, text: noteCorpus(other) })),
+      LINK_TOP_K,
+    );
+    if (ranked.length === 0) continue;
+    const top = ranked[0].score;
+    const links = [...(note.links ?? [])];
+    for (const { item, score } of ranked) {
+      if (links.length >= LINK_MAX) break;
+      if (score <= 0 || score < LINK_REL_FLOOR * top) continue;
+      if (links.includes(item.id)) continue;
+      links.push(item.id);
+      const neighbor = current(item.id);
+      if (neighbor === undefined) continue;
+      const neighborLinks = [...(neighbor.links ?? [])];
+      if (!neighborLinks.includes(id) && neighborLinks.length < LINK_MAX) {
+        neighborLinks.push(id);
+      }
+      // Co-reinforcement: the neighbor was just confirmed related — evolution, not rewrite.
+      updated.set(neighbor.id, { ...neighbor, links: neighborLinks, hits: neighbor.hits + 1, ts: now });
+    }
+    updated.set(id, { ...note, links });
+  }
+  if (updated.size === 0) return notes;
+  return notes.map((note) => updated.get(note.id) ?? note);
 }
 
 export interface SkillSearchHit {
@@ -308,21 +430,64 @@ export class SkillStore {
     return this.file;
   }
 
-  /** Workstream E: the sandbox skill_search surface. Score > 0 hits only, best first. */
-  search(query: string, k = 8): readonly SkillSearchHit[] {
+  /**
+   * BM25 rank + A-Mem "box" expansion (§Fig. 2): a hit's linked notes ride along at
+   * LINK_EXPANSION_FACTOR × the hit's score, deduped — base hits always outrank expansions.
+   * Sorted desc; callers slice. The one recall rank for search/pack (DRY).
+   */
+  private rankWithLinks(
+    query: string,
+    k: number,
+  ): readonly { readonly note: SkillNote; readonly score: number }[] {
     const notes = this.file.projects[this.project] ?? [];
     if (notes.length === 0 || query.trim() === "") return [];
+    const byId = new Map(notes.map((note) => [note.id, note]));
     const ranked = bm25Rank(
       query,
       notes.map((note) => ({ item: note, text: noteCorpus(note) })),
-      Math.max(1, Math.min(32, k)),
+      Math.max(1, k),
     );
-    return ranked.map(({ item, score }) => ({
-      id: item.id,
-      text: item.text,
-      tags: item.tags,
-      score: Math.round(score * 100) / 100,
-    }));
+    const merged = new Map<string, { note: SkillNote; score: number }>();
+    for (const { item, score } of ranked) {
+      merged.set(item.id, { note: item, score });
+      for (const link of item.links ?? []) {
+        if (merged.has(link)) continue;
+        const neighbor = byId.get(link);
+        if (neighbor !== undefined) {
+          merged.set(link, { note: neighbor, score: score * LINK_EXPANSION_FACTOR });
+        }
+      }
+    }
+    const out = [...merged.values()];
+    out.sort((a, b) => b.score - a.score);
+    return out;
+  }
+
+  /**
+   * Effective acceptance floor: the configured absolute floor (halved on a cold store —
+   * absolute BM25 floors barely clear when the corpus is small, so grounding silently no-ops
+   * exactly when the store is young) lifted by the relative long-tail cut (REL_FLOOR_FACTOR ×
+   * top score). `minScore <= 0` keeps the old inject-anything behavior unchanged.
+   */
+  private effectiveFloor(ranked: readonly { readonly score: number }[], minScore: number): number {
+    if (minScore <= 0) return 0;
+    const ramped = this.noteCount < COLD_STORE_NOTES ? minScore * 0.5 : minScore;
+    const top = ranked[0]?.score ?? 0;
+    return Math.max(ramped, top * REL_FLOOR_FACTOR);
+  }
+
+  /** Workstream E: the sandbox skill_search surface. Score > 0 hits only, best first. */
+  search(query: string, k = 8): readonly SkillSearchHit[] {
+    const cap = Math.max(1, Math.min(32, k));
+    const ranked = this.rankWithLinks(query, cap);
+    return ranked
+      .slice(0, cap + LINK_TOP_K) // base hits + their expansions, bounded
+      .map(({ note, score }) => ({
+        id: note.id,
+        text: note.text,
+        tags: note.tags,
+        score: Math.round(score * 100) / 100,
+      }));
   }
 
   /** Ξ body lines shared by blockFor/sliceForPrompt — packed greedily under the char budget. */
@@ -332,18 +497,14 @@ export class SkillStore {
     budgetChars: number,
     minScore: number,
   ): readonly string[] {
-    const notes = this.file.projects[this.project] ?? [];
-    if (notes.length === 0) return [];
-    const ranked = bm25Rank(
-      query,
-      notes.map((note) => ({ item: note, text: noteCorpus(note) })),
-      Math.min(k, notes.length),
-    );
+    const ranked = this.rankWithLinks(query, k);
+    if (ranked.length === 0) return [];
+    const floor = this.effectiveFloor(ranked, minScore);
     const lines: string[] = [];
     let used = 0;
-    for (const { item, score } of ranked) {
-      if (score < minScore) break; // ranked desc — the first miss ends the window
-      const line = `- (${item.tags[0] ?? "symbol"}) ${item.text}`;
+    for (const { note, score } of ranked) {
+      if (score < floor) break; // ranked desc — the first miss ends the window
+      const line = `- (${note.tags[0] ?? "symbol"}) ${note.text}`;
       if (used + line.length + 1 > budgetChars) continue; // too fat — try the next, smaller
       lines.push(line);
       used += line.length + 1;
@@ -374,13 +535,16 @@ export class SkillStore {
 
   /**
    * Dedup write: duplicate (by normalized text) bumps `hits` and refreshes `ts`; new notes
-   * insert. Per-project cap with LRU-by-ts eviction, top-hits quartile pinned.
+   * insert. Per-project cap with LRU-by-ts eviction, top-hits quartile pinned. New notes then
+   * get A-Mem §3.2 link generation (BM25-nearest neighbors, bidirectional) with §3.3-style
+   * deterministic evolution: linked neighbors co-reinforce (hits bump + ts touch).
    */
   merge(inputs: readonly SkillNoteInput[]): void {
     if (inputs.length === 0) return;
     const existing = this.file.projects[this.project] ?? [];
     const byId = new Map<string, SkillNote>(existing.map((note) => [note.id, note]));
     const now = Date.now();
+    const newIds = new Set<string>();
     for (const input of inputs) {
       const text = input.text.trim();
       if (text === "") continue;
@@ -410,11 +574,13 @@ export class SkillStore {
           context: (input.context ?? "").slice(0, CONTEXT_MAX_CHARS),
           hits: 1,
           ts: now,
+          ...(input.depth === undefined ? {} : { depth: input.depth }),
         };
         byId.set(id, note);
+        newIds.add(id);
       }
     }
-    let notes = [...byId.values()];
+    let notes: readonly SkillNote[] = [...byId.values()];
     if (notes.length > this.notesPerProject) {
       // Pinned: top quartile by hits (ceil) — frequently-reinforced facts survive eviction.
       const byHits = [...notes].sort((a, b) => b.hits - a.hits || b.ts - a.ts);
@@ -427,6 +593,7 @@ export class SkillStore {
       const evict = new Set(evictable.slice(0, notes.length - this.notesPerProject).map((note) => note.id));
       notes = notes.filter((note) => !evict.has(note.id));
     }
+    notes = linkNewNotes(notes, newIds, now);
     this.file = { version: 1, projects: { ...this.file.projects, [this.project]: notes } };
     this.dirty = true;
   }

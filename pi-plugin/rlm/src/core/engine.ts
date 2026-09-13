@@ -202,12 +202,27 @@ export function createEngine(deps: EngineDeps): RunRlm {
           if (detachedInFlight === 0) detachedIdle?.();
         }
       },
-      // SKILL.state: leaf grounding (Workstream D, DRY #1) + the parent Ξ for children (C, DRY #6).
+      // SKILL.state: leaf grounding (Workstream D, DRY #1) + the Ξ block for children (C, DRY #6).
       groundLeaf:
         skillStore === undefined || !deps.config.enableSkillState
           ? undefined
           : (prompt: string) => groundLeafPrompt(skillStore, deps.config, prompt),
-      getSkillBlock: () => input.skillBlock,
+      // The child's Ξ is re-ranked against the CHILD's task from the live store — inheriting
+      // the parent's block verbatim wasted the Ξ budget on facts ranked for someone else's
+      // question. Falls back to the inherited block when re-ranking comes up empty (or for
+      // the degenerate same-task call), and to `undefined` semantics when the store is off.
+      getSkillBlock:
+        skillStore === undefined || !deps.config.enableSkillState
+          ? () => input.skillBlock
+          : (task: string): string | undefined => {
+              if (task === input.rootPrompt || task.trim() === "") return input.skillBlock;
+              const block = skillStore.blockFor(
+                task,
+                deps.config.skillStateMaxTokens,
+                deps.config.skillStateXiMinScore,
+              );
+              return block !== "" ? block : input.skillBlock;
+            },
     } satisfies SubcallHandlerDeps;
     const subcalls = createSubcallHandlers(subcallDeps, taskRegistry);
 
@@ -220,8 +235,13 @@ export function createEngine(deps: EngineDeps): RunRlm {
       // off (one source, two sinks; never a second harvest implementation).
       deps.onRunState?.(runStateMode.state);
       if (skillStore === undefined || !deps.config.enableSkillState) return;
-      skillStore.merge(notesFromRunState(runStateMode.state));
+      // Depth-tagged deterministic harvest runs at every depth; the LLM distill is ROOT-ONLY —
+      // every child distilling into the same project section crowded the note cap with
+      // sub-task fragments (A-Mem store hygiene). Fail-soft: a distill failure must never
+      // damage a finished run.
+      skillStore.merge(notesFromRunState(runStateMode.state, input.depth));
       if (!deps.config.enableSkillStateDistill || deps.signal?.aborted === true) return;
+      if (input.depth > 0) return;
       try {
         const raw = await complete1(
           invocation,
@@ -229,7 +249,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           () => {},
           completeDeps(subcallDeps),
         );
-        const parsed = parseDistilledNotes(raw);
+        const parsed = parseDistilledNotes(raw, runStateMode.state.task);
         if (parsed.length > 0) skillStore.merge(parsed);
       } catch {
         // fail-soft by design
