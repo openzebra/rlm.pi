@@ -324,6 +324,34 @@ console.log("\n=== repl renderReplCode (line cap) ===");
   check("repl code: capped at 40 lines", capped.includes("line 39") && !capped.includes("line 40\n") && capped.includes("+15 more lines"));
 }
 
+console.log("\n=== repl renderReplCode (python highlighting) ===");
+
+{
+  // Wrap-theme makes each colored span assertable by tag.
+  const wrap = { fg: (c: string, s: string) => `[${c}]${s}[/${c}]` } as unknown as Theme;
+  const code = [
+    "# free inventory first",
+    "import os",
+    "x = 42",
+    "name = 'cell'",
+    "@dec",
+    '"""doc"""',
+  ].join("\n");
+  const out = renderReplCode(code, wrap);
+  const plain = out.replace(/\[\/?[A-Za-z]+\]/g, "");
+  check("highlight: text preserved byte-for-byte", plain === code);
+  check("highlight: comment muted", out.includes("[muted]# free inventory first[/muted]"));
+  check("highlight: keyword accent", out.includes("[accent]import[/accent]"));
+  check("highlight: number warning", out.includes("[warning]42[/warning]"));
+  check("highlight: string mdCode", out.includes("[mdCode]'cell'[/mdCode]") && out.includes('[mdCode]"""doc"""[/mdCode]'));
+  check("highlight: decorator mdHeading", out.includes("[mdHeading]@dec[/mdHeading]"));
+
+  // f-string prefix stays inside the string span; comment beats string inside comments.
+  const edge = renderReplCode("s = f'{x}'  # don't", wrap);
+  check("highlight: f-string kept whole", edge.includes("[mdCode]f'{x}'[/mdCode]"));
+  check("highlight: comment wins after code", edge.includes("[muted]# don't[/muted]") && !edge.includes("[mdCode]# don't[/mdCode]"));
+}
+
 console.log("\n=== repl renderReplCollapsed (hint) ===");
 
 {

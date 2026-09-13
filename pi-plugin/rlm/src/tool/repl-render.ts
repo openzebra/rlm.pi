@@ -5,6 +5,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { CALL_PREVIEW_CHARS, previewText } from "../text/preview.ts";
 import type { ReplDetails } from "./repl-details.ts";
+import { highlightPython } from "../ui/python-highlight.ts";
 import { cardHeader, cardStatsLine, renderCollapsedCard } from "./subcall-render.ts";
 
 /** Chars of stdout/stderr shown in the expanded view. */
@@ -46,11 +47,12 @@ export function renderReplCollapsed(details: ReplDetails, theme: Theme): Text {
 
 /**
  * The collapsed card's payload — the cell's Python source, capped. Full source lives in the
- * session args; expanding swaps this block for the result view (see replCallView).
+ * session args; expanding swaps this block for the result view (see replCallView). Sliced
+ * BEFORE highlighting so a triple-quoted string cut by the cap can only fall back to plain.
  */
 export function renderReplCode(code: string, theme: Theme): string {
   const lines = code.split("\n");
-  const shown = lines.slice(0, CODE_PREVIEW_LINES).join("\n");
+  const shown = highlightPython(lines.slice(0, CODE_PREVIEW_LINES).join("\n"), theme);
   const rest = lines.length - CODE_PREVIEW_LINES;
   return rest > 0 ? `${shown}\n${theme.fg("muted", `… +${String(rest)} more lines`)}` : shown;
 }
