@@ -29,12 +29,18 @@ import type { AddContextHandlerBundle } from "./bridge/add-context.ts";
 import { buildNativeSystemPrompt } from "./prompts/native.ts";
 import { SkillStore, notesFromRunState, xiQuery } from "./config/skillstate.ts";
 import { buildRootDigestCompaction } from "./core/root-digest.ts";
-import { RootStateTracker } from "./core/root-state.ts";
+import { ROOT_IDLE_DEGRADE_TURNS, RootStateTracker } from "./core/root-state.ts";
 import { elideStalePayloads, spliceSigmaSnapshot } from "./core/root-context.ts";
 import { SessionArchive } from "./core/session-archive.ts";
 import { agentMessageText, firstLine, textContentOf } from "./text/agent-text.ts";
 import { findStatePatches } from "./text/parsing.ts";
 import { capToolResultText } from "./mode/native-guards.ts";
+import {
+  STAGE_CUSTOM_TYPE,
+  renderStageCard,
+  stageCardMarkdown,
+  type StageCardDetails,
+} from "./ui/stage-cards.ts";
 import {
   isSubagentChildBypass,
   commitSubagentForceActivation,
@@ -109,6 +115,18 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     hideWhenEmpty: true,
   });
   let treePanelInstalled = false;
+  /**
+   * Native-mode abort: repl cells' child engines, detached spawn() tasks and add_context
+   * loads read this signal lazily (createReplTool getSignal), so /rlm-stop aborts AND
+   * rotates the controller mid-session — work started after a stop sees a fresh signal.
+   */
+  let nativeAbort = new AbortController();
+  const stopNativeWork = (): boolean => {
+    const hadWork = runRegistry.hasActive() || background.pending > 0;
+    nativeAbort.abort();
+    nativeAbort = new AbortController();
+    return hadWork;
+  };
   /** SKILL.state (Workstream B): session store — hydrated at session_start, flushed at shutdown. */
   let skillStore: SkillStore | undefined;
   /** Root Σ (WS-3/4): the native session's digest-level Σ_t — runtime-derived (tool outcomes,
@@ -135,6 +153,21 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     sigmaSplices,
     idleDegrades,
   });
+  /** [rlm.stage]: post one stage-transition card into the transcript (persisted, ctrl+o-expandable). */
+  const postStageCard = (details: StageCardDetails): void => {
+    try {
+      pi.sendMessage({ customType: STAGE_CUSTOM_TYPE, content: stageCardMarkdown(details), display: true, details });
+    } catch (err) {
+      // Stage cards are decoration — never fail the hook that produced the transition.
+      if (traceEnabled) trace("stage-card.fail", { error: errorMessage(err) });
+    }
+  };
+  /**
+   * Compaction-hook re-entrancy guard: session_before_compact builds the digest card but does
+   * NOT post it from inside the hook (a message appended mid-compaction would fold into the
+   * very span being digested) — the pending card flushes at the next turn_start instead.
+   */
+  let pendingDigestCard: StageCardDetails | undefined;
   // A detached child works in its OWN sandbox, so this one sees no frames and its request
   // watchdog would fire mid-await and SIGKILL a healthy worker, taking the REPL namespace
   // with it. Keep it alive while detached work is genuinely in flight.
@@ -199,6 +232,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   pi.registerMessageRenderer("rlm-intro", (message, _options, theme) =>
     new Markdown(textContentOf(message.content), 1, 0, markdownTheme(theme)),
   );
+  // [rlm.stage] cards — orchestrator stage transitions, collapsed until the user's ctrl+o.
+  pi.registerMessageRenderer(STAGE_CUSTOM_TYPE, renderStageCard);
 
   // ── CLI flag: `pi --rlm` / `pi --rlm=false` overrides the persisted mode for this run ──
   pi.registerFlag("rlm", {
@@ -207,7 +242,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   });
 
   // ── Commands ──
-  registerRlmCommand(pi, controller);
+  registerRlmCommand(pi, controller, stopNativeWork);
   registerRlmConfigCommand(pi, controller);
   registerRlmLlmCommand(pi, controller);
   registerRlmRlmCommand(pi, controller);
@@ -332,6 +367,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           background,
           runRegistry,
           skillStore,
+          getSignal: () => nativeAbort.signal,
           onRunState: (state) => { rootTracker?.absorbEngineState(state); },
           getSkillBlock: composeSkillBlock,
           registerDiscardHook: (reset) => { onSandboxDiscardExtra = reset; },
@@ -370,6 +406,14 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // ── Keep the footer's context reading live (RLM exists to shrink this number) ──
   pi.on("turn_end", async (_event, ctx) => {
     setRlmModeStatus(ctx, controller, ctx.getContextUsage(), sigmaTelemetry());
+  });
+
+  // Deferred [rlm.stage] digest card — built inside session_before_compact, posted here.
+  pi.on("turn_start", async () => {
+    const card = pendingDigestCard;
+    if (card === undefined) return;
+    pendingDigestCard = undefined;
+    postStageCard(card);
   });
 
   /** True when the native-mode trade holds: enabled AND repl is in the active tool set. */
@@ -454,6 +498,12 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     }
     if (wasActive && !tracker.isActive) {
       idleDegrades += 1;
+      postStageCard({
+        kind: "degrade",
+        reason: tracker.degradeReason ?? "unknown",
+        idleTurns: tracker.idleTurns,
+        idleMax: ROOT_IDLE_DEGRADE_TURNS,
+      });
       if (traceEnabled) {
         const reason = tracker.degradeReason ?? "unknown";
         trace(reason.startsWith("idle") ? "root-state.idle-degrade" : "root-state.degrade", {
@@ -461,6 +511,9 @@ export default function rlmExtension(pi: ExtensionAPI): void {
           reason,
         });
       }
+    } else if (!wasActive && tracker.isActive) {
+      // R7-fix recovery observability, user-visible: a degraded tracker accepted a clean batch.
+      postStageCard({ kind: "recover", fencesAccepted: outcome.accepted, fencesTotal: outcome.fences });
     }
   });
 
@@ -477,6 +530,14 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       });
       if (result !== undefined) {
         rootDigests += 1;
+        pendingDigestCard = {
+          kind: "digest",
+          index: rootDigests,
+          turnsFolded: event.preparation.messagesToSummarize.length,
+          tokensBefore: result.compaction.tokensBefore,
+          tokensBeforeRecomputed: result.tokensBeforeRecomputed,
+          summary: result.compaction.summary,
+        };
         if (traceEnabled) {
           // V1 soak probe: host-consumed tokensBefore vs our recomputation over the same span.
           trace("root-digest.built", {
@@ -675,14 +736,25 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const tracker = rootTracker;
     if (skillStore !== undefined && tracker !== undefined && tracker.dirty) {
       try {
-        skillStore.merge(notesFromRunState(tracker.snapshot()));
-        if (traceEnabled) trace("root-harvest.merged", { notes: tracker.snapshot().verifiedFacts.length });
+        const merged = notesFromRunState(tracker.snapshot());
+        skillStore.merge(merged);
+        if (merged.length > 0) {
+          // One-line stage card: what this session taught the store (tag histogram via stats()).
+          postStageCard({
+            kind: "distill",
+            merged,
+            total: skillStore.noteCount,
+            byTag: skillStore.stats().byTag,
+          });
+        }
+        if (traceEnabled) trace("root-harvest.merged", { notes: merged.length });
       } catch (err) {
         if (traceEnabled) trace("root-harvest.fail", { error: errorMessage(err) });
       }
     }
     await skillStore?.flush(); // SKILL.state (Workstream B): persist distilled notes
     controller.abort();
+    nativeAbort.abort(); // detach engines/spawns still holding the session signal
     clearInterval(watchdogHeartbeat);
     background.dispose();
     await sandboxManager.dispose();

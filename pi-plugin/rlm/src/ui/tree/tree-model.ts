@@ -5,18 +5,21 @@
  * the result and only rebuilds when the underlying store reports a change.
  *
  * Nothing is ever hidden: every sub-call renders as its own row (parity with
- * pi, which shows each concurrent tool call individually) — except runs of
- * CONSECUTIVE IDENTICAL sibling leaves (same label+model+status), which
- * collapse into one expandable "label ×N" group row so a 20-item llm_batch is
- * one line, not 20 and a wholesale batch failure is one `✗ label ×N` line.
- * Errors group exactly like successes; distinct failures keep their own rows
- * and reasons, and singletons render as plain rows. Interleaved siblings (✗ ✓
- * ✗ with different keys between) stay in encounter order — position is never
- * rewritten. Collapsed subtrees are skipped at the user's explicit request
- * (chevron flips). Token rows are own-spend only — a row never blends models.
+ * pi, which shows each concurrent tool call individually) — except identical
+ * sibling llm leaves (same label+model+status), which consolidate into ONE
+ * expandable "label ×N" group row placed at the first member's position: a
+ * 16-item batch failure is a single `✗ label ×N · reason` line however many
+ * other rows interleave the run. rlm nodes and nodes with children never
+ * group; grouped llm leaves move up to the group head, every other row keeps
+ * its encounter order. Errors group exactly like successes; diverging reasons
+ * collapse to "N failure reasons" (per-item reasons stay in the detail
+ * modal). Singletons render as plain rows. Collapsed subtrees are skipped at
+ * the user's explicit request (chevron flips). Token rows are own-spend only
+ * — a row never blends models.
  */
 
 import type { RlmSubcall, RlmRunStatus, SubcallPhase, SubcallStatus } from "../../tool/rlm-details.ts";
+import { ERROR_PREFIX, isErrorText } from "../../util/errors.ts";
 
 /** Immutable per-run view the model consumes (built by RunRegistry from a live store). */
 export interface RunSnapshot {
@@ -77,6 +80,8 @@ export interface GroupRow {
   readonly icon: SubcallStatus | "queued";
   readonly expandable: boolean;
   readonly expanded: boolean;
+  /** First-line failure reason shared by every member — error groups only, else "N failure reasons". */
+  readonly reason?: string;
 }
 
 /** Internal build-time entry: a real node or an accumulating group. */
@@ -94,21 +99,65 @@ const groupable = (sc: RlmSubcall, byParent: ReadonlyMap<string | undefined, Rlm
 
 const groupKey = (sc: RlmSubcall): string => `${sc.label}|${sc.model ?? ""}|${sc.status}`;
 
-/** Merge consecutive identical sibling leaves into group entries; keep order. */
+/** Longest reason shown inline in a group header — full text lives in the modal. */
+const REASON_MAX_CHARS = 48;
+
+/** First line of an error text, "Error: " prefix stripped — undefined when there is nothing usable. */
+function errorLineOf(sc: RlmSubcall): string | undefined {
+  const raw = sc.detail ?? sc.resultPreview;
+  if (raw === undefined || raw === "") return undefined;
+  const body = isErrorText(raw) ? raw.slice(ERROR_PREFIX.length + 1) : raw;
+  const nl = body.indexOf("\n");
+  const line = (nl === -1 ? body : body.slice(0, nl)).trim();
+  return line === "" ? undefined : line;
+}
+
+/** The reason all members share, or "N failure reasons" when their errors diverge. */
+function groupReason(members: readonly RlmSubcall[]): string | undefined {
+  let first: string | undefined;
+  const distinct = new Set<string>();
+  for (const m of members) {
+    const line = errorLineOf(m);
+    if (line === undefined) continue;
+    if (first === undefined) first = line;
+    distinct.add(line);
+  }
+  if (first === undefined || distinct.size === 0) return undefined;
+  const reason = distinct.size === 1 ? first : `${String(distinct.size)} failure reasons`;
+  return reason.length > REASON_MAX_CHARS ? `${reason.slice(0, REASON_MAX_CHARS - 1)}…` : reason;
+}
+
+/**
+ * Consolidate every identical sibling leaf (same label+model+status) into ONE
+ * group entry at its first member's position — a 16-item batch failure stays
+ * a single `✗ label ×16` line however many other rows interleave the run.
+ * Non-grouping siblings keep their encounter order; members keep start order
+ * for the expanded view.
+ */
 function partition(children: readonly RlmSubcall[], byParent: ReadonlyMap<string | undefined, RlmSubcall[]>): readonly Entry[] {
+  const groups = new Map<string, Extract<Entry, { type: "group" }>>();
   const out: Entry[] = [];
   for (const sc of children) {
-    if (groupable(sc, byParent)) {
-      const key = groupKey(sc);
-      const last = out[out.length - 1];
-      if (last !== undefined && last.type === "group" && last.key === key) {
-        last.members.push(sc);
-        continue;
-      }
-      out.push({ type: "group", key, label: sc.label, model: sc.model, status: sc.status, members: [sc] });
-    } else {
+    if (!groupable(sc, byParent)) {
       out.push({ type: "node", sc });
+      continue;
     }
+    const key = groupKey(sc);
+    const existing = groups.get(key);
+    if (existing !== undefined) {
+      existing.members.push(sc);
+      continue;
+    }
+    const group: Extract<Entry, { type: "group" }> = {
+      type: "group",
+      key,
+      label: sc.label,
+      model: sc.model,
+      status: sc.status,
+      members: [sc],
+    };
+    groups.set(key, group);
+    out.push(group);
   }
   return out;
 }
@@ -218,6 +267,7 @@ export function buildRows(
       icon: iconOf(entry.status, entry.members.some((m) => m.phase === "queued") ? "queued" : undefined),
       expandable: true,
       expanded,
+      reason: entry.status === "error" ? groupReason(entry.members) : undefined,
     });
     if (!expanded) return;
     for (let i = 0; i < entry.members.length; i++) {

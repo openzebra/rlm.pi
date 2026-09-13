@@ -23,6 +23,7 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { buildAddContextHandler, type AddContextHandlerBundle } from "../bridge/add-context.ts";
 import { contextPrefixesIn } from "../context/namespace.ts";
 import type { SubcallGates } from "../util/concurrency.ts";
+import { raceAbort } from "../util/abort.ts";
 import { LimitGuard, limitsFromConfig } from "../core/limits.ts";
 import type { RlmConfig, RlmInput, RlmResult } from "../core/types.ts";
 import { SandboxManager } from "../sandbox/sandbox-manager.ts";
@@ -40,7 +41,7 @@ import { createEngine } from "../core/engine.ts";
 import type { RunState } from "../core/run-state.ts";
 import { modelRef } from "../config/settings.ts";
 import { spinnerFrame } from "../ui/theme.ts";
-import { CALL_PREVIEW_CHARS, previewText } from "../text/preview.ts";
+import { previewText } from "../text/preview.ts";
 import { errorMessage } from "../util/errors.ts";
 import {
   groundLeafPrompt,
@@ -49,7 +50,7 @@ import {
 } from "../config/skillstate.ts";
 import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 import { buildReplResultText, collectReplWarnings } from "./repl-result.ts";
-import { renderReplCollapsed, renderReplExpanded } from "./repl-render.ts";
+import { renderReplCollapsed, renderReplExpanded, replCallView } from "./repl-render.ts";
 import { attachTracer, trace, traceEnabled } from "../util/trace.ts";
 
 /** Last non-empty line of a Python traceback — the `TypeError: …` line, not the frames. */
@@ -129,7 +130,12 @@ interface ReplToolDeps {
   readonly getSkillBlock?: (task: string) => string | undefined;
   /** Session tree panel index; omitted → runs don't appear in the widget. */
   readonly runRegistry?: RunRegistry;
-  readonly signal?: AbortSignal;
+  /**
+   * Live abort signal accessor — read per child engine / sub-call / exec, NOT captured at
+   * registration. /rlm-stop aborts and ROTATES the session controller, so a stale signal
+   * must never outlive the call that started it.
+   */
+  readonly getSignal?: () => AbortSignal | undefined;
   readonly onUsage?: (usage: Usage, role: "sub") => void;
   readonly ensureContext?: () => Promise<void>;
   /** Register a reset hook for sandbox death/dispose (e.g. add_context prefix cache). */
@@ -142,7 +148,9 @@ interface ReplToolDeps {
 }
 
 export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplToolParams, ReplDetails> {
-  const { sandboxManager, llmModel, registry, getConfig, signal, onUsage, background } = deps;
+  const { sandboxManager, llmModel, registry, getConfig, onUsage, background } = deps;
+  // Read per use, never captured: see ReplToolDeps.getSignal.
+  const currentSignal = (): AbortSignal | undefined => deps.getSignal?.();
   const bridgeState = new NativeBridgeState(background);
   // v5: one session-wide blackboard for the native repl() path — the same claim/coalesce/
   // demote logic the engine gets per run, shared by every turn and every child it spawns.
@@ -177,7 +185,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       llmModel: getLlmModel(),
       registry,
       config: getConfig(),
-      signal,
+      signal: currentSignal(),
       gates: currentGates(),
       // Same emitter the parent subcall node lives on — see SubcallHandlerDeps.runChild.
       emitter: inv.emitter,
@@ -202,7 +210,9 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
     getLlmModel,
     getModel,
     getConfig,
-    signal,
+    get signal() {
+      return currentSignal();
+    },
     onUsage,
     runChild,
     // The session sandbox's context is the child's world. Read lazily so an add_context from an
@@ -224,7 +234,9 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         // committed for an append that did not happen.
         getContext: () => sandboxManager.contextPayload,
         parentId: undefined,
-        signal,
+        get signal() {
+          return currentSignal();
+        },
         // Keep the manager's replay copy in step with the worker's live `context`, and with it
         // whatever a child spawned after this load will inherit.
         onLoaded: (payload) => { sandboxManager.appendContext(payload); },
@@ -368,12 +380,19 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         // spawns claim against an empty stack, so an originator can never echo against
         // itself. Duplicates are caught by the ledger's claim store (exact/near
         // coalescing + rlmBudget demotion), never by silent suppression.
-        const result: ReplResult = await sandboxManager.execWithSetup(params.code, () => {
-          // Wire per-invocation mutable state only after the serialized exec slot
-          // is active. Swapping earlier would let queued repl() calls overwrite
-          // emitter/limits for the currently running REPL execution.
-          bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
-        }, execSignal);
+        // The cell races pi's per-call signal (esc) against /rlm-stop's session signal.
+        const cellAbort = raceAbort(execSignal, currentSignal());
+        let result: ReplResult;
+        try {
+          result = await sandboxManager.execWithSetup(params.code, () => {
+            // Wire per-invocation mutable state only after the serialized exec slot
+            // is active. Swapping earlier would let queued repl() calls overwrite
+            // emitter/limits for the currently running REPL execution.
+            bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
+          }, cellAbort.signal);
+        } finally {
+          cellAbort.dispose();
+        }
         const elapsed = Date.now() - start;
         capturedStdout = result.stdout;
         capturedStderr = result.stderr;
@@ -470,11 +489,8 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       }
     },
 
-    renderCall(args, theme) {
-      return new Text(
-        theme.fg("toolTitle", theme.bold("repl ")) + theme.fg("dim", previewText(args.code, CALL_PREVIEW_CHARS)),
-        0, 0,
-      );
+    renderCall(args, theme, context) {
+      return replCallView(args, theme, context);
     },
 
     renderResult(result, { expanded }, theme) {

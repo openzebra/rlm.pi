@@ -293,6 +293,16 @@ export class SkillStore {
     return this.file.projects[this.project]?.length ?? 0;
   }
 
+  /** Tag histogram over this project's notes — ONE summary source (distill card, telemetry). */
+  stats(): { readonly notes: number; readonly byTag: Readonly<Record<string, number>> } {
+    const notes = this.file.projects[this.project] ?? [];
+    const byTag: Record<string, number> = {};
+    for (const note of notes) {
+      for (const tag of note.tags) byTag[tag] = (byTag[tag] ?? 0) + 1;
+    }
+    return { notes: notes.length, byTag };
+  }
+
   /** Test/telemetry seam — the exact on-disk shape a flush would write. */
   snapshot(): SkillStateFile {
     return this.file;

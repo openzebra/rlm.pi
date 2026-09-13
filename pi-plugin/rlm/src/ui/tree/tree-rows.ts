@@ -55,7 +55,8 @@ function formatGroup(row: GroupRow, selected: boolean, width: number, theme: The
   const chevron = row.expanded ? GLYPHS.expanded : GLYPHS.collapsed;
   const cursor = selected ? theme.fg("accent", "❯") : " ";
   const icon = row.icon === "done" ? theme.fg("success", GLYPHS.done) : row.icon === "error" ? theme.fg("error", GLYPHS.error) : theme.fg("warning", spinnerFrame());
-  const left = `${cursor} ${row.prefix}${chevron} ${icon} ${row.label} ×${row.count}`;
+  const reason = row.reason === undefined ? "" : theme.fg("warning", ` · ${row.reason}`);
+  const left = `${cursor} ${row.prefix}${chevron} ${icon} ${row.label} ×${row.count}${reason}`;
   return assembleLine(left, row.tokens, row.tokensIn, row.tokensOut, row.model, selected, width, theme);
 }
 

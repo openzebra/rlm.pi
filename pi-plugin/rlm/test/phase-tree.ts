@@ -156,7 +156,7 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
       (splitLines[1]?.includes("190.2k↑")) && (splitLines[1]?.includes("18.6k↓")));
   }
 
-  // ── consecutive errors collapse: two back-to-back ✗ with same label → ONE error group ──
+  // ── interleaved errors consolidate: ✗ ✓✓✓✓✓✓ ✗ ✗ → ONE ×3 group at the first ✗ position ──
   {
     const failIds: string[] = new Array<string>(2);
     for (let i = 0; i < 2; i++) {
@@ -165,18 +165,26 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
       emitter.emitSubcallUpdated({ id, status: "error", detail: "rate limited" });
     }
     const failSnap = registry.snapshots()[0];
-    check("rows: consecutive-error snapshot exists", failSnap !== undefined);
+    check("rows: interleaved-error snapshot exists", failSnap !== undefined);
     if (failSnap !== undefined) {
-      // Sibling order: ✗, ✓×6, ✗, ✗ → runs [✗×1][✓×6][✗×2]. Singleton ✗ stays a node.
+      // All three ✗ share the group key (label+model+status) even though the ✓ run sits
+      // between them — they consolidate into ONE ×3 group at the FIRST ✗ position.
       const failRows = buildRows(failSnap, new Set());
       const loneErrors = failRows.filter((r): r is NodeRow => r.type === "node" && r.icon === "error");
-      // The singleton ✗ is leafIds[0] (the earlier 401 leaf); failIds[0..1] merge into the ×2 group.
-      check("rows: lone error stays individual next to grouped siblings", loneErrors.length === 1 && loneErrors[0]?.id === leafIds[0]);
-      check("rows: new failures are grouped, not individual", failIds.every((id) => !loneErrors.some((r) => r.id === id)));
-      const failGroups = failRows.filter((r): r is GroupRow => r.type === "group" && r.count === 2);
-      check("rows: consecutive errors form ONE error group of 2", failGroups.length === 1);
-      const failLine = formatRows(failRows, "", 72, theme).find((l) => l.includes("×2"));
-      check("rows: error group renders ✗ llm_query ×2", failLine !== undefined && failLine.includes("✗") && failLine.includes("llm_query"));
+      check("rows: no error leaf stays individual — identical failures consolidate", loneErrors.length === 0);
+      const errorGroups = failRows.filter((r): r is GroupRow => r.type === "group" && r.icon === "error");
+      check("rows: interleaved errors form ONE group of 3", errorGroups.length === 1 && errorGroups[0]?.count === 3);
+      // Visible order: root, agent, inner child, error group, done group.
+      check("rows: group placed at first member position", failRows.findIndex((r) => r.type === "group" && r.count === 3) === 3);
+      // Diverging reasons collapse into a counted summary instead of splitting the group.
+      check("rows: diverging reasons summarized", errorGroups[0]?.reason === "2 failure reasons");
+      const failLine = formatRows(failRows, "", 96, theme).find((l) => l.includes("×3"));
+      check("rows: error group renders ✗ llm_query ×3 · reasons",
+        failLine !== undefined && failLine.includes("✗") && failLine.includes("llm_query") && failLine.includes("2 failure reasons"));
+      // Expanded group lists members in start order (leafIds[0] spawned first).
+      const expandedFail = buildRows(failSnap, new Set(), new Set([errorGroups[0]?.id ?? ""]));
+      const failMembers = expandedFail.filter((r): r is NodeRow => r.type === "node" && r.icon === "error");
+      check("rows: expanded group keeps start order", failMembers.length === 3 && failMembers[0]?.id === leafIds[0]);
     }
   }
 
@@ -202,6 +210,49 @@ const theme = { fg: (_color: string, s: string) => s } as unknown as Theme;
       check("modal: stable height regardless of timeline", modal.length === modal2.length);
       check("modal: height within layout budget", modal.length <= MODAL_LAYOUT.timelineVisible + 14);
     }
+  }
+  store.dispose();
+  emitter.shutdown();
+}
+
+// ── ×16: a wholesale batch failure is ONE line — however many rows interleave, rlm never groups ──
+{
+  const registry = new RunRegistry();
+  const emitter = new RlmEmitter();
+  const store = new SubcallStore(emitter);
+  registry.register({ runId: "run2", label: "root", emitter, subcalls: () => store.getSubcalls(), totals: () => store.getTotals() });
+  // 16 failing llm leaves, each followed by an IDENTICAL rlm sibling — the rlm rows must
+  // never consolidate (user rule: ×N compaction does not apply to rlm_query), while the
+  // llm leaves merge across all the interleaving into a single ✗ llm_query ×16 group.
+  const failed: string[] = new Array<string>(16);
+  const probes: string[] = new Array<string>(16);
+  for (let i = 0; i < 16; i++) {
+    failed[i] = emitter.emitSubcallCreated({ kind: "llm", label: "llm_query", model: "openai/gpt-5-mini", depth: 1 });
+    probes[i] = emitter.emitSubcallCreated({ kind: "rlm", label: "rlm_query: probe", model: "anthropic/claude", depth: 1 });
+    emitter.emitSubcallUpdated({ id: failed[i], status: "error", detail: "Error: rate limit exceeded" });
+    emitter.emitSubcallUpdated({ id: probes[i], status: "done" });
+  }
+  const snap = registry.snapshots()[0];
+  check("x16: snapshot exists", snap !== undefined);
+  if (snap !== undefined) {
+    const rows = buildRows(snap, new Set());
+    const groups = rows.filter((r): r is GroupRow => r.type === "group");
+    // Containers sort before leaves: root + 16 rlm nodes + 1 llm group.
+    check("x16: exactly one group row despite interleaving", rows.length === 18 && groups.length === 1);
+    const group = groups[0];
+    check("x16: group carries count + shared error reason",
+      group?.count === 16 && group?.icon === "error" && group?.reason === "rate limit exceeded");
+    check("x16: 'Error: ' prefix stripped from reason", group?.reason !== undefined && !group.reason.includes("Error:"));
+    const probeNodes = rows.filter((r): r is NodeRow => r.type === "node" && r.label === "rlm_query: probe");
+    check("x16: identical rlm siblings stay individual rows", probeNodes.length === 16);
+    const lines = formatRows(rows, "", 110, theme);
+    const groupLine = lines.find((l) => l.includes("×16"));
+    check("x16: renders ✗ llm_query ×16 · rate limit exceeded",
+      groupLine !== undefined && groupLine.includes("✗") && groupLine.includes("llm_query ×16 · rate limit exceeded"));
+    const expanded = buildRows(snap, new Set(), new Set([group?.id ?? ""]));
+    const memberIds = expanded.filter((r): r is NodeRow => r.type === "node" && r.icon === "error").map((r) => r.id);
+    check("x16: expanded group lists all 16 members in start order",
+      memberIds.length === 16 && memberIds[0] === failed[0] && memberIds[15] === failed[15]);
   }
   store.dispose();
   emitter.shutdown();

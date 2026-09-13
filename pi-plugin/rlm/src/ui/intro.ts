@@ -14,7 +14,7 @@ const RLM_GUIDE = `# RLM mode
 - \`/rlm-llm\` — pin the LLM model for llm_query / llm_batch / map_files
 - \`/rlm-rlm\` — pin the model for rlm_query / rlm_batch child engines (default: session model)
 - \`/rlm-config\` — run limits and engine settings
-- \`/rlm-stop\` — cancel the current run but stay in RLM mode (use /rlm or Ctrl+Shift+R to leave)
+- \`/rlm-stop\` — abort all in-flight RLM work: RLM runs, native repl cells and background tasks (use /rlm or Ctrl+Shift+R to leave RLM mode)
 
 ## Live tree
 
