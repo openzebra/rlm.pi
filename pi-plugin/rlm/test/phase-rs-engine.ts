@@ -14,7 +14,7 @@ import { RlmEmitter } from "../src/tool/rlm-events.ts";
 import { captureComplete, check, finish, MOCK_MODEL, MOCK_REGISTRY, repl, runSuite } from "./helpers.ts";
 
 function cfg(over: Partial<RlmConfig> = {}): RlmConfig {
-  return { ...DEFAULT_CONFIG, enableLedger: false, ...over };
+  return { ...DEFAULT_CONFIG, enableLedger: false, enableVerificationNudge: false, ...over };
 }
 
 const FACT = "src/retry.ts — backoff lives here";

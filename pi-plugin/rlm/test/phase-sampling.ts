@@ -108,6 +108,9 @@ function cfg(overrides: Partial<RlmConfig> = {}): RlmConfig {
     // Keep the run minimal: no budget cascade, no compaction stub traffic.
     enableTokenBudget: false,
     compaction: false,
+    // Subject is sampling plumbing, not verification discipline — opt out of the (default-ON)
+    // coached redo so bare scripted answers still end the run in one turn.
+    enableVerificationNudge: false,
     ...overrides,
   });
 }

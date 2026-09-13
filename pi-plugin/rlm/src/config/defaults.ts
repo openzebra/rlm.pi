@@ -1,10 +1,18 @@
 import type { RlmConfig } from "../core/types.ts";
 
-/** Frozen default sub-LLM system prompt — avoids re-allocation on every llm_query call. */
+/**
+ * Frozen default sub-LLM system prompt — avoids re-allocation on every llm_query call.
+ * Anthropic prompting canon applied: a role ("precise extraction assistant") and the
+ * hallucination out ("reply exactly NOT_FOUND when the material lacks the answer") — the
+ * convention the glossary documents so roots can branch on a leaf's NOT_FOUND instead of
+ * retrying identical prompts against slices that cannot answer.
+ */
 const DEFAULT_SUB_SYSTEM_PROMPT =
-  "Answer directly and concisely. Return only the requested information. " +
-  "No preamble, no meta-commentary, no explanation of your approach. " +
-  "If listing items, use compact bullet form.";
+  "You are a precise extraction and analysis assistant. " +
+  "Answer directly and concisely from the material provided in the prompt. " +
+  "Return only the requested information — no preamble, no meta-commentary, no explanation of your approach. " +
+  "If listing items, use compact bullet form. " +
+  "If the material does not contain the answer, reply exactly: NOT_FOUND";
 
 export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   enabled: true,
@@ -64,9 +72,11 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   // v5 TaskLedger blackboard
   enableLedger: true,
   rlmBudget: 8,
-  // Verification-discipline nudge — deliberately OFF (plan guardrail): when on, an early
-  // bare-number finalize gets one coached redo instead of being accepted. Opt-in via rlm.json.
-  enableVerificationNudge: false,
+  // Verification-discipline nudge — default ON (knowlange rec: 28/33 bench failures were
+  // early confident wrong answers; the RLM paper ships the same discipline). An early bare
+  // finalize — or one from a run that never inspected its context — gets ONE coached redo
+  // before the answer is accepted. Opt out via rlm.json (`"enableVerificationNudge": false`).
+  enableVerificationNudge: true,
   // SKILL.state integration: Σ_t execution state + cross-session distilled knowledge.
   // Paradigm flags are ENFORCED (R0, /tmp/ROOT_FULL_SKILLSTATE_PLAN.md) — validateEnforcedOn
   // forces true whatever rlm.json carries; only calibrations are tunable.

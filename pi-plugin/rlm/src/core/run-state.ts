@@ -505,6 +505,21 @@ export function applyPatch(prev: RunState, patch: unknown, t: number): Result<Ru
   return enforceCaps(draft);
 }
 
+/** The actual limits, spelled out at rejection time — a small model told only "cap exceeded"
+ *  thrashes blind retries into the degrade threshold. Field name → human limit (one source:
+ *  RUN_STATE_LIMITS + the scalar caps). */
+const CAP_LIMITS: Readonly<Record<string, string>> = Object.freeze({
+  task: `≤ ${TASK_MAX_CHARS} chars`,
+  nextStep: `≤ ${NEXT_STEP_MAX_CHARS} chars`,
+  findings: `≤ ${RUN_STATE_LIMITS.findings} entries`,
+  verifiedFacts: `≤ ${RUN_STATE_LIMITS.verifiedFacts} entries`,
+  testedApproaches: `≤ ${RUN_STATE_LIMITS.testedApproaches} entries`,
+  openQuestions: `≤ ${RUN_STATE_LIMITS.openQuestions} entries`,
+  artifacts: `≤ ${RUN_STATE_LIMITS.artifacts} entries`,
+  patchBytes: `≤ ${RUN_STATE_LIMITS.patchBytes} bytes per patch`,
+  bytesTotal: `≤ ${RUN_STATE_LIMITS.bytesTotal} bytes total`,
+});
+
 /** Human-facing patch rejection — becomes the next O_t prefix (error-as-observation). */
 export function patchErrorText(error: PatchError): string {
   switch (error.kind) {
@@ -514,8 +529,10 @@ export function patchErrorText(error: PatchError): string {
       return `type mismatch at "${error.path}" (expected ${error.expected})`;
     case "implicit-drop":
       return `implicit key drop at "${error.path}" — restate the key or delete it with null`;
-    case "cap":
-      return `cap exceeded on "${error.field}"`;
+    case "cap": {
+      const limit = CAP_LIMITS[error.field];
+      return `cap exceeded on "${error.field}"${limit === undefined ? "" : ` — the limit is ${limit}`}`;
+    }
   }
 }
 
@@ -527,6 +544,9 @@ export function patchErrorText(error: PatchError): string {
  * Idle degrade (bench rec #2): when `fenceRequested` is true (the turn conditioned on Σ)
  * and zero patches were accepted, the turn is IDLE — Σ inflated the prompt for nothing.
  * `RUN_STATE_IDLE_DEGRADE_TURNS` consecutive idle turns degrade, same as-built outcome.
+ * `productive` (root parity, recall W2): a turn that executed real repl work without
+ * raising RESETS the idle streak — heavy execution is progress even without a delta, and
+ * a mid-run amputation of Σ costs more than the prompt it saves.
  */
 export function applyStatePatches(
   mode: Extract<RunStateMode, { kind: "active" }>,
@@ -534,10 +554,11 @@ export function applyStatePatches(
   iteration: number,
   config: Pick<RlmConfig, "runStateRetryMax">,
   fenceRequested = false,
+  productive = false,
 ): { readonly mode: RunStateMode; readonly observation: string | undefined } {
   // Identity fast-path: a fence-free turn on a run that never asked for fences changes
   // nothing — keep the same mode object (callers may compare identity).
-  if (parsed.length === 0 && !fenceRequested) return { mode, observation: undefined };
+  if (parsed.length === 0 && !fenceRequested && !productive) return { mode, observation: undefined };
   let state = mode.state;
   let retries = mode.retries;
   let accepted = 0;
@@ -558,7 +579,8 @@ export function applyStatePatches(
     }
   }
   // Bench rec #2: accepted deltas reset the idle streak; a requested-but-empty turn grows it.
-  const idle = accepted > 0 || !fenceRequested ? 0 : mode.idle + 1;
+  // Productive-turn parity (root tracker): executed work resets the streak too.
+  const idle = accepted > 0 || !fenceRequested || productive ? 0 : mode.idle + 1;
   let nextMode: RunStateMode = { kind: "active", state, retries, idle };
   if (retries > config.runStateRetryMax) {
     nextMode = {
@@ -593,6 +615,9 @@ export const STATE_FENCE_INSTRUCTION: string =
   "Σ is an index of pointers, not a report: ≤ 5 keys per patch, every string value ≤ 120 chars, " +
   "telegraphic style (`path — fact`, `verdict — numbers`). NEVER paste findings, tables, JSON " +
   "blobs, or long excerpts into Σ — the prose carries the story, Σ carries only the pointers.\n" +
+  `Caps: findings ≤ ${RUN_STATE_LIMITS.findings}, verifiedFacts ≤ ${RUN_STATE_LIMITS.verifiedFacts}, ` +
+  `testedApproaches ≤ ${RUN_STATE_LIMITS.testedApproaches}, openQuestions/artifacts ≤ ${RUN_STATE_LIMITS.openQuestions}/${RUN_STATE_LIMITS.artifacts} — ` +
+  "oldest entries are evicted automatically, so push new facts and let Σ prune itself.\n" +
   "Keys: dotted paths write record leaves; [+] appends; [N] sets an array slot; null deletes.\n" +
   "Commit DELTAS only — never restate unchanged records or arrays; touch single dotted keys " +
   `or append with [+]. Whole-record restatements must keep EVERY key (implicit drops are ` +

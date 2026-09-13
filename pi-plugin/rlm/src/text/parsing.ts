@@ -162,8 +162,7 @@ export function findStatePatches(text: string): readonly StateFenceResult[] {
  *  bookkeeping). Deterministic scrub on the answer path; parse semantics stay in findStatePatches.
  *  Also removes bare {"state_patch"…} objects (mangled-fence leaks), a `state` token glued to
  *  preceding prose, and orphan ``` lines left behind by the mangled pair. */
-export function stripStateFences(text: string): string {
-  let out = sansFences(text);
+export function stripStateFences(text: string): string {  let out = sansFences(text);
   const parts: string[] = [];
   let cursor = 0;
   // A {"state_patch"…} inside a ```json fence is a quotation (recall W2) — must survive in
@@ -187,6 +186,105 @@ export function stripStateFences(text: string): string {
   if (parts.length === 0) return out.trim();
   parts.push(out.slice(cursor));
   return parts.join("").replace(ORPHAN_FENCE, "").trim();
+}
+
+// ── RLM-paper finalize repair (App. A: programmatic template-mistake fixing) ────────────────
+
+/** A finalize the model wrote in the paper's surface syntax instead of flipping `answer`. */
+export type FinalTag =
+  | { readonly kind: "final"; readonly value: string }
+  | { readonly kind: "final_var"; readonly value: string };
+
+const FINAL_TAG_RE = /\b(FINAL_VAR|FINAL)\s*\(/g;
+const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const FINAL_TAG_VALUE_MAX = 20_000;
+
+/** All match spans of a global regex — used to excise fenced regions before prose scans. */
+function collectFenceSpans(text: string, re: RegExp): readonly { readonly start: number; readonly end: number }[] {
+  const spans: { start: number; end: number }[] = [];
+  let m: RegExpExecArray | null;
+  re.lastIndex = 0;
+  while ((m = re.exec(text)) !== null) {
+    spans.push({ start: m.index, end: m.index + m[0].length });
+  }
+  return spans;
+}
+
+/** String-aware balanced-paren scan from `start` (an index of `(`). Returns the inner slice. */
+function balancedParens(text: string, start: number): string | undefined {
+  let depth = 0;
+  let inStr: string | undefined;
+  let esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text.charAt(i);
+    if (inStr !== undefined) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === inStr) inStr = undefined;
+      continue;
+    }
+    if (ch === '"' || ch === "'") inStr = ch;
+    else if (ch === "(") depth += 1;
+    else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start + 1, i);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Detect `FINAL(x)` / `FINAL_VAR(v)` in a turn's PROSE (the RLM paper's finalize surface).
+ * The paper found 16%/13% of small-model turns misuse these tags instead of setting
+ * `answer` — and that a programmatic fix measurably improved the post-trained RLM. Fenced
+ * code is excluded (those blocks already executed as code this turn); the LAST tag wins.
+ * Returns undefined when the value is empty or dump-sized (a plan/dump is not an answer).
+ */
+export function findFinalTag(text: string): FinalTag | undefined {
+  const spans: readonly { readonly start: number; readonly end: number }[] = [
+    ...collectFenceSpans(text, FENCE),
+    ...collectFenceSpans(text, FALLBACK_FENCE),
+  ];
+  let prose = text;
+  if (spans.length > 0) {
+    const ordered = [...spans].sort((a, b) => a.start - b.start);
+    const parts: string[] = [];
+    let cursor = 0;
+    for (const s of ordered) {
+      parts.push(text.slice(cursor, s.start));
+      cursor = s.end;
+    }
+    parts.push(text.slice(cursor));
+    prose = parts.join("");
+  }
+  let found: FinalTag | undefined;
+  FINAL_TAG_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FINAL_TAG_RE.exec(prose)) !== null) {
+    const open = m.index + m[0].length - 1;
+    const inner = balancedParens(prose, open);
+    if (inner === undefined) continue;
+    const value = inner.trim().replace(/^"([\s\S]*)"$|^'([\s\S]*)'$/, "$1$2");
+    if (value === "" || value.length > FINAL_TAG_VALUE_MAX) continue;
+    found =
+      m[1] === "FINAL_VAR" && IDENTIFIER_RE.test(value)
+        ? { kind: "final_var", value }
+        : { kind: "final", value: value };
+  }
+  return found;
+}
+
+/** Python snippet that completes a FINAL_VAR(v) repair inside the sandbox — never raises. */
+export function finalVarRepairCode(name: string): string {
+  const lit = JSON.stringify(name); // identifier chars only — JSON literal == Python literal
+  return [
+    `_final_name = ${lit}`,
+    `try:`,
+    `    answer["content"] = str(globals()[_final_name])`,
+    `except KeyError:`,
+    `    answer["content"] = "Error: FINAL_VAR variable " + _final_name + " is not defined in the REPL"`,
+    `answer["ready"] = True`,
+  ].join("\n");
 }
 
 /** Truncate REPL stdout for the model's context window (head + tail, with an elision note).

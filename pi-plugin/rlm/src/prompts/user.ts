@@ -26,6 +26,7 @@ export function buildTurnPrompt(
 export const FINALIZE_PROMPT =
   "You are out of turns. Finalize NOW: set `answer[\"content\"]` and `answer[\"ready\"] = True` " +
     "(fenced ```repl```) with your best final answer from everything you have gathered. " +
+    "Finalize ONLY through `answer` — no FINAL(...) prose and no ```state fence in this reply. " +
     "Only if the REPL is unavailable, answer as plain text.";
 
 /** One-shot retrieval-discipline nudge (the engine owns the when — see core/engine.ts). The
@@ -44,9 +45,9 @@ export const REASONING_BUDGET_HINT =
   "the completion budget with the answer, so long thought may be cut off mid-reasoning. " +
   "Keep thought concise, or raise rootSampling.maxTokens.";
 
-/** One-shot verification-discipline nudge (default OFF — enableVerificationNudge): fired when
- *  the root finalizes suspiciously early with a bare number / short label. The model gets ONE
- *  coached redo instead of having the answer accepted. */
+/** One-shot verification-discipline nudge (default ON — enableVerificationNudge): fired when
+ *  the root finalizes suspiciously early with a bare answer, or without having inspected its
+ *  context at all. The model gets ONE coached redo instead of having the answer accepted. */
 export const VERIFICATION_NUDGE =
   "[coach] That answer was submitted suspiciously early and looks under-verified. Before " +
   "finalizing: recompute the key quantity inside a ```repl block (show the actual computation, " +

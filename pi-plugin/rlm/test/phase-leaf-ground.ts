@@ -40,7 +40,7 @@ async function main(): Promise<void> {
 
     // ── attachment above threshold ──
     const grounded = groundLeafPrompt(store, config, PROMPT);
-    check("grounding prefix added", grounded.startsWith("[Project facts]\n"));
+    check("grounding wrapped in <project_facts>", grounded.startsWith("<project_facts>\n"));
     check("matched note included", grounded.includes("settingsPath"));
     check("original prompt preserved at the end", grounded.endsWith(`\n\n${PROMPT}`));
 
@@ -55,7 +55,9 @@ async function main(): Promise<void> {
 
     // ── budget respected ──
     const small = groundLeafPrompt(store, { skillStateLeafTokens: 30, skillStateMinScore: 0 }, PROMPT);
-    check("budget caps the slice", small.length < 30 * 4 + PROMPT.length + 40, String(small.length));
+    check("budget caps the slice (slice budget + fixed XML wrapper)",
+      small.length < 30 * 4 + PROMPT.length + 220
+      && small.includes("<project_facts>"), String(small.length));
 
     // ── DRY #1 projection: completeDeps carries the seam verbatim ──
     const groundLeaf = (p: string): string => groundLeafPrompt(store, config, p);

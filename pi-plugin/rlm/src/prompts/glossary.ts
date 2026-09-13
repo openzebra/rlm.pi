@@ -367,6 +367,9 @@ export function replGlossary(
   lines.push(
     "- `llm_query(prompt: str) -> Task`: spawn one sub-LLM (await_task for str). The prompt must",
     "  **contain the text** to analyze — this call has no filesystem and no `context`.",
+    "  Leaf convention: a sub-LLM answers exactly `NOT_FOUND` when its slice lacks the answer —",
+    "  treat that as \"not in this slice\": slice differently, search elsewhere, or narrow the ask.",
+    "  Never re-send an identical prompt hoping for a different verdict.",
     "- `llm_batch(prompts: list[str]) -> Task`: many parallel one-shots (same rule: embed text).",
     "  await_task → ordered list[str]. NEVER pass bare file paths as if the worker can open them.",
     ...CHUNKED_GLOSSARY_LINES,
@@ -419,6 +422,8 @@ export function replGlossary(
     '- `answer`: a dict initialized to {"content": "", "ready": False}. To submit your final answer,',
     '  set `answer["content"]` to the answer text and `answer["ready"] = True`.',
     '  **You MUST flip `answer["ready"] = True` — runs that never finalize are discarded.**',
+    '  Never write FINAL(...) / FINAL_VAR(...) prose and never emit a ```state fence in the',
+    '  reply that finalizes — `answer` is the only finalize channel; Σ bookkeeping waits.',
   );
   return lines.join("\n");
 }

@@ -26,7 +26,7 @@ import { PythonSandbox, SANDBOX_WATCHDOG_HEARTBEAT_MS } from "../sandbox/sandbox
 import type { ReplResult } from "../sandbox/protocol.ts";
 import { pinContext, type PinnedContext } from "../sandbox/context-file.ts";
 import { previewStdout, previewText } from "../text/preview.ts";
-import { findReplBlocks, stripStateFences } from "../text/parsing.ts";
+import { finalVarRepairCode, findFinalTag, findReplBlocks, stripStateFences } from "../text/parsing.ts";
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, latestStdoutOf, turnHadError } from "./answer.ts";
 import { compactHistory, elideOldToolPayloads, rebaseWithState, shouldCompact } from "./compaction.ts";
@@ -301,6 +301,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
     let softNoteTurn = -1;
     // H3: retrieval-discipline coach — one-shot per run; children inherit it via the same loop.
     let sawRetrieval = false;
+    let sawDelegation = false;
     let retrievalNudged = false;
     // Verification-discipline coach (enableVerificationNudge, default OFF): one coached redo
     // when an early finalize looks like the confident-wrong bench shape.
@@ -422,7 +423,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
         // v5 [ledger] blackboard — silent ("") when it has nothing to say.
         const ledgerBlock = deps.config.enableLedger ? runLedger.injectBlock() : "";
         // H3: after two retrieval-free turns, inject the coach nudge exactly once, for one turn.
-        const nudgeNow = i >= 2 && !sawRetrieval && !retrievalNudged;
+        // Surface-aware: delegation children (depth > 0) have NO search/grep_context — nudging
+        // them taught a tool their prompt elsewhere forbids (NameError bait).
+        const nudgeNow = input.depth === 0 && i >= 2 && !sawRetrieval && !retrievalNudged;
         if (nudgeNow) retrievalNudged = true;
         const notes =
           [
@@ -459,6 +462,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
           onPhase: reportPhase,
         });
         if (turn.blocks.some((b) => /\b(?:search|grep_context)\s*\(/.test(b))) sawRetrieval = true;
+        if (turn.blocks.some((b) => /\b(?:llm_query|llm_batch|rlm_query|rlm_batch|map_files|llm_query_chunked|llm_map_reduce|spawn)\s*\(/.test(b))) sawDelegation = true;
         const allBlocks = turn.blocks.length > 0
           ? turn.blocks.map((b) => previewText(b, 400)).join("\n")
           : previewText(turn.response, 400);
@@ -485,13 +489,33 @@ export function createEngine(deps: EngineDeps): RunRlm {
         const turnStdout = latestStdoutOf(turn.results);
         if (turnStdout) lastStdout = turnStdout;
         completedTurns = i + 1;
-        const final = finalAnswerOf(turn.results);
+        let final = finalAnswerOf(turn.results);
+        // RLM-paper App. A template repair: a finalize written as FINAL(x) / FINAL_VAR(v)
+        // instead of an `answer` flip is converted (16%/13% of small-model turns in the
+        // paper). The repair note rides the next observation so the model learns the channel.
+        let repairNote: string | undefined;
+        if (final == null && sandbox !== undefined) {
+          const tag = findFinalTag(turn.response);
+          if (tag?.kind === "final") {
+            final = tag.value;
+            repairNote = "[runtime] Converted FINAL(...) from your prose into the final answer — flip `answer[\"ready\"]` directly next time.";
+          } else if (tag?.kind === "final_var") {
+            const repaired = await sandbox.exec(finalVarRepairCode(tag.value));
+            const recovered = finalAnswerOf([repaired]);
+            if (recovered !== null && !recovered.startsWith("Error:")) {
+              final = recovered;
+              repairNote = `[runtime] Converted FINAL_VAR(${tag.value}) into the final answer — flip \`answer["ready"]\` directly next time.`;
+            } else if (recovered !== null) {
+              repairNote = recovered;
+            }
+          }
+        }
         if (final != null) {
-          // Verification-discipline nudge (enableVerificationNudge, default OFF): an early
-          // finalize whose answer is a bare number / short label is the confident-wrong shape
-          // that dominated bench failures. ONE coached redo, then the answer is accepted.
+          // Verification-discipline nudge (default ON — bench: 28/33 failures were early
+          // confident wrong answers): a finalize that is bare, or arrived without any
+          // inspection of the context, gets ONE coached redo, then the answer is accepted.
           if (deps.config.enableVerificationNudge === true && !verificationNudged
-            && completedTurns < VERIFICATION_NUDGE_TURN_CAP && isBareAnswer(final)) {
+            && completedTurns < VERIFICATION_NUDGE_TURN_CAP && isBareAnswer(final, sawRetrieval, sawDelegation)) {
             verificationNudged = true;
             verificationNudgePending = true;
           } else {
@@ -504,6 +528,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
         limits.observe(turnHadError(turn.results));
         history.push({ role: "assistant", content: turn.response });
         pendingReplOutputs = formatReplOutputs(turn.results, turn.skippedBlocks);
+        if (repairNote !== undefined) {
+          pendingReplOutputs = `${pendingReplOutputs}\n\n${repairNote}`;
+        }
         // ── Workstream A: apply ΔΣ_t AFTER the environment reply — Algorithm 1 ordering:
         // state reflects intended effects; feedback arrives as the next O_t. Rejections roll
         // back and lead the next observation (error-as-observation retry); retries exhausted
@@ -515,6 +542,9 @@ export function createEngine(deps: EngineDeps): RunRlm {
             i + 1,
             deps.config,
             i >= 2, // the fence was requested this turn → empty turns count as idle (bench rec #2)
+            // Productive-turn parity (root tracker, recall W2): executed work that neither
+            // raised nor skipped resets the idle streak — repl progress is progress.
+            turn.blocks.length > 0 && !turnHadError(turn.results) && turn.skippedBlocks === 0,
           );
           runStateMode = applied.mode;
           if (applied.observation !== undefined) {
@@ -659,11 +689,18 @@ function contextWindowOrFallback(model: Model<Api>, registry: ModelContextRegist
   return registry.limitFor(`${model.provider}/${model.id}`);
 }
 
-/** Bare number / short label — the early-confident answer shape the verification nudge
- *  targets (28/33 bench failures were early confident wrong answers). */
-function isBareAnswer(answer: string): boolean {
+/** Early-confident answer shape — the target of the verification nudge (28/33 bench failures
+ *  were early confident wrong answers). Bare when: tiny, ≤3 words, a pure number/date/label,
+ *  or — strongest signal — the run NEVER inspected its context (no retrieval, no delegation):
+ *  the answer was then guessed, whatever its length. */
+function isBareAnswer(answer: string, sawRetrieval: boolean, sawDelegation: boolean): boolean {
   const t = answer.trim();
-  return t.length <= 12 || /^[-+$(€£¥]?\d+(?:[.,]\d+)*\s*%?$/.test(t);
+  if (t.length === 0) return true;
+  if (!sawRetrieval && !sawDelegation) return true;
+  if (t.length <= 12) return true;
+  if (t.split(/\s+/).length <= 3) return true;
+  if (/^[-+$(€£¥]?\d+(?:[.,]\d+)*\s*%?$/.test(t)) return true;
+  return false;
 }
 
 /** Out of turns: ask the model for its best final answer. FINALIZE_PROMPT asks for a fenced
