@@ -29,7 +29,7 @@ const SUITES: readonly string[] = Object.freeze([
   "concurrency-provider.ts",
   "retry.ts",
   "child-surface.ts",
-  "phase-encoding.ts", "phase-retrieval.ts", "phase-llm-model.ts",
+  "phase-encoding.ts", "phase-retrieval.ts", "phase-bm25-parity.ts", "phase-llm-model.ts",
   "native-mode.ts", "native-smoke.ts", "subagent-bypass.ts",
   // SKILL.state integration (Workstreams A–F)
   "phase-rs-patch.ts", "phase-rs-engine.ts",

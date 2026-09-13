@@ -30,9 +30,11 @@ export function promptCapTokensK(maxPromptChars: number): number {
  * the outcome (§5, Fig. 4a). These cost no tokens and no sub-calls.
  */
 const RETRIEVAL_GLOSSARY_LINES: readonly string[] = Object.freeze([
-  "- `search(query: str, k=10, path_glob=None)`: BM25 ranking over `context`. Returns",
-  "  [{path, line, score, snippet, text}] — POINTERS, not bodies (`text` aliases `snippet`).",
-  "  **Start here.** Free: no sub-LLM call. Use before guessing filenames.",
+  "- `search(query: str, k=10, path_glob=None)`: BM25 ranking over `context` (stemmed, with",
+  "  query expansion — try plain words, not just exact identifiers). Returns",
+  "  [{path, line, end, score, snippet, text}] — POINTERS, not bodies (`text` aliases",
+  "  `snippet`; line..end is the match span; `index_truncated: true` means the context tail",
+  "  is NOT indexed — narrow with path_glob). **Start here.** Free: no sub-LLM call.",
   "- `grep_context(pattern, k=50, path_glob=None, before=0, after=0) -> dict`: regex over",
   "  `context`. Returns {hits: [{path, line, text, snippet}], counts, total, truncated} —",
   "  `counts` is complete even when `hits` is capped, so a wide pattern reports its shape",

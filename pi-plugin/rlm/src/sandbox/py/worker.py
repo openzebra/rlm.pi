@@ -119,7 +119,7 @@ class Worker(WorkerScaffold):
         self._context_payload: Any = []  # empty list — the only starting value that needs no bootstrap branch
         self._nudged: set[str] = set()
         self._index: _Bm25Index | None = None
-        self._index_stamp: tuple[int, int] | None = None  # (id(context), len(context))
+        self._index_stamp: tuple[int, int] | None = None  # (id(context), content fingerprint)
         self._restore_scaffold()
 
     def _capture_answer(self, content: Any) -> None:
