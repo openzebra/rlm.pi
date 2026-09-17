@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.22] — 2026-09-17
+
+### Fixed
+
+- **Fork-host (oh-my-pi) MarkdownTheme crash — first render, both crash shapes** (`ui/theme-adapter.ts`,
+  fixes [#28](https://github.com/openzebra/rlm.pi/issues/28)). omp remaps `@earendil-works/pi-tui`
+  to a bundled fork whose `Markdown` requires a nested `symbols` record on the theme; upstream
+  pi-tui has no such key. omp ≤18.2.3 crashed with
+  `TypeError: undefined is not an object (evaluating 'this.#r.symbols.colorSwatch')` on the first
+  adapted card. The first patch (plain fallback `symbols`) fixed that shape but tripped omp
+  ≥18.2.4, whose `Theme.md` getter is a **flat string partial**
+  (`{ quoteBorder, hrChar, bullet, colorSwatch }`), not a `MarkdownTheme` — returning it raw
+  amputated every render function (`TypeError: this.#r.heading is not a function`).
+  `markdownTheme()` now merges in one pass: base render functions from the *injected* theme,
+  function-valued host overrides on top, and the host's symbol surface — nested
+  (`theme.md.symbols.colorSwatch`) or flat (`theme.md.colorSwatch`) — folded into a complete
+  frozen `symbols` record (3 scalars + 11 table glyphs) with safe defaults, so a fork's
+  `Markdown` can never dereference a missing key regardless of host version. Verified against
+  omp's own `Markdown` source: all three host shapes (no `.md`, flat partial, nested symbols)
+  render without TypeError.
+
+### Changed
+
+- **README overhaul (en / zh-CN / ru)**: centred hero block with npm/OOLONG/arXiv badges and
+  `assets/hero.png`; Get-started install tables for **both hosts** (`pi install npm:@hicaru/pi-rlm`,
+  `omp plugin install @hicaru/pi-rlm`, incl. upgrade/remove); the engine formalized as
+  `A_t = (P, Σ_t, O_t)` → `ΔΣ_t = μ(A_t)` → `V(ΔΣ_t, Σ_t)` → `Σ_{t+1} = Σ_t ⊕ ΔΣ_t`; a real
+  OOLONG benchmark table from `bench/runs/*.jsonl` (glm-4.7 91.7%, qwen3.8-27b 49%,
+  mercury-2.5 38%, avg ~36k tok/task) with a reproduce command; sandbox-API and security
+  sections. All three languages kept structurally identical (prettier-checked).
+- **Plugin README refreshed** (`pi-plugin/rlm/README.md`): omp added to the install badge and
+  install/upgrade/remove tables, benchmark table updated to the latest journals (glm-4.7
+  **91.7%**, avg tokens/task column added), `A_t = (P, Σ_t, O_t)` state-transition block folded
+  into RECURSION, and a stray RLM tool-notice line that had leaked into the file was removed;
+  prettier-formatted.
+
 ## [0.3.21] — 2026-09-14
 
 ### Added

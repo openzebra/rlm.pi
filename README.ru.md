@@ -1,217 +1,139 @@
 <div align="center">
 
-<sub>
-<a href="README.md">English</a> &nbsp;·&nbsp; <a href="README.zh-CN.md">中文</a> &nbsp;·&nbsp; <b>Русский</b>
-</sub>
+# rlm.pi
+
+**Рекурсивные языковые модели для Pi — контекст в миллион токенов на дешёвых моделях.**
+
+Превратите <b>Pi</b> и <b>oh-my-pi</b> в исследовательских агентов, которые не «прочитывают»
+документ на 500 страниц — они его <i>ищут</i>, в Python-REPL, пока ваша сильная модель
+дирижирует армией дешёвых воркеров.
+
+<p>
+<a href="https://www.npmjs.com/package/@hicaru/pi-rlm"><img src="https://img.shields.io/npm/v/@hicaru/pi-rlm?color=cb3837&label=npm" alt="npm" /></a>
+<a href="https://github.com/openzebra/rlm.pi/actions"><img src="https://img.shields.io/badge/OOLONG-91.7%25-brightgreen" alt="OOLONG 91.7%" /></a>
+<a href="https://arxiv.org/abs/2512.24601"><img src="https://img.shields.io/badge/arXiv-2512.24601-b31b1b" alt="RLM paper" /></a>
+<img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT" />
+</p>
+
+<img src="assets/hero.png" width="92%" alt="rlm.pi — результаты бенчмарка OOLONG" />
+
+<sub><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a> · <b>Русский</b></sub>
 
 </div>
 
----
-
-# rlm.pi PI plugin
-
-> pi-rlm — большие контексты на дешёвых моделях: рекурсивная языковая модель (RLM) для Pi
-
-## Установка
+## Быстрый старт
 
 ```bash
-pi install npm:@hicaru/pi-rlm
+pi install npm:@hicaru/pi-rlm        # Pi
+omp plugin install @hicaru/pi-rlm    # oh-my-pi
 ```
 
-Чтобы удалить позже:
+Затем `/reload` (или перезапуск). Убедитесь, что `/rlm`, `/rlm-config`, `/rlm-stop`
+появились в **[Extensions]**, и переключайте режим через `Ctrl+Shift+R` или `/rlm` —
+обычные запросы теперь идут через движок RLM.
 
-```bash
-pi uninstall npm:@hicaru/pi-rlm
+| | установка | обновление | удаление |
+|---|---|---|---|
+| **Pi** | `pi install npm:@hicaru/pi-rlm` | `pi install npm:@hicaru/pi-rlm --force` | `pi uninstall npm:@hicaru/pi-rlm` |
+| **oh-my-pi** | `omp plugin install @hicaru/pi-rlm` | `omp plugin install @hicaru/pi-rlm --force` | `omp plugin uninstall @hicaru/pi-rlm` |
+
+## Идея
+
+Контекст не запихивается в промпт — он **живёт в песочнице**: файлы, PDF, репозитории,
+логи сессий. Модель видит только индекс. Каждый шаг — одно переход состояния:
+
+```
+A_t = (P, Σ_t, O_t)          фиксированный промпт + состояние выполнения Σ_t + набор инструментов
+ΔΣ_t = μ(A_t)                модель выдаёт repl()-патч, а не прозу
+V(ΔΣ_t, Σ_t)                 детерминированный валидатор — без путей к краху
+Σ_{t+1} = Σ_t ⊕ ΔΣ_t         глубокое слияние, null = удалить (статья, §5.7)
 ```
 
-Затем выполните `/reload` или перезапустите Pi — `/rlm`, `/rlm-config` и `/rlm-stop` появятся в разделе **[Extensions]**. Переключение — `Ctrl+Shift+R` или `/rlm`.
-
-<p align="center">
-  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" width="100%" alt="rlm.pi — результаты OOLONG">
-</p>
-
-## Что такое pi-rlm?
-
-Плагин, который превращает сессию Pi в **рекурсивную языковую модель (RLM)**: вместо того чтобы заталкивать огромный документ в промпт, контекст живёт в Python REPL, а ваша лучшая модель им управляет — ищет, декомпозирует и делегирует чтения дешёвым worker-моделям, рекурсивно. Та же сессия Pi, те же инструменты, те же ключи — включите `/rlm` и вперёд. По методу [RLM paper](https://arxiv.org/abs/2512.24601); подробности — в разделе **Как это работает**.
+Сильная модель дирижирует (`P`); дешёвые воркеры платят за чтение (`llm_query`,
+`rlm_query`); сложные подзадачи рекурсивно уходят в дочерние RLM — с лимитом глубины,
+бюджетом и нулевой стоимостью наследования полной песочницы. Запросы живут между
+ходами чата; устойчивый прогресс фиксируется как дельты `Σ`, проходя одну и ту же
+лестницу валидации на каждом шаге. Нативные сессии бесплатно получают слой **Root Σ**:
+стёртые ходы сворачиваются в архив сессии, `/compact` превращается в детерминированное
+структурное резюме, а хранилище навыков `Ξ` переранжирует факты проекта в каждый промпт.
 
 ## Бенчмарки
 
-**OOLONG (oolong-synth)** — paper-tier сюит длинного контекста; последний журнал каждой модели, цена за задачу из реального `costUsd` (старые журналы оценены по прайс-листу OpenRouter):
+Полный набор **OOLONG** (oolong-synth, 24 задачи, контекст до 128K токенов), свежейший
+журнал на модель, стоимость из реального `costUsd`:
 
-| Модель | Счёт | Цена/задача |
-|--------|------|-------------|
-| `zai/glm-4.7` | **83%** | $0.0000 * |
-| `qwen/qwen3.8-27b` | 49% | $0.1038 |
-| `inception/mercury-2.5` | 38% | $0.0052 |
+| Модель | OOLONG | токенов/задача | цена/задача |
+|---|---|---|---|
+| `zai/glm-4.7` | **91.7%** (22/24) | ~36k | ~$0.00 \* |
+| `openrouter/qwen/qwen3.8-27b` | 49% | ~36k | $0.10 |
+| `openrouter/inception/mercury-2.5` | 38% | ~36k | $0.005 |
 
-\* glm-4.7 идёт через coding-эндпоинт Z.ai — подписочная тарификация, у движка нет
-цены за токен, `costUsd` остаётся $0.
+\* Эндпоинт Z.ai coding-plan — подписочный биллинг, поэтому `costUsd` остаётся $0.
 
-Lite-сьют — `needle` (поиск игл в куче), `codeqa` (вопросы по коду), `coding` (задача-фикс; 7 задач × 2 прохода на модель, детерминированные грейдеры, без LLM-судьи):
+В [статье RLM](https://arxiv.org/abs/2512.24601) GPT-5-mini в роли RLM обходит GPT-o3
+на OOLONG — рекурсия бьёт сырой контекст за малую долю цены.
 
-| Модель | Счёт | Точность |
-|--------|------|----------|
-| `qwen/qwen3-30b-a3b-instruct-2507` | **14/14** | **100%** |
-| `mistralai/mistral-small-3.2-24b-instruct` | 12/14 | 86% |
-
-Построчные результаты (correct, recall, latency, токены, цена) — в
-`bench/runs/*.jsonl`, одна JSONL-строка на задачу.
-
-### Как запустить
+Построчные результаты лежат в [`bench/runs/*.jsonl`](bench/runs/). Воспроизведение:
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-...        # обязателен — ключи ходят только через env
-
-bun run bench                              # lite-сьют: needle + codeqa + coding
-bun run bench --suite needle --limit 1     # один сьют, первая задача
-bun run bench --model openrouter/qwen/qwen3-30b-a3b-instruct-2507
-bun run bench --list                       # показать задачи, без движка и ключа
-bun run bench --suite paper                # paper-сьют: s_niah, oolong, browsecomp, codeqa_lb (скачивает датасеты)
+export OPENROUTER_API_KEY=sk-or-...    # для zai/* — ZAI_API_KEY
+bun run bench --model zai/glm-4.7 --oolong-max-cl 65536 --oolong-limit 24
 ```
 
-Сьюты: `all` (lite, по умолчанию) · `needle` · `codeqa` · `coding` · `paper` · `s_niah` ·
-`oolong` · `browsecomp` · `codeqa_lb`.
+## Что вы получаете
+
+| | pi-rlm даёт |
+|---|---|
+| **Исследования** | Map-reduce по репозиториям, PDF, логам — воркеры читают, ваша модель думает. |
+| **Большой контекст** | Песочница вмещает всё при нулевой стоимости промпта; модель видит индекс. |
+| **Экономия токенов** | Воркеры выбирают самую дешёвую доступную модель; чтение не касается основной. |
+| **Долгие задачи** | Цели крутятся между ходами с лимитами глубины, бюджета и ошибок — вернётесь к готовому ответу. |
+| **Плагин, а не агент** | Живёт внутри Pi/omp: ваша тема, инструменты, ключи, мышечная память. Тумблер `/rlm`. |
+| **Читает что угодно** | `add_context("report.pdf")` — PDF, DOCX, XLSX, EPUB, CSV, HTML → Markdown, без препроцессинга. |
 
 ## Как это работает
 
 ```
-pi process (TypeScript)
- ├─ /rlm  ──► движок управляет SMART (корневой) моделью пошагово (пишет ```repl``` Python)
- │             │  каждый шаг: парсинг repl-блоков ──► запуск в песочнице ──► возврат stdout
- │             ▼
- ├─ bridge ── llm_query / llm_query_batched ──► WORKER модель (serverless, in-process)
- │            rlm_query ──► рекурсивный дочерний RLM (с собственной песочницей), с ограничением глубины
- ├─ AgentTree ──► живое дерево агентов/субагентов над редактором (роли, глубина, стоимость, токены)
- └─ PythonSandbox ── `python3 worker.py` ──[JSONL over stdio, bidirectional]── постоянный REPL
+ вы ──► промпт ──► движок RLM ──► сильная модель (ход за ходом, Python в repl())
+                          │              │  search / grep / outline  (бесплатно)
+                          │              ├─► llm_query ──► дешёвые воркеры
+                          │              └─► rlm_query ──► дочерние RLM (лимит глубины)
+                          └──► состояние Σ_t + валидация + бюджеты (токены, время, ошибки)
 ```
 
-- **Никаких серверов, сокетов или Docker.** Единственным внешним процессом является локальная песочница `python3`. Когда код в песочнице вызывает `llm_query`, worker пишет запрос в stdout и блокируется на stdin; Pi обрабатывает его внутри своего процесса и записывает ответ обратно. **API-ключи провайдеров никогда не попадают в песочницу.**
-- Песочница предоставляет `context`, `llm_query`, `llm_query_batched`, `rlm_query`,
-  `rlm_query_batched`, `SHOW_VARS()`, `ask_user_question()` и словарь `answer`.
-  Модель отправляет окончательный результат, устанавливая `answer["ready"] = True`.
-
-## Установка из исходников (для разработки)
-
-`pi-rlm` — это пакет Pi. Pi предоставляет peer-зависимости `@earendil-works/pi-*` и `typebox`; **не** устанавливайте их отдельную копию в этот пакет. Требуется `python3` в `PATH` (только стандартная библиотека).
-
-Локальная установка при разработке:
-
-```bash
-pi install /path/to/this-repo/pi-plugin/rlm
-```
-
-> **Установка через Git** требует, чтобы манифест пакета находился в корне устанавливаемого репозитория. Для поддиректорий монорепозитория, таких как эта, предпочтительнее использовать локальный путь, как указано выше.
-
-Если вы ранее копировали папку расширения напрямую, удалите ее, чтобы она не перекрывала пакет:
-
-```bash
-rm -rf ~/.pi/agent/extensions/rlm
-```
-
-Затем выполните `/reload` или перезапустите Pi. Убедитесь с помощью `pi list`, что пакет появился в `settings.packages`, и проверьте, что `/rlm`, `/rlm-config` и `/rlm-stop` отображаются в разделе **[Extensions]**.
+- **Сильная модель** думает и пишет Python в REPL.
+- **Модели-воркеры** делают тяжёлую работу (читают, резюмируют, классифицируют).
+- Сложные подзадачи **рекурсивно** уходят в дочерние RLM.
 
 ## Команды
 
 | Команда | Горячая клавиша | Описание |
-|---|---|---|
-| `/rlm` | `Ctrl+Shift+R` | Переключить постоянный режим RLM (направлять обычные промпты через движок RLM) |
-| `/rlm-stop` | | Прервать текущий запуск |
-| `/rlm-config` | | Выбрать smart- и worker-модели и настроить параметры запуска |
+|---------|----------|-------------|
+| `/rlm` | `Ctrl+Shift+R` | Переключить режим RLM (обычные запросы идут через движок) |
+| `/rlm-stop` | | Прервать идущий запуск |
+| `/rlm-config` | | Сэмплинг, бюджеты, флаги парадигмы |
 
-Пока запуск активен, **живое дерево** отображает корневой оркестратор и каждый sub-LLM / рекурсивный дочерний элемент со статусом, моделью, стоимостью, токенами и длительностью. Окончательный ответ публикуется в чате в формате markdown; любые правки кода собираются в виде диффов и проверяются через всплывающее окно (если не включен `yolo`).
+## API песочницы
 
-## Sandbox API
+Видимая модели поверхность намеренно мала — только поиск и делегирование:
 
-Эти функции внедряются в пространство имен Python модели внутри REPL:
-
-| Функция | Сигнатура | Описание |
-|---|---|---|
-| `context` | `list[dict]` | Репозиторий, упакованный как `[{"path","content","tokens"}, ...]` — вся кодовая база |
-| `llm_query` | `(prompt) -> str` | Одноразовый вызов sub-LLM (настроенная RLM LLM) |
-| `llm_query_batched` | `(prompts) -> list[str]` | Параллельные вызовы sub-LLM (с ограничением пула) |
-| `rlm_query` | `(prompt, paths=None) -> str` | Рекурсивный дочерний RLM со своей песочницей (с ограничением глубины). Наследует ваш `context`; `paths` сужает его по префиксу |
-| `rlm_query_batched` | `(prompts, paths=None) -> list[str]` | Параллельные рекурсивные дочерние RLM с общим срезом `paths` |
-| `ask_user_question` | `(questions) -> list[dict]` | Задать пользователю структурированные вопросы (только на глубине 0) |
-| `SHOW_VARS` | `() -> str` | Список текущих переменных и их типов |
-| `answer` | `dict` | Установите `answer["content"]=...; answer["ready"]=True` для завершения |
-
-## Настройки (`/rlm-config`)
-
-| Настройка | По умолчанию | Значение |
-|---|---|---|
-| Smart model | Активная модель Pi | корневой оркестратор |
-| Worker model | Самая дешевая доступная | отвечает на `llm_query` |
-| Max recursion depth | `4` | при превышении этой глубины `rlm_query` переключается на `llm_query` |
-| Max iterations | `30` | количество шагов до завершения работы движка |
-| Budget ceiling | нет | остановка всего дерева, когда затраты в USD превышают этот лимит |
-| Max consecutive errors | `5` | остановка после N последовательных шагов с ошибками |
-| REPL block timeout | `120s` | реальное время на один `repl`-блок (SIGALRM в worker) |
-| Max concurrent sub-calls | `4` | размер пула для `*_batched` |
-| Orchestrator addendum | вкл | инструкция «делегируй, а не решай сам» |
-| Trajectory compaction | вкл (0.85) | суммаризация истории при приближении к лимиту окна контекста |
-| `yolo` | выкл | применять предлагаемые правки немедленно, пропуская окно подтверждения |
-| `askUserQuestion` | вкл | предоставить доступ к `ask_user_question()` для модели |
-
-> **Примечание по параллелизму:** каждый дочерний `rlm_query` запускает собственного worker `python3` (~50–150 мс «холодного старта»). В худшем случае количество параллельных интерпретаторов ≈ `maxConcurrentSubcalls`^(depth−1); при настройках по умолчанию (глубина 4, параллелизм 4) это 4³ = 64 в патологическом случае. Лимиты бюджета и ошибок (см. выше) ограничивают общие затраты независимо от степени разветвления.
-
-## Телеметрия и логи запусков
-
-- **Трассировка MLflow** (`telemetry`): опционально. Установите `MLFLOW_TRACKING_URI` или настройте `trackingUri` / `experimentId` в `/rlm-config`. Корневой запуск помечается как span MLflow для корреляции трасс при возобновлении. Bearer-токен берется из переменной окружения `MLFLOW_TRACKING_TOKEN` и **никогда не сохраняется** в `rlm.json`.
+```python
+search("needle", k=10)            # BM25-указатели в контекст
+grep_context(pattern, k=50)       # совпадения регэкспа с номерами строк
+outline(path)                     # скелет определений
+add_context("report.pdf")         # подключить и сконвертировать любой документ
+llm_query(prompt)                 # дешёвый воркер: текст на входе — текст на выходе
+map_files(paths, prompt)          # один вопрос по многим файлам
+rlm_query(task, paths=...)        # рекурсивный дочерний RLM
+answers / plan                    # постоянная память между ходами
+```
 
 ## Безопасность
 
-- **Изоляция ключей**: ключи провайдеров хранятся только в TypeScript (`AuthStorage`); песочница получает промпты и возвращает текст, но никогда не получает ключи.
-- **Очистка окружения**: чувствительные переменные окружения (API-ключи, токены) удаляются перед запуском worker. Worker не может прочитать учетные данные провайдеров из `os.environ`.
-- **НЕ является защищенной песочницей**: Python-worker предоставляет доступ к `__import__` и `open`. Код, написанный моделью, может импортировать сетевые модули, читать/записывать локальные файлы и писать JSON-данные протокола в stdout. Этот уровень доверяет коду корневой модели; протокол stdio изолирует ключи провайдеров и жизненный цикл процесса, а **не** ограничивает вредоносный код. Более строгая песочница (Docker, seccomp) может быть добавлена позже через настройки без изменения протокола.
-- **Ограниченные встроенные функции**: запрещены `eval`/`exec`/`compile`/`input`/`globals`/`locals`; тайм-аут SIGALRM для каждого блока + родительский watchdog (SIGKILL при зависании); лимиты по бюджету / токенам / времени / количеству последовательных ошибок.
-- **Доверие**: локальная установка в проект требует доверия к проекту Pi.
+- Движок **не делает дискового I/O** — запуск живёт в памяти; ответ — единственный сохраняемый артефакт.
+- API-ключи никогда не попадают в песочницу: подвызовы LLM обслуживаются мостами на стороне хоста.
+- Python работает в охраняемом подпроцессе со списком зарезервированных имён и диспетчеризацией прерываний.
 
-## Структура проекта
+## Лицензия
 
-```
-src/
-  sandbox/    py/ (worker.py · guards · retrieval · tasks) · sandbox.ts · interrupts · protocol · sandbox-manager · context-file
-  bridge/     model.ts (single completion) · subcall-handlers.ts (the one llm/rlm impl) · ask-user · library
-  core/       engine.ts (the loop) · iteration · limits · resource-limits · answer · compaction · history · types
-  prompts/    glossary (shared REPL vocabulary) · system (headless) · native · user
-  text/       parsing (repl blocks) · tokens · preview
-  tool/       repl-tool · repl-result · repl-render · rlm-tool · rlm-events · rlm-aggregator · subcall-store · background-tasks
-  config/     defaults · settings (rlm.json persistence + validation)
-  context/    native walker + anydoc document conversion + add_context
-  ui/         status · model-picker · config-panel · intro · theme
-  commands/   rlm · rlm-config
-  mode/       rlm-mode (controller) · worker-model (cheapest pick) · native-guards
-  util/       errors · concurrency · trace
-test/         phase suites · native-smoke · native-mode · helpers
-```
-
-## Тесты
-
-Среда выполнения — **Bun** (`bun install`, `bun run …` — никогда не используйте npm/pnpm/yarn).
-
-```bash
-bun run test/phase1.ts                   # sandbox: exec, persistence, key isolation, timeout kill
-bun run test/phase4.ts                   # recursion depth-cap logic (no tokens)
-bun run test/phase5.ts                   # live agent tree rendering (no tokens)
-RLM_TEST_LIVE=1 bun run test/phase2.ts   # real llm_query through the sandbox
-RLM_TEST_LIVE=1 bun run test/phase3.ts   # real end-to-end /rlm over a file context
-RLM_TEST_LIVE=1 bun run test/phase4.ts   # engine solves a 20-doc needle-in-haystack
-```
-
-## Общая информация
-
-Реализовано на основе метода из [статьи RLM](https://arxiv.org/abs/2512.24601), с нативной переработкой для Pi.
-
-Если вы используете этот проект в своих исследованиях, пожалуйста, сошлитесь на оригинальную работу RLM:
-
-```bibtex
-@misc{zhang2026recursivelanguagemodels,
-      title={Recursive Language Models},
-      author={Alex L. Zhang and Tim Kraska and Omar Khattab},
-      year={2026},
-      eprint={2512.24601},
-      archivePrefix={arXiv},
-      primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2512.24601},
-}
-```
+[MIT](pi-plugin/rlm/LICENSE) © hicaru contributors

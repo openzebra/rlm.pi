@@ -1,158 +1,105 @@
-# rlm.pi PI plugin
-
-> pi-rlm — Large contexts on cheap models: Recursive Language Model (RLM) for Pi
-
 <div align="center">
 
-<sub>
-<b>English</b> &nbsp;·&nbsp; <a href="README.zh-CN.md">中文</a> &nbsp;·&nbsp; <a href="README.ru.md">Русский</a>
-</sub>
+# rlm.pi
+
+**Recursive Language Models for Pi — million-token context on cheap models.**
+
+Turn <b>Pi</b> and <b>oh-my-pi</b> into research agents that don't read a 500-page
+document — they <i>search</i> it, in a Python REPL, with your best model orchestrating
+an army of cheap workers.
+
+<p>
+<a href="https://www.npmjs.com/package/@hicaru/pi-rlm"><img src="https://img.shields.io/npm/v/@hicaru/pi-rlm?color=cb3837&label=npm" alt="npm" /></a>
+<a href="https://github.com/openzebra/rlm.pi/actions"><img src="https://img.shields.io/badge/OOLONG-91.7%25-brightgreen" alt="OOLONG 91.7%" /></a>
+<a href="https://arxiv.org/abs/2512.24601"><img src="https://img.shields.io/badge/arXiv-2512.24601-b31b1b" alt="RLM paper" /></a>
+<img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT" />
+</p>
+
+<img src="assets/hero.png" width="92%" alt="rlm.pi — OOLONG benchmark results" />
+
+<sub><b>English</b> · <a href="README.zh-CN.md">中文</a> · <a href="README.ru.md">Русский</a></sub>
 
 </div>
 
----
-
-## Install
+## Get started
 
 ```bash
-pi install npm:@hicaru/pi-rlm
+pi install npm:@hicaru/pi-rlm        # Pi
+omp plugin install @hicaru/pi-rlm    # oh-my-pi
 ```
 
-To remove it later:
+Then `/reload` (or restart). Verify `/rlm`, `/rlm-config`, `/rlm-stop` appear under
+**[Extensions]**, and toggle with `Ctrl+Shift+R` or `/rlm` — plain prompts now route
+through the RLM engine.
 
-```bash
-pi uninstall npm:@hicaru/pi-rlm
+| | install | upgrade | remove |
+|---|---|---|---|
+| **Pi** | `pi install npm:@hicaru/pi-rlm` | `pi install npm:@hicaru/pi-rlm --force` | `pi uninstall npm:@hicaru/pi-rlm` |
+| **oh-my-pi** | `omp plugin install @hicaru/pi-rlm` | `omp plugin install @hicaru/pi-rlm --force` | `omp plugin uninstall @hicaru/pi-rlm` |
+
+## The idea
+
+Instead of stuffing the context into the prompt, the context **lives in the sandbox** —
+files, PDFs, repos, session logs — and the model sees only an index. Each step is one
+state transition:
+
+```
+A_t = (P, Σ_t, O_t)          fixed prompt + execution state Σ_t + tool surface
+ΔΣ_t = μ(A_t)                the model emits a repl() patch, not prose
+V(ΔΣ_t, Σ_t)                 deterministic validator — no crash paths
+Σ_{t+1} = Σ_t ⊕ ΔΣ_t         deep merge, null = delete (paper §5.7)
 ```
 
-Then run `/reload` or restart Pi. Verify with `pi list` that the package appears in
-`settings.packages`, and check that `/rlm`, `/rlm-config`, and `/rlm-stop` appear under
-**[Extensions]**.
-
-Toggle with `Ctrl+Shift+R` or `/rlm` — plain prompts now route through the RLM engine.
-
-<p align="center">
-  <img src="https://github.com/openzebra/rlm.pi/blob/master/assets/hero.png?raw=true" width="100%" alt="rlm.pi — OOLONG benchmark results">
-</p>
-
-## What is pi-rlm?
-
-`pi-rlm` brings the **Recursive Language Model (RLM)** paradigm natively into Pi: instead of
-stuffing a huge document into the prompt, the context lives in a Python REPL and your best
-model orchestrates it — searching, decomposing, and delegating leaf reads to cheap worker
-models, recursively. Same Pi session, same tools, same keys — toggle `/rlm` and go.
-Modeled on the method in the [RLM paper](https://arxiv.org/abs/2512.24601); details in
-**How it works** below.
-
-Native (non-`/rlm`) sessions get the **Root Σ** layer: Ξ project-facts are re-ranked against
-every live prompt, `/compact` produces a deterministic structural digest instead of an LLM
-prose summary, and each LLM call assembles **A_t = (P, Σ_t, O_t)** (SKILL.state paper §3):
-stale turns outside the keep window collapse to one-line session-log stubs (§5.3 discard
-semantics — recent payloads keep head+tail previews, deeper ones collapse fully), exactly one
-Σ snapshot rides before the last user message, and the model commits durable progress through
-Σ_t `state` fences validated by the same deterministic ladder as headless runs. The session
-tracker harvests durable facts into the cross-session SkillState store. **The paradigm is
-enforced** — no `rlm.json`, command, or panel toggle can disable it (override attempts are
-traced and ignored); `rlm.json` tunes calibrations only (`rootContextKeepTurns` — 1 = strict
-"Σ + current turn", `rootContextElideChars`, byte budgets). `RLM_BENCH_NO_ROOTCONTEXT=1` is a
-dev-only measurement hatch. Lifecycle: the tracker is born lazily on the first prompt; across
-resume/fork it re-grows from live observations (the first call after a resume has an empty Σ —
-by design, self-healing). Elision bounds what the model SEES per call; digest compaction bounds
-the archive-derived context on overflow — both coexist. All of it rides public Pi plugin seams;
-the transcript on disk stays complete, only what the model sees is managed.
+The smart model orchestrates (`P`); cheap workers pay for the reading (`llm_query`,
+`rlm_query`); hard sub-problems recurse into child RLMs — depth-capped, budgeted, and
+each child inherits the full sandbox at zero token cost. Runs persist across chat
+turns; durable progress is committed as `Σ` deltas validated by the same ladder every
+step. Native sessions get the **Root Σ** layer for free: elided turns fold into a
+session archive, `/compact` becomes a deterministic structural digest, and the
+skill store `Ξ` re-ranks project facts into every prompt.
 
 ## Benchmarks
 
-**OOLONG (oolong-synth)** — paper-tier long-context suite; latest journal per model,
-cost per task from real `costUsd` (older journals estimated at OpenRouter list prices):
+Full **OOLONG** suite (oolong-synth, 24 tasks, context up to 128K tokens), latest
+journal per model, cost from real `costUsd`:
 
-Model panel — exactly three, everything else was pruned from the docs on purpose:
+| Model | OOLONG | avg tokens/task | cost/task |
+|---|---|---|---|
+| `zai/glm-4.7` | **91.7%** (22/24) | ~36k | ~$0.00 \* |
+| `openrouter/qwen/qwen3.8-27b` | 49% | ~36k | $0.10 |
+| `openrouter/inception/mercury-2.5` | 38% | ~36k | $0.005 |
 
-| Model | Score | Avg. cost/task |
-|-------|-------|----------------|
-| `zai/glm-4.7` | **83%** | $0.0000 * |
-| `qwen/qwen3.8-27b` | 49% | $0.1038 |
-| `inception/mercury-2.5` | 38% | $0.0052 |
+\* Z.ai coding-plan endpoint — subscription billing, so `costUsd` stays $0.
 
-\* glm-4.7 runs on Z.ai's coding-plan endpoint — subscription billing, so the engine has
-no per-token price and `costUsd` stays $0.
+In the [RLM paper](https://arxiv.org/abs/2512.24601), GPT-5-mini driven as an RLM
+outperforms GPT-o3 on OOLONG — recursion beats raw context, at a fraction of the price.
 
-Raw per-task rows (correct, recall, latency, tokens, cost) live in
-`bench/runs/*.jsonl` — one JSONL row per task, committed as history.
-
-### Run the benchmarks
+Raw per-task rows live in [`bench/runs/*.jsonl`](bench/runs/). Reproduce:
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-...        # required for openrouter/* models
-export ZAI_API_KEY=...                     # required for zai/* models (coding endpoint)
-
-bun run bench                              # oolong suite, default model (qwen3.8-27b)
-bun run bench --model zai/glm-4.7
-bun run bench --model openrouter/inception/mercury-2.5
-bun run bench --list                       # print tasks, no engine / no key
+export OPENROUTER_API_KEY=sk-or-...    # or ZAI_API_KEY for zai/*
+bun run bench --model zai/glm-4.7 --oolong-max-cl 65536 --oolong-limit 24
 ```
 
-One suite (`oolong`), three models in the panel. Regenerate the hero chart:
-`python3 bench/hero.py` (needs `matplotlib`).
+## What you get
 
-## Why pi-rlm?
-
-### 🔌 Plugin, not a new agent
-
-pi-rlm lives **inside Pi**. You keep your keybindings, your theme, your tools, your
-muscle memory. Toggle `/rlm` on — plain prompts now route through the RLM engine.
-Toggle it off — Pi is back to normal. No separate CLI, no switching windows, no new
-config file.
-
-### 📄 Reads ANY document
-
-Drop any of these into `add_context()` and they auto-convert to Markdown:
-
-| Binary (anydoc native) | Text (UTF-8) | Pandoc fallback |
-|------------------------|--------------|-----------------|
-| `.pdf` `.docx` `.pptx` | `.csv` `.tsv` | `.doc` `.ppt` `.xls` |
-| `.xlsx` `.epub` `.rtf` | `.html` `.htm` | `.pptm` `.xlsm` `.xlsb` |
-| `.odt` | `.xml` `.rss` `.atom` | `.ppsm` `.docm` `.odp` `.ods` |
-
-```python
-add_context("report.pdf")    # → Markdown in context
-add_context("data.xlsx")     # → Markdown in context
-add_context("../some-lib")   # → entire directory tree packed
-add_context("https://github.com/x/y.git")  # → shallow clone + pack
-```
-
-### 🪶 Unix-style — one thing well
-
-pi-rlm implements **only** the RLM algorithm. It doesn't ship a workflow engine,
-a skill manager, or a custom TUI. Combine it with `pi-dynamic-workflows` for
-orchestration, any skill plugin for capabilities, any theme for looks. No lock-in,
-no bloat.
-
-### 🧠 Smart model orchestrates, cheap models research
-
-The root uses your best model. Workers auto-pick the cheapest available. Child RLMs
-inherit the full `context` at zero token cost — the sandbox holds the files, the model
-only sees a size line. **Recursive delegation → cheap workers pay for the reading, not your main model.**
-
-### ⏳ Long-running with goals
-
-Toggle `/rlm` on, set a goal, let it loop. Runs persist across chat turns. The engine
-respects depth caps, wall-clock ceilings, token budgets, and consecutive-error limits
-so it won't runaway. Come back to a finished answer — or `/rlm-stop` mid-run.
+| | pi-rlm gives you |
+|---|---|
+| **Research** | Map-reduce over repos, PDFs, logs — workers read, your model thinks. |
+| **Big context** | The sandbox holds it all at zero prompt cost; the model sees an index. |
+| **Token savings** | Workers pick the cheapest model available; reading never touches your main model. |
+| **Long runs** | Goals loop across turns with depth caps, budgets, and error limits — come back to a finished answer. |
+| **Plugin, not an agent** | Lives inside Pi/omp: your theme, tools, keys, muscle memory. Toggle `/rlm` on and off. |
+| **Reads anything** | `add_context("report.pdf")` — PDF, DOCX, XLSX, EPUB, CSV, HTML → Markdown, no preprocessing. |
 
 ## How it works
 
 ```
-          ┌─────────────────────────┐
-          │     Pi coding agent     │
-          └────────────┬────────────┘
-                       │  /rlm
-                       ▼
-          ┌─────────────────────────┐  spawns   ┌────────────────────┐
-          │  Smart model (root)     │ ────────► │   Worker models    │
-          │  drives a Python REPL   │ ◄──────── │   (cheap, fast)    │
-          └────────────┬────────────┘  results  └────────────────────┘
-                       │ recursion (depth-capped)
-                       └────► child RLMs ────► (same loop)
+ you ──► prompt ──► RLM engine ──► smart model (turn-by-turn, Python in repl())
+                          │              │  search / grep / outline  (free)
+                          │              ├─► llm_query ──► cheap workers
+                          │              └─► rlm_query ──► child RLMs (depth-capped)
+                          └──► Σ_t state + validation + budgets (tokens, wall-clock, errors)
 ```
 
 - The **smart model** thinks and writes Python in a REPL.
@@ -163,117 +110,31 @@ so it won't runaway. Come back to a finished answer — or `/rlm-stop` mid-run.
 
 | Command | Shortcut | Description |
 |---------|----------|-------------|
-| `/rlm` | `Ctrl+Shift+R` | Toggle persistent RLM mode (route plain prompts through the RLM engine) |
+| `/rlm` | `Ctrl+Shift+R` | Toggle RLM mode (route plain prompts through the engine) |
 | `/rlm-stop` | | Abort an in-progress run |
-| `/rlm-config` | | Pick smart + worker models and tune run settings |
-
-While a run is active, a **live tree** shows the root orchestrator and every sub-LLM /
-recursive child with status, model, cost, tokens, and duration. The final answer is posted
-to the chat as markdown; any code edits are collected as diffs and reviewed via a popup
-(unless `yolo` is on).
+| `/rlm-config` | | Sampling, budgets, paradigm flags |
 
 ## Sandbox API
 
-These functions are injected into the model's Python namespace inside the REPL:
+The model-visible surface is deliberately small — retrieval and delegation only:
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `context` | `list[dict]` | Repository packed as `[{"path","content","tokens"}, ...]` — the full codebase |
-| `llm_query` | `(prompt) -> str` | One-shot sub-LLM call (configured RLM LLM) |
-| `llm_query_batched` | `(prompts) -> list[str]` | Concurrent sub-LLM calls (pool-bounded) |
-| `rlm_query` | `(prompt, paths=None) -> str` | Recursive child RLM with its own sandbox (depth-capped). Inherits your `context`; `paths` narrows it by prefix |
-| `rlm_query_batched` | `(prompts, paths=None) -> list[str]` | Concurrent recursive child RLMs, sharing one `paths` slice |
-| `SHOW_VARS` | `() -> str` | List currently defined variables & their types |
-| `answer` | `dict` | Set `answer["content"]=...; answer["ready"]=True` to finalize |
-
-## Settings (`/rlm-config`)
-
-| Setting | Default | Meaning |
-|---------|---------|---------|
-| Smart model | Pi's active model | the root orchestrator |
-| Worker model | cheapest available | answers `llm_query` |
-| Max recursion depth | `4` | `rlm_query` past this degrades to plain `llm_query` |
-| Max iterations | `30` | root REPL turns before RLM asks for a final answer |
-| REPL block timeout (s) | `120` | wall-clock limit for one Python REPL block (SIGALRM) |
-| Max concurrent sub-calls | `16` | concurrency pool size for `*_batched` |
-| Max concurrent children | `6` | concurrent `rlm_query` child engines per depth |
-| Wall-clock ceiling (min) | none | total runtime cap for the whole recursive tree |
-| Token ceiling | none | total input+output token cap for the whole recursive tree |
-| Max consecutive errors | `5` | stop after N consecutive failing turns (none = off) |
-| Orchestrator addendum | on | divide-and-conquer guidance in the root system prompt |
-| Trajectory compaction | on (0.65) | summarize old turns when history nears the context window |
-| Root model output cap (tok) | `16384` | max output tokens per root-model turn |
-| Sandbox init timeout | `30000` ms | how long to wait for the Python worker to start |
-| Context loader | on | expose `add_context()` for external dirs/files/documents/git repos |
-| Auto-seed cwd | on | seed the working directory into `context` on the first `repl()` |
-| Root digest compaction | on | `/compact` yields a deterministic Σ-style digest — no summarizer LLM call |
-| Root context transform | off | per-call elision of stale tool payloads + one Σ snapshot (soak flag) |
-| Root state fences | off | model-proposed ΔΣ_t patches from the native session (fence-tax guard) |
-
-> **Concurrency note:** each `rlm_query` child spawns its own `python3` worker (~50–150 ms
-> cold start). Children are bounded separately (`maxConcurrentChildren`, default 6) because
-> each holds a full Python process and its own copy of the inherited context. Error and
-> wall-clock caps (above) still bound a runaway tree.
-
-## Prompt Architecture
-
-The system prompt follows a **contract / routing / examples / rules** pattern
-(api_v5, modeled on the best-performing arm from the RLM paper bake-off):
-
-| Section | Purpose |
-|---------|---------|
-| `<contract>` | Hard invariant: every heavy call returns a `Task`, never the answer. Only `await_task` returns content. |
-| `<routing>` | Decision tree: which tool for which job. Includes negative guidance ("NOT for") so the model knows when NOT to pick a tool. |
-| `<examples>` | Concrete E1–E7 patterns: good decompositions alongside anti-patterns with WHY each fails. |
-| `<rules>` | Standing orders: locate-then-delegate, memoize into `answers`, cap concurrent workers, author edits yourself. |
-
-Key design decisions:
-
-- **Thinking rule:** the prompt tells the model *when* to plan out loud (complex decomposition,
-  uncertain targets) vs. when to jump straight to `repl()` (known paths, cheap lookups).
-- **Depth visibility:** child RLMs see `Recursion depth: N` and calibrate ambition — they
-  delegate only when their assigned task itself decomposes.
-- **Children are sandboxed:** children cannot mutate the parent's `answers`, `plan`, or REPL
-  variables. Inheritance is one-way (read-only context).
-- **Root tasks wrapped in `<task>` XML tags** so the model cleanly separates user intent
-  from system instructions.
-- **`answer["ready"]` nudge:** runs that never finalize are wasted — the prompt reinforces
-  this with an explicit "You MUST flip" directive.
-
-## Architecture
-
+```python
+search("needle", k=10)            # BM25 pointers into the context
+grep_context(pattern, k=50)       # regex hits with line numbers
+outline(path)                     # definition skeleton
+add_context("report.pdf")         # attach + auto-convert any document
+llm_query(prompt)                 # cheap worker, text in → text out
+map_files(paths, prompt)          # same question over many files
+rlm_query(task, paths=...)        # recursive child RLM
+answers / plan                    # persistent memory across turns
 ```
-pi-plugin/rlm/src/
-├── core/          Headless RLM loop, limits, compaction, history
-├── bridge/        Sub-LLM/rlm handlers (single implementation)
-│   └── handlers/  llm_query, rlm_query, task registry, emitting
-├── sandbox/       Python subprocess (py/), JSONL protocol, interrupt dispatch
-├── tool/          repl() and rlm() Pi tool registrations + event emitter
-├── config/        rlm.json persistence, defaults, sampling knobs, model resolution
-├── prompts/       glossary (shared) → system (headless) + native
-├── context/       walker + anydoc document conversion + add_context
-├── ui/            Config panel, model picker, status line, theme
-├── text/          REPL block parsing, token estimation, preview
-├── mode/          RlmController, worker-model ranking, native-mode guards
-├── util/          Result type, error formatting, concurrency pool
-└── commands/      /rlm, /rlm-stop, /rlm-config
-```
-
-The engine performs **no disk I/O**. There is no run trail, no snapshot, no resume: a
-run lives entirely in memory and its answer is its only durable output.
 
 ## Security
 
-- **Key isolation**: provider keys live only in TypeScript (`AuthStorage`); the sandbox
-  receives prompts and returns text — never keys.
-- **Environment sanitization**: sensitive env vars (API keys, tokens) are stripped before the
-  worker spawns. The worker cannot read provider credentials from `os.environ`.
-- **NOT a security sandbox**: the Python worker exposes `__import__` and `open`. Model-authored
-  code can import networking modules, read/write local files, and write protocol-shaped JSON to
-  stdout. This tier trusts the root model's code; the stdio protocol isolates provider keys and
-  process lifecycle, **not** adversarial code containment. A stronger sandbox (Docker, seccomp)
-  can be added later behind a setting without protocol changes.
-- **Restricted builtins**: no `eval`/`exec`/`compile`/`input`/`globals`/`locals`; per-block
-  SIGALRM timeout + parent watchdog (SIGKILL on hang); budget / token / timeout /
-  consecutive-error caps.
-- **Trust**: project-local install requires Pi project trust.
+- The engine performs **no disk I/O** — a run lives in memory; its answer is the only durable output.
+- API keys never enter the sandbox: sub-LLM calls are serviced host-side by bridges.
+- Python runs in a guarded subprocess with a reserved-name allowlist and interrupt dispatch.
+
+## License
+
+[MIT](pi-plugin/rlm/LICENSE) © hicaru contributors
