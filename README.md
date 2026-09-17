@@ -4,9 +4,7 @@
 
 **Recursive Language Models for Pi — million-token context on cheap models.**
 
-Turn <b>Pi</b> and <b>oh-my-pi</b> into research agents that don't read a 500-page
-document — they <i>search</i> it, in a Python REPL, with your best model orchestrating
-an army of cheap workers.
+Your model reads big documents with huge context — <b>at high accuracy</b>.
 
 <p>
 <a href="https://www.npmjs.com/package/@hicaru/pi-rlm"><img src="https://img.shields.io/npm/v/@hicaru/pi-rlm?color=cb3837&label=npm" alt="npm" /></a>

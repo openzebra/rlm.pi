@@ -4,8 +4,7 @@
 
 **递归语言模型（RLM）for Pi — 百万级上下文，廉价模型。**
 
-把 <b>Pi</b> 和 <b>oh-my-pi</b> 变成研究智能体：面对几百页的文档，它不是"读进去"，
-而是在 Python REPL 里<b>检索</b>——由你最强的模型指挥一支廉价的 worker 大军。
+你的模型能读大文档——<b>超大上下文，高精度</b>。
 
 <p>
 <a href="https://www.npmjs.com/package/@hicaru/pi-rlm"><img src="https://img.shields.io/npm/v/@hicaru/pi-rlm?color=cb3837&label=npm" alt="npm" /></a>
