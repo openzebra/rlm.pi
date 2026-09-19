@@ -18,7 +18,9 @@ const mk = (provider: string, id: string, reasoning = false): Model<Api> => ({
   provider, id, reasoning,
   contextWindow: 100_000,
   cost: { input: 1, output: 1 },
-  thinkingLevelMap: reasoning ? { low: 1, high: 2 } : undefined,
+  // pi semantics (pi-ai getSupportedThinkingLevels): minimal/low/medium/high are supported
+  // by default for reasoning models; null explicitly disables; xhigh/max only when mapped.
+  thinkingLevelMap: reasoning ? { minimal: null, low: 1, medium: null, high: 2 } : undefined,
 } as unknown as Model<Api>);
 
 // ── catalog: provider > model, counts, sorting ──

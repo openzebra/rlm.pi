@@ -427,6 +427,12 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   const rootContextActive = (): boolean =>
     controller.config.enableRootContextTransform && process.env.RLM_BENCH_NO_ROOTCONTEXT !== "1";
 
+  /** omp-compat: omp's BeforeAgentStartEvent.systemPrompt is string[] (omp
+   *  extensibility/extensions/types.ts:1129); vendored pi typings declare string. The seam
+   *  normalizes the runtime shape — joined for composition, shape-preserving on return. */
+  const isStringArray = (v: unknown): v is readonly string[] =>
+    Array.isArray(v) && v.every((item) => typeof item === "string");
+
   // ── System prompt: native RLM mode addendum (only when the trade holds) ──
   pi.on("before_agent_start", async (event) => {
     if (!nativeTradeHolds()) return;
@@ -436,7 +442,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     // against the live user prompt (mid-session harvests surface immediately), falling back
     // to the static slice when the prompt is empty. Concatenated here, so NATIVE_PROMPT_STATIC
     // (the module-load snapshot) and its budget math stay untouched.
-    const xi = composeSkillBlock(xiQuery(event.prompt, event.systemPrompt.slice(0, 2_000)));
+    const basePrompt = isStringArray(event.systemPrompt) ? event.systemPrompt.join("\n") : event.systemPrompt;
+    const xi = composeSkillBlock(xiQuery(event.prompt, basePrompt.slice(0, 2_000)));
     if (xi !== undefined) {
       xiCompositions += 1;
       if (traceEnabled) trace("root-xi.compose", { total: xiCompositions, chars: xi.length });
@@ -463,9 +470,15 @@ export default function rlmExtension(pi: ExtensionAPI): void {
         xi: xi !== undefined,
       });
     }
+    // omp-compat seam: omp's systemPrompt is string[] — append the addendum per-slot;
+    // vendored pi typings declare string, hence the narrowing cast (runtime-shape seam,
+    // no new deps). The pi branch is byte-identical to the pre-omp behavior.
+    const addendum = xiPart + nativePrompt;
     return {
       ...(message === undefined ? {} : { message }),
-      systemPrompt: event.systemPrompt + "\n\n" + xiPart + nativePrompt,
+      systemPrompt: isStringArray(event.systemPrompt)
+        ? ([...event.systemPrompt, addendum] as unknown as string)
+        : event.systemPrompt + "\n\n" + xiPart + nativePrompt,
     };
   });
 

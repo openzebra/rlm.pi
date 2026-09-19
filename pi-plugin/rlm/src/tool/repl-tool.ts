@@ -16,7 +16,7 @@
  */
 
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { Model, Usage, Api } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
@@ -52,6 +52,26 @@ import { createProgressNotifier, validateToolParams } from "./tool-utils.ts";
 import { buildReplResultText, collectReplWarnings } from "./repl-result.ts";
 import { renderReplCollapsed, renderReplExpanded, replCallView } from "./repl-render.ts";
 import { attachTracer, trace, traceEnabled } from "../util/trace.ts";
+
+/** omp-compat: Theme is whichever host argument has fg() — pi passes (args, theme, context)
+ *  to renderCall, omp passes (args, renderOptions{expanded,...}, theme). */
+function isThemeLike(v: unknown): v is { fg: unknown } {
+  return typeof v === "object" && v !== null && "fg" in v && typeof v.fg === "function";
+}
+
+/** omp-compat: the render-context argument — only these two fields are read downstream. */
+function isRenderCtxLike(v: unknown): v is { expanded?: unknown; argsComplete?: unknown } {
+  return (
+    typeof v === "object" && v !== null && !("fg" in v) && ("expanded" in v || "argsComplete" in v)
+  );
+}
+
+/** Degrade fallback — never expected at runtime (both hosts pass a real theme). */
+const NEUTRAL_THEME: Theme = {
+  fg: (_key: string, text: string) => text,
+  bold: (text: string) => text,
+} as Theme;
+const EMPTY_RENDER_CTX = Object.freeze({}) as { expanded?: unknown; argsComplete?: unknown };
 
 /** Last non-empty line of a Python traceback — the `TypeError: …` line, not the frames. */
 function lastLine(text: string): string {
@@ -489,8 +509,15 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
       }
     },
 
-    renderCall(args, theme, context) {
-      return replCallView(args, theme, context);
+    renderCall(args, a2: unknown, a3: unknown) {
+      // Host seam — pi: (args, theme, context); omp: (args, renderOptions{expanded}, theme).
+      // The context object is rebuilt to the fields replCallView actually reads.
+      const themeLike = isThemeLike(a2) ? (a2 as Theme) : isThemeLike(a3) ? (a3 as Theme) : NEUTRAL_THEME;
+      const ctxLike = isRenderCtxLike(a2) ? a2 : isRenderCtxLike(a3) ? a3 : EMPTY_RENDER_CTX;
+      return replCallView(args, themeLike, {
+        expanded: ctxLike.expanded === true,
+        argsComplete: ctxLike.argsComplete !== false,
+      });
     },
 
     renderResult(result, { expanded }, theme) {

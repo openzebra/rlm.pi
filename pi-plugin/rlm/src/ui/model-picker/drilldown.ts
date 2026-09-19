@@ -12,7 +12,7 @@
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { resolveDynamicBorder } from "../tui-compat.ts";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import { Container, type Component, type SelectItem, SelectList, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { CHEAPEST_VALUE, SESSION_VALUE, buildCatalog, modelRefOf, type ProviderGroup } from "./grouping.ts";
@@ -42,8 +42,9 @@ async function pickFromList(
 ): Promise<string | undefined> {
   const chosen = await ctx.ui.custom<string | null>((_tui, theme, _kb, done) => {
     let query = "";
+    const Border = resolveDynamicBorder();
     const container = new Container();
-    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    if (Border !== undefined) container.addChild(new Border((s: string) => theme.fg("accent", s)));
     container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
     const filterLine: Component = {
       render: (w) => [truncateToWidth(theme.fg("dim", `Filter: ${query || "type to filter…"}`), w)],
@@ -65,7 +66,7 @@ async function pickFromList(
     container.addChild(filterLine);
     container.addChild(list);
     container.addChild(new Text(theme.fg("dim", "↑↓ navigate • type to filter • enter select • esc cancel"), 1, 0));
-    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    if (Border !== undefined) container.addChild(new Border((s: string) => theme.fg("accent", s)));
     return {
       render: (w) => container.render(w),
       invalidate: () => container.invalidate(),
