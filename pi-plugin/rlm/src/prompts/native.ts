@@ -72,6 +72,22 @@ function nativeReplGlossary(): string {
   ].join("\n");
 }
 
+/**
+ * omp/pi coexistence: appended when the host exposes a subagent tool named `task` so the
+ * native routing does not neutralize the host's delegation heuristics. repl()-fan-out stays
+ * the parallel-reading path; "Task" in the REPL sections below means a fan-out handle, not
+ * the host's tool. Single wording source — not duplicated in the glossary.
+ */
+export const NATIVE_SUBAGENT_COEXISTENCE: readonly string[] = Object.freeze([
+  "<subagent-coexistence>",
+  "If the host provides a subagent tool named `task`, use it for multi-step autonomous research",
+  "and delegation, following the host's own delegation rules (it runs in its own context window).",
+  "repl()-fan-out (`llm_batch` / `rlm_batch` / `map_files`) remains the parallel READING path",
+  "inside your own context. The word `Task` in the REPL sections below means the handle of a",
+  "fan-out call, never the host's `task` tool.",
+  "</subagent-coexistence>",
+]);
+
 /** Build the native-mode system prompt for the main Pi agent.
  *
  *  R1 (G1, /tmp/ROOT_FULL_SKILLSTATE_PLAN.md): `stateFences` appends the ONE Σ fence contract
@@ -79,8 +95,12 @@ function nativeReplGlossary(): string {
  *  native model can author ΔΣ_t through ```state fences. The fence text is STATIC, so it may
  *  ride call-time composition; the FLAG decision happens at the call site — NATIVE_PROMPT_STATIC
  *  (the frozen module-load snapshot) is composed with no options and stays contract-free.
+ *  omp-compat: `hostSubagentTool` appends NATIVE_SUBAGENT_COEXISTENCE (see that constant).
  */
-export function buildNativeSystemPrompt(opts?: { readonly stateFences?: boolean }): string {
+
+export function buildNativeSystemPrompt(
+  opts?: { readonly stateFences?: boolean; hostSubagentTool?: boolean },
+): string {
   return [
     "╔══════════════════════════════════════════════════════════════════╗",
     "║  NATIVE RLM MODE — YOU ARE AN ORCHESTRATOR, NOT A READER      ║",
@@ -92,6 +112,8 @@ export function buildNativeSystemPrompt(opts?: { readonly stateFences?: boolean 
     "AUTHORING RULE: sub-LLMs (`llm_query` / `rlm_query` family) READ only — extract, locate, summarize.",
     "They never author code you will ship. Once you know WHAT to change, compose exact oldText/newText",
     "yourself and apply with `edit` / `write`. Never re-type file bodies or Task results into chat.",
+    "",
+    ...(opts?.hostSubagentTool === true ? NATIVE_SUBAGENT_COEXISTENCE : []),
     "",
     "THINKING RULE: complex decomposition (≥3 modules, architecture decisions, uncertainty",
     "about which files hold the answer) → think out loud before the first repl() call.",

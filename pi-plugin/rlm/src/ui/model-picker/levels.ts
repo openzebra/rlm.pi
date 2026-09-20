@@ -6,20 +6,23 @@
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { Container, SelectList, Text } from "@earendil-works/pi-tui";
+import { resolveDynamicBorder } from "../tui-compat.ts";
 
 const LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const);
 export type SelectableThinkingLevel = (typeof LEVELS)[number];
 
 /** Levels the model actually supports, in canonical order. */
 export function supportedThinkingLevels(model: Model<Api>): readonly SelectableThinkingLevel[] {
-  const map = model.thinkingLevelMap;
-  if (map === undefined) return [];
-  const supported: SelectableThinkingLevel[] = [];
-  for (const level of LEVELS) if (level in map) supported.push(level);
-  return supported;
+  // omp-compat: pi models carry thinkingLevelMap; omp models carry reasoning + thinking.efforts.
+  // The host helper covers both (under omp this import remaps to its legacy-pi-ai shim), and the
+  // intersection with LEVELS keeps the canonical order and drops "off" (never offered here).
+  const supported = getSupportedThinkingLevels(model);
+  return LEVELS.filter(
+    (level): level is SelectableThinkingLevel => level !== "off" && supported.includes(level),
+  );
 }
 
 /** Ask the thinking level for a model (skipped entirely when unsupported). */
@@ -30,6 +33,7 @@ export async function selectThinkingLevel(
 ): Promise<ThinkingLevel | undefined> {
   const levels = supportedThinkingLevels(model);
   if (levels.length === 0) return undefined;
+  const Border = resolveDynamicBorder();
   if (ctx.mode !== "tui") {
     const level = current ?? levels[0];
     return level === "off" ? undefined : level;
@@ -37,7 +41,7 @@ export async function selectThinkingLevel(
 
   const chosen = await ctx.ui.custom<SelectableThinkingLevel | null>((_tui, theme, _kb, done) => {
     const container = new Container();
-    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    if (Border !== undefined) container.addChild(new Border((s: string) => theme.fg("accent", s)));
     container.addChild(new Text(theme.fg("accent", theme.bold("Thinking level")), 1, 0));
     const list = new SelectList(
       levels.map((level) => ({ value: level, label: level, description: `Use ${level} reasoning for ${model.id}` })),
@@ -56,7 +60,7 @@ export async function selectThinkingLevel(
     list.onCancel = () => done(null);
     container.addChild(list);
     container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter select • esc skip"), 1, 0));
-    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    if (Border !== undefined) container.addChild(new Border((s: string) => theme.fg("accent", s)));
     return { render: (w) => container.render(w), invalidate: () => container.invalidate(), handleInput: (data) => list.handleInput(data) };
   });
   return chosen === "off" ? undefined : (chosen ?? undefined);

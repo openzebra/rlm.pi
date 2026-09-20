@@ -31,6 +31,12 @@ export function processRlmDepth(): number {
  * - Child without force → true.
  * - Child with force but depth >= maxDepth → true (refuse force; paper §7 cost bound).
  * - Child with force and depth < maxDepth → false (experimental opt-in).
+ *
+ * omp limitation: omp does not mark child subagent sessions (its SessionStartEvent is a bare
+ * `{type:"session_start"}` — no agent-name payload like pi's), so PI_SUBAGENT_CHILD is never
+ * set under omp and this bypass does not fire there; RLM stays active inside omp subagents.
+ * Top-level delegation is unaffected (the system-prompt seam in index.ts handles omp's
+ * string[] systemPrompt and the task-coexistence addendum).
  */
 export function isSubagentChildBypass(maxDepth: number = DEFAULT_CONFIG.maxDepth): boolean {
   if (process.env[SUBAGENT_CHILD_ENV] !== "1") return false;
