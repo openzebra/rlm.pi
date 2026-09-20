@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.23] — 2026-09-21
+
+### Added
+
+- **Full oh-my-pi (omp) host compatibility — no pi breakage** (8 files, +127/−18). All omp
+  divergences handled with runtime guards over unknown values at three seams plus one
+  conditional prompt block; no `@oh-my-pi/*` dependencies added, compilation stays against
+  vendored pi 0.85.1 typings.
+  - `ui/tui-compat.ts` (new): `resolveDynamicBorder` namespace-probe with borderless
+    degrade, wired into model-picker `levels.ts` + `drilldown.ts`.
+  - `levels.ts`: supported thinking levels via the host's `getSupportedThinkingLevels`
+    (omp maps reasoning models' `thinking.efforts`; pi reads `thinkingLevelMap`),
+    intersected with the frozen `LEVELS` list.
+  - `index.ts` `before_agent_start`: `isStringArray` guard — omp's `systemPrompt` is
+    `string[]` (addendum appended per-slot), pi's string concat stays byte-identical.
+  - `prompts/native.ts`: frozen `NATIVE_SUBAGENT_COEXISTENCE` + `hostSubagentTool` option
+    so omp's task tool is not neutralized by native routing.
+  - `tool/repl-tool.ts`: `renderCall` structural guards (`isThemeLike`/`isRenderCtxLike`)
+    covering pi `(args, theme, context)` vs omp `(args, renderOptions, theme)` shapes.
+  - `mode/subagent.ts`: documented omp limitation (no child session marker;
+    `PI_SUBAGENT_CHILD` bypass inactive under omp).
+  - Verified: `bun run check` clean, all suites green, live omp session — reasoning-level
+    picker, task subagent, `/compact` Root digest via `session_before_compact` (21K→17K).
+
+### Changed
+
+- README hero tagline (en / zh-CN / ru): positive one-liner — big docs, huge context,
+  high accuracy.
+
 ## [0.3.22] — 2026-09-17
 
 ### Fixed
