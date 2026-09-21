@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.24] — 2026-09-21
+
+### Fixed
+
+- **Model picker: thinking-level step is now role-aware** (`ui/model-picker/drilldown.ts`).
+  Sub-LLM agents never think per the docs, but the picker offered (or silently skipped) the
+  reasoning step in both lanes.
+  - `/rlm-llm` (`llm` role): after picking a model the flow ends immediately — the thinking
+    level is never offered, and `subSampling.reasoning` is left unset so nothing is forwarded
+    on the wire.
+  - `/rlm-rlm` (`rlm` role): the reasoning step is now **always** shown after a model is
+    picked — from `none` to `max`. A new explicit `none` ("No reasoning") entry resolves to
+    unset `rootSampling.reasoning` (nothing forwarded), so non-thinking models no longer skip
+    the level silently; the list preselects `none` when no level is pinned.
+  - Non-interactive (non-tui) fallback honors the same split: `llm` resolves with no level,
+    `rlm` keeps its current-or-lowest default.
+  - Verified: `bun run check` clean; `phase-model-picker` + `phase-llm-model` suites and the
+    full `test/smoke.ts` run green.
+
 ## [0.3.23] — 2026-09-21
 
 ### Added
