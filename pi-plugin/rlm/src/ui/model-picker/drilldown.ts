@@ -3,12 +3,14 @@
  *
  * Three sequential pi overlays, one per level; SelectList has no native groups,
  * so grouping is navigation instead of headers. Every level gets a "← back"
- * row; esc cancels the whole flow. Level 3 (thinking level) is skipped for
- * models that support none.
+ * row; esc cancels the whole flow.
  *
- * Roles differ only in the level-1 sentinel row:
- *   llm → "(cheapest, auto)"     — always the cheapest configured model
- *   rlm → "(follow session model)" — child engines track pi's active model
+ * Roles differ in the level-1 sentinel row AND in level 3 (thinking level):
+ *   llm → "(cheapest, auto)"       — cheapest configured model; never thinks
+ *     (level 3 is not offered — subSampling.reasoning stays unset)
+ *   rlm → "(follow session model)" — child engines track pi's active model;
+ *     level 3 is always offered, spanning none → max ("none" = off = nothing
+ *     forwarded), and resolves to undefined thinkingLevel for non-thinking models
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -103,7 +105,12 @@ function modelItems(group: ProviderGroup): SelectItem[] {
 }
 
 function levelItems(group: ProviderGroup, model: Model<Api>): SelectItem[] {
-  const items: SelectItem[] = [{ value: BACK_VALUE, label: `← ${group.provider} models`, description: "" }];
+  // rlm role only — llm never reaches this step. "off" resolves to thinkingLevel undefined
+  // (nothing forwarded on the wire), so the menu spans the full none → max range.
+  const items: SelectItem[] = [
+    { value: BACK_VALUE, label: `← ${group.provider} models`, description: "" },
+    { value: "off", label: "none", description: "No reasoning" },
+  ];
   for (const level of supportedThinkingLevels(model)) {
     items.push({ value: level, label: level, description: `Use ${level} reasoning` });
   }
@@ -129,7 +136,11 @@ export async function selectModel(
     // Prefer an explicit pin (resolved model or saved ref) over "first = cheapest".
     const fromRef = currentRef ? models.find((m) => modelRefOf(m) === currentRef) : undefined;
     const model = current ?? fromRef ?? fallback;
-    return { model, thinkingLevel: await selectThinkingLevel(ctx, model, currentThinking) };
+    return {
+      model,
+      // llm role never thinks; rlm keeps its non-interactive default (current or lowest).
+      thinkingLevel: role === "llm" ? undefined : await selectThinkingLevel(ctx, model, currentThinking),
+    };
   }
 
   const catalog = buildCatalog(models);
@@ -161,12 +172,13 @@ export async function selectModel(
       const picked = group.models.find((m) => modelRefOf(m) === l2);
       if (picked === undefined) return undefined;
       model = picked;
-      if (supportedThinkingLevels(model).length === 0) return { model, thinkingLevel: undefined };
-      continue;
+      // llm role: sub-LLMs never think — the thinking-level step is not offered at all.
+      if (role === "llm") return { model, thinkingLevel: undefined };
+      continue; // rlm role: level 3 always shows (levelItems carries an explicit "none")
     }
     const lvItems = levelItems(group, model);
     const l3 = await pickFromList(ctx, `${group.provider} › ${model.id}`, lvItems,
-      Math.max(0, lvItems.findIndex((i) => i.value === currentThinking)));
+      Math.max(0, lvItems.findIndex((i) => i.value === (currentThinking ?? "off"))));
     if (l3 === undefined) return undefined;
     if (l3 === BACK_VALUE) { model = undefined; continue; }  // ← models
     return { model, thinkingLevel: l3 === "off" ? undefined : (l3 as ThinkingLevel) };
