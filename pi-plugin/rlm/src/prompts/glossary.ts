@@ -213,6 +213,19 @@ const CONTEXT_EXCLUSION_NOTE = [
   "  (PDF, DOCX, XLSX, PPTX, CSV, …) ARE included — converted to Markdown on the way in.",
 ].join("\n");
 
+/** Stdout-budget wording — the ONE source for the per-print / per-block elision markers.
+ *  core/answer.ts composes these into its segments (head/tail math stays in
+ *  text/parsing.ts truncateOutput); guidance numbers live in limits.ts + system.ts. */
+export function stdoutElidedMark(cutChars: number, capChars: number): string {
+  return `[… ${cutChars.toLocaleString()} chars elided — per-print stdout cap ${capChars.toLocaleString()}; ` +
+    "full output lives in your REPL vars, re-print the slice you need: print(big_var[a:b])]";
+}
+
+export function stdoutBulkMark(elidedCount: number, capChars: number): string {
+  return `[… ${elidedCount} middle print output(s) elided — per-block stdout cap ${capChars.toLocaleString()}; ` +
+    "slice big dumps in Python (print(v[a:b])) or delegate bulk reading to llm_query_chunked]";
+}
+
 /** The large-on-disk-file protocol (headless + native). */
 export const LARGE_FILE_RULE_LINES: readonly string[] = Object.freeze([
   "**Large on-disk files (profiles, logs, dumps, generated JSON):** files >1MB or gitignored are",
@@ -221,7 +234,7 @@ export const LARGE_FILE_RULE_LINES: readonly string[] = Object.freeze([
   "2. Deterministic processing in Python (`json.load`, `re`, counting, aggregation) is fine and preferred.",
   "3. The moment you need MEANING from raw text (summarize, explain, find anomalies), do NOT read it",
   "   yourself — call `llm_query_chunked(raw, question)` (Task → await_task), or slice + `llm_batch`.",
-  "4. Never print more than a small probe (~2K chars) of raw content.",
+  "4. Prints are per-call capped — slice big text in Python and print only the slice you need, or delegate bulk reading (llm_query_chunked).",
   'Example: `t = llm_query_chunked(raw, "Extract top allocation sites with byte totals"); parts = await_task(t)`, then',
   "aggregate `parts` in Python or with one final `llm_query` + await_task.",
 ]);
@@ -232,7 +245,7 @@ export const CHUNKED_GLOSSARY_LINE_NATIVE =
 
 /** Concise native-mode large-file rule (folds in the context-exclusion note; native 6K budget). */
 export const LARGE_FILE_RULE_NATIVE =
-  "- Files >1MB or gitignored are NOT in `context`: open() + parse deterministically in Python is fine; ANY semantic reading of the raw text goes through llm_query_chunked. Never print >2K chars raw.";
+  "- Files >1MB or gitignored are NOT in `context`: open() + parse deterministically in Python is fine; ANY semantic reading of the raw text goes through llm_query_chunked. Never bulk-print raw text; prints are per-call capped — slice or delegate.";
 
 /**
  * The decomposition doctrine, ported from the RLM paper's Appendix C.3 `<env_tips>` and

@@ -138,7 +138,7 @@ async function main() {
   check("H2: content assigned after an empty ready-flip is captured", r.finalAnswer === "late winner", String(r.finalAnswer));
 
   // H2 (engine-side belt-and-suspenders): finalAnswerOf treats blank captures as absent.
-  const blankCapture = { stdout: "", stderr: "", finalAnswer: "", answerContent: "", raised: false, executionTimeMs: 0, varNames: [], pendingTasks: [] };
+  const blankCapture = { stdout: "", stderr: "", finalAnswer: "", answerContent: "", raised: false, executionTimeMs: 0, varNames: [], stdoutMarks: [], nudges: [], pendingTasks: [] };
   const realCapture = { ...blankCapture, finalAnswer: "real" };
   check("H2: finalAnswerOf ignores blank captures",
     finalAnswerOf([blankCapture]) === null && finalAnswerOf([blankCapture, realCapture]) === "real");
@@ -211,7 +211,7 @@ async function main() {
     // Large stdout collapses to a head preview + elision note (not the full dump).
     rr = await vb.exec("big = 'a' * 5000; print(big)");
     const big = formatReplOutputs([rr]);
-    check("large stdout is elided in history", !big.includes("a".repeat(1000)) && big.includes("chars elided"), big.slice(0, 80));
+    check("large stdout is elided in history", !big.includes("a".repeat(5000)) && big.includes("chars elided") && big.includes("per-print stdout cap 4,000"), big.slice(0, 80));
     check("varNames listed only on elision", big.includes("REPL vars:"), big);
     await vb.dispose();
   }
@@ -220,13 +220,13 @@ async function main() {
   {
     const noVars = formatReplOutputs([{
       stdout: "x".repeat(5000), stderr: "", finalAnswer: null, answerContent: "",
-      raised: false, executionTimeMs: 0, varNames: [], pendingTasks: [],
+      raised: false, executionTimeMs: 0, varNames: [], stdoutMarks: [], nudges: [], pendingTasks: [],
     }]);
-    check("elision note uses slices, not 'assign first'", noVars.includes("inspect slices"), noVars.slice(-80));
+    check("elision note uses slices, not 'assign first'", noVars.includes("print(big_var[a:b])"), noVars.slice(-80));
     check("elision + empty vars gives fallback hint", noVars.includes("No REPL vars yet"), noVars.slice(-80));
     const skipped = formatReplOutputs([{
       stdout: "boom", stderr: "", finalAnswer: null, answerContent: "",
-      raised: true, executionTimeMs: 0, varNames: [], pendingTasks: [],
+      raised: true, executionTimeMs: 0, varNames: [], stdoutMarks: [], nudges: [], pendingTasks: [],
     }], 2);
     check("M2: skipped later block note is included", skipped.includes("2 later") && skipped.includes("skipped"), skipped);
   }

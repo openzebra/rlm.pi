@@ -100,6 +100,8 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (throttleMaxMs !== undefined) out.throttleMaxMs = throttleMaxMs;
   const maxPromptChars = validateNumber(r.maxPromptChars, 1000);
   if (maxPromptChars !== undefined) out.maxPromptChars = maxPromptChars;
+  const stdoutVerbatimChars = validateNumber(r.stdoutVerbatimChars, 200);
+  if (stdoutVerbatimChars !== undefined) out.stdoutVerbatimChars = stdoutVerbatimChars;
   const maxTimeoutMs = validateNumber(r.maxTimeoutMs, 1000);
   if (maxTimeoutMs !== undefined) out.maxTimeoutMs = maxTimeoutMs;
   const maxTokens = validateNumber(r.maxTokens, 1);

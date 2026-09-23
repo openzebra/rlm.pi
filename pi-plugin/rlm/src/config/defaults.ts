@@ -1,3 +1,4 @@
+import { STDOUT_VERBATIM_CHARS_DEFAULT } from "../core/limits.ts";
 import type { RlmConfig } from "../core/types.ts";
 
 /**
@@ -45,6 +46,7 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   throttleBaseMs: 2_000,
   throttleMaxMs: 60_000,
   maxPromptChars: 400_000,
+  stdoutVerbatimChars: STDOUT_VERBATIM_CHARS_DEFAULT,
   maxErrors: 5,
   orchestrator: true,
   compaction: true,

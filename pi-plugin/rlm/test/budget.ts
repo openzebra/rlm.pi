@@ -299,7 +299,7 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
 {
   const rr = {
     stdout: "result=42\nneedle found at src/auth.ts:12", stderr: "", finalAnswer: null,
-    answerContent: "", raised: false, executionTimeMs: 0, varNames: [], pendingTasks: [],
+    answerContent: "", raised: false, executionTimeMs: 0, varNames: [], stdoutMarks: [], nudges: [], pendingTasks: [],
   };
   const history: ChatMsg[] = [
     { role: "system", content: "sys" },

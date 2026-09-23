@@ -31,6 +31,9 @@ interface SystemPromptOptions {
   readonly orchestrator?: boolean;
   readonly recursion?: boolean;
   readonly maxPromptChars?: number;
+  /** Per-print verbatim stdout budget (chars) — mirrors STDOUT_VERBATIM_CHARS_DEFAULT
+   *  (limits.ts); the engine always passes the config value, so drift never manifests. */
+  readonly stdoutVerbatimChars?: number;
   readonly contextLoader?: boolean;
   /** depth > 0 — this run is an rlm_query child and its `context` is the parent's world. */
   readonly child?: boolean;
@@ -73,11 +76,16 @@ const INTRO = [
   "context stored in a Python REPL. You interact with the REPL turn-by-turn until you have an answer.",
 ].join(" ");
 
+/** Fallback for the per-print stdout cap — mirrors STDOUT_VERBATIM_CHARS_DEFAULT (limits.ts).
+ *  The engine always passes the config value, so drift between the two never manifests. */
+const DEFAULT_STDOUT_CAP = 4_000;
+
 /** Build the full RLM system prompt. */
 export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions = {}): string {
   const recursion = opts.recursion ?? false;
   const kind = contextKindOf(meta.contextType);
   const maxPromptChars = opts.maxPromptChars ?? DEFAULT_PROMPT_CAP;
+  const stdoutCap = (opts.stdoutVerbatimChars ?? DEFAULT_STDOUT_CAP).toLocaleString();
   const parts = [
     INTRO,
   ];
@@ -105,9 +113,9 @@ export function buildRlmSystemPrompt(meta: PromptMeta, opts: SystemPromptOptions
       kind, recursion, opts.contextLoader ?? false, opts.child ?? false, opts.delegation ?? false,
     ),
     "",
-    "REPL stdout over ~800 characters is truncated to a short excerpt — large results stay in your",
-    "REPL variables as buffers. Re-print only the slice you need (e.g. `print(result[:500])`); never",
-    "dump a whole sub-LLM result. The full content persists across turns in REPL variables (call `SHOW_VARS()`).",
+    `Each print() passes through verbatim up to ${stdoutCap} characters — one print never steals from another. ` +
+    "A single print over the cap keeps head+tail plus an elision note; a block that dumps far more keeps its first and last prints and collapses the middle. " +
+    "Full output persists in REPL variables (call SHOW_VARS()); re-print the slice you need, e.g. print(big_var[a:b]).",
     "",
     "Start by probing `context` (print a few lines, count items). Then build up an answer to the query.",
   );

@@ -42,6 +42,8 @@ export interface RlmConfig {
   readonly throttleMaxMs?: number;
   /** Reject sub-LLM prompts larger than this many chars. */
   readonly maxPromptChars: number;
+  /** Per-print verbatim stdout budget (chars); a block's total budget is 4× this. */
+  readonly stdoutVerbatimChars: number;
   /** Max wall-clock ms across the whole tree before the engine stops (undefined = no cap). */
   readonly maxTimeoutMs?: number;
   /** Max total input+output tokens across the whole tree before the engine stops (undefined = no cap).

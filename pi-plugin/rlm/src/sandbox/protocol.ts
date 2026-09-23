@@ -65,6 +65,10 @@ export interface WorkerResponse {
   readonly execution_time?: number;
   // user-created variable names after this exec
   readonly var_names?: readonly string[];
+  /** Captured-stdout offsets AFTER each print() call (advisory segment boundaries). */
+  readonly stdout_marks?: readonly number[];
+  /** One-line runtime hints (huge raw-text vars) — kept OUT of stdout. */
+  readonly nudges?: readonly string[];
   /** Unsettled Task handles still in the worker (native pending-line / await-all). */
   readonly pending_tasks?: readonly PendingTaskInfo[];
   // load_context:
@@ -224,6 +228,10 @@ export interface ReplResult {
   readonly executionTimeMs: number;
   /** User-created variable names after this exec (builtins/context filtered out). */
   readonly varNames: readonly string[];
+  /** Captured-stdout offsets AFTER each print() call (advisory segment boundaries). */
+  readonly stdoutMarks: readonly number[];
+  /** One-line runtime hints (huge raw-text vars) — kept OUT of stdout. */
+  readonly nudges: readonly string[];
   /** Unsettled Task handles still in the worker after this exec. */
   readonly pendingTasks: readonly PendingTaskInfo[];
 }
