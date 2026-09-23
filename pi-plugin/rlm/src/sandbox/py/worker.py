@@ -50,6 +50,11 @@ from hostio import read_host_payload
 from retrieval import _Bm25Index, _NUDGE_CHARS
 from tasks import Task
 
+# Capture the REAL print builtin before the scaffold shadows it in the namespace: the
+# per-exec wrapper (Worker._print_wrapper) reports print boundaries to the host but must
+# delegate the actual write to the true builtin.
+_REAL_PRINT = print
+
 class _AnswerDict(dict):
     """`answer` dict; flipping `ready` True captures the final answer for the parent."""
 
@@ -128,6 +133,7 @@ class Worker(WorkerScaffold):
     def _restore_scaffold(self) -> None:
         # Re-inject any scaffolding the user code clobbered.
         ns = self.ns
+        ns["print"] = self._print_wrapper()
         ns["llm_query"] = self._llm_query
         ns["llm_batch"] = self._llm_batch
         ns["llm_query_chunked"] = self._llm_query_chunked
@@ -341,7 +347,8 @@ class Worker(WorkerScaffold):
     def _nudge_lines(self) -> list[str]:
         """One-time hint for newly created huge raw-text variables (single line).
 
-        Collapses to one line so it survives headless stdout elision (head 200 + tail 200).
+        Rides the dedicated `nudges` exec-result field — kept OUT of stdout so it never
+        pollutes program output; the host formats it after the (possibly elided) stdout.
         """
         names: list[str] = []
         for k in self._user_var_names():
@@ -356,10 +363,29 @@ class Worker(WorkerScaffold):
             'delegate with llm_query_chunked(name, "your question") or slice + llm_batch.'
         ]
 
+    def _print_wrapper(self):
+        """Namespace `print` that records each call's end offset in the captured stdout.
+
+        Marks are advisory segment boundaries for host-side per-print budgeting (the host
+        keeps every print up to its own verbatim cap and collapses a block's middle prints
+        once the per-block budget is exceeded). Direct sys.stdout.write() output adds no
+        mark and joins the neighboring segment — coarser segmentation, never wrong
+        truncation. A file=-redirected print appends the unadvanced tell() of the captured
+        buffer; the host drops the resulting empty segment.
+        """
+        def _print(*args, sep=" ", end="\n", file=None, flush=False):
+            _REAL_PRINT(*args, sep=sep, end=end, file=file, flush=flush)
+            try:
+                self._print_marks.append(sys.stdout.tell())
+            except (AttributeError, OSError, ValueError):
+                pass
+        return _print
+
     def execute(self, code: str) -> dict[str, Any]:
         start = time.perf_counter()
         raised = False
         with self._capture() as (out, err):
+            self._print_marks: list[int] = []
             try:
                 self._restore_scaffold()
                 self._exec(code, self.ns)
@@ -378,10 +404,6 @@ class Worker(WorkerScaffold):
         if final is not None and not final.strip() and str(answer_content).strip():
             final = str(answer_content)
         nudges = self._nudge_lines()
-        if nudges:
-            parts = [stdout] if stdout else []
-            parts.extend(nudges)
-            stdout = "\n".join(parts) + "\n"
         return {
             "stdout": stdout,
             "stderr": stderr,
@@ -390,6 +412,8 @@ class Worker(WorkerScaffold):
             "raised": raised,
             "execution_time": time.perf_counter() - start,
             "var_names": self._user_var_names(),
+            "stdout_marks": self._print_marks,
+            "nudges": nudges,
             "pending_tasks": self._pending_task_infos(),
         }
 

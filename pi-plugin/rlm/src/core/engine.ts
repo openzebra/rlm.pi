@@ -324,6 +324,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
         orchestrator: deps.config.orchestrator,
         recursion: input.depth + 1 < deps.config.maxDepth,
         maxPromptChars: deps.config.maxPromptChars,
+        stdoutVerbatimChars: deps.config.stdoutVerbatimChars,
         contextLoader: deps.config.contextLoader,
         child: input.depth > 0,
         delegation: input.depth > 0,
@@ -538,7 +539,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
 
         limits.observe(turnHadError(turn.results));
         history.push({ role: "assistant", content: turn.response });
-        pendingReplOutputs = formatReplOutputs(turn.results, turn.skippedBlocks);
+        pendingReplOutputs = formatReplOutputs(turn.results, turn.skippedBlocks, { verbatimChars: deps.config.stdoutVerbatimChars });
         if (repairNote !== undefined) {
           pendingReplOutputs = `${pendingReplOutputs}\n\n${repairNote}`;
         }

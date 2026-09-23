@@ -98,6 +98,9 @@ RESERVED = frozenset(
         "search", "grep_context", "outline",
         "add_context", "list_claims", "skill_search",
         "SHOW_VARS", "answer", "context",
+        # print is scaffold-injected (Worker._print_wrapper) so each call reports its
+        # boundary to the host — not a user variable.
+        "print",
     }
 )
 # NOTE: `answers` and `plan` are deliberately NOT reserved. They are seeded by the scaffold but

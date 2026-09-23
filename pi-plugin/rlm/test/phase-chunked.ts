@@ -69,29 +69,29 @@ async function main() {
   );
   await csb.dispose();
 
-  // 3. Nudge fires once per variable, collapsed to a single stdout line.
+  // 3. Nudge fires once per variable — rides the dedicated `nudges` exec-result field
+  // (kept OUT of stdout: program output stays pure, host formats hints after stdout).
   const nb = await PythonSandbox.spawn({ depth: 1 });
   const first = await nb.exec('raw = "a" * 600_000');
   check(
     "nudge fires for a newly created huge variable",
-    first.stdout.includes("[rlm] huge raw-text variable(s)") && first.stdout.includes("raw (600,000 chars)"),
-    first.stdout.trim().slice(0, 90),
+    first.nudges.length === 1 && first.nudges[0]?.includes("raw (600,000 chars)"),
+    JSON.stringify(first.nudges),
   );
+  check("nudge is no longer appended to stdout", first.stdout.trim() === "", JSON.stringify(first.stdout.slice(0, 90)));
   const second = await nb.exec("print(len(raw))");
   check(
     "nudge fires only once per variable",
-    !second.stdout.includes("[rlm]"),
-    second.stdout.trim(),
+    second.nudges.length === 0 && !second.stdout.includes("[rlm]"),
+    `${JSON.stringify(second.nudges)} ${second.stdout.trim()}`,
   );
 
-  // 3b. Multiple huge vars created in one block → a single nudge line lists them all
-  // (avoids losing lines to headless stdout elision).
+  // 3b. Multiple huge vars created in one block → a single nudge line lists them all.
   const multi = await nb.exec('a = "x" * 600_000\nb = "y" * 700_000');
-  const nudgeMatches = multi.stdout.match(/\[rlm\]/g);
   check(
     "multiple huge vars collapse to one nudge line listing each",
-    (nudgeMatches?.length ?? 0) === 1 && multi.stdout.includes("a (600,000 chars)") && multi.stdout.includes("b (700,000 chars)"),
-    multi.stdout.trim().slice(0, 120),
+    multi.nudges.length === 1 && multi.nudges[0]?.includes("a (600,000 chars)") && multi.nudges[0]?.includes("b (700,000 chars)"),
+    JSON.stringify(multi.nudges),
   );
   await nb.dispose();
 

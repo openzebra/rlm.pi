@@ -247,6 +247,8 @@ export class PythonSandbox {
       raised: res.raised ?? false,
       executionTimeMs: Math.round((res.execution_time ?? 0) * 1000),
       varNames: res.var_names ?? [],
+      stdoutMarks: res.stdout_marks ?? [],
+      nudges: res.nudges ?? [],
       pendingTasks: parsePendingTasks(res.pending_tasks),
     };
   }

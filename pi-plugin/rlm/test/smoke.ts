@@ -22,6 +22,7 @@ const SUITES: readonly string[] = Object.freeze([
   "phase-context.ts", "phase-context-refresh.ts", "phase-finish-warn.ts",
   "phase-always-spawn.ts",
   "phase-scaffold.ts",
+  "phase-stdout-budget.ts",
   "budget.ts",
   "ledger.ts",
   "phase-native-ledger.ts",

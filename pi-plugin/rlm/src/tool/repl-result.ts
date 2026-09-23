@@ -35,6 +35,7 @@ export function buildReplResultText(
   stderr = "",
   raised = false,
   pendingTasks: readonly PendingTaskInfo[] = [],
+  nudges: readonly string[] = [],
 ): ReplResultText {
   const answerSubmitted = finalAnswer !== undefined;
   const stderrBlock = formatReplStderr(stderr);
@@ -50,7 +51,10 @@ export function buildReplResultText(
   const failedLine = failedBg > 0
     ? `\n[rlm] ${failedBg} background sub-call(s) FAILED — their await_task value is an "Error: …" string, not data.`
     : "";
-  return { text: cappedText + (nudge ?? "") + pendingLine + failedLine };
+  // Worker runtime hints (huge raw-text vars) used to live inside stdout; they arrive out-of-band
+  // now, so append them verbatim (outside capReplResultText — hints must not be elided).
+  const nudgeBlock = nudges.length > 0 ? `\n${nudges.join("\n")}` : "";
+  return { text: cappedText + (nudge ?? "") + pendingLine + failedLine + nudgeBlock };
 }
 
 function assembleReplBody(

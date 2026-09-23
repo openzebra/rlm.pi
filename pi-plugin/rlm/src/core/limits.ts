@@ -18,6 +18,15 @@ import type { Usage } from "@earendil-works/pi-ai";
  */
 export const COMPACTION_CEILING_TOKENS = 1_000_000;
 
+/**
+ * Per-print verbatim stdout budget (chars) — headless history formatting (answer.ts).
+ * Single source (house rule: limits.ts is the budget-constant source); the value aligns
+ * with the native repl() TOOL_RESULT_CAP so one number means the same thing on every
+ * surface. A block's TOTAL stdout budget is 4× this (derived — deliberately not a
+ * separate knob).
+ */
+export const STDOUT_VERBATIM_CHARS_DEFAULT = 4_000;
+
 export interface Limits {
   readonly maxTimeoutMs?: number;
   readonly maxTokens?: number;

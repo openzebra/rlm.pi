@@ -459,6 +459,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           result.stderr,
           result.raised,
           result.pendingTasks,
+          result.nudges,
         );
 
         const details: ReplDetails = {
