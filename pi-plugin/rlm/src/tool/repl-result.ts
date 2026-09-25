@@ -8,6 +8,25 @@ import type { RlmSubcall } from "./rlm-details.ts";
 import type { PendingTaskInfo } from "../sandbox/protocol.ts";
 import { capReplResultText, replDelegationNudge } from "../mode/native-guards.ts";
 import { formatReplStderr } from "../text/repl-output.ts";
+import { isRecord } from "../util/type-guards.ts";
+
+/** A repl() result the host must record as a tool error (Pi only sets isError when the tool throws). */
+export function replResultIsError(text: string, details: unknown): boolean {
+  if (isRecord(details) && details.status === "error") return true;
+  return text.startsWith("REPL error:");
+}
+
+/** First failed sub-call inside an otherwise-finished cell, for the root Σ failure streak. */
+export function subcallFailureReason(details: unknown): string | undefined {
+  if (!isRecord(details) || !Array.isArray(details.subcalls)) return undefined;
+  for (const call of details.subcalls) {
+    if (!isRecord(call) || call.status !== "error") continue;
+    if (typeof call.detail === "string" && call.detail.trim() !== "") return call.detail;
+    if (typeof call.resultPreview === "string" && call.resultPreview.trim() !== "") return call.resultPreview;
+    return "sub-call failed";
+  }
+  return undefined;
+}
 
 /** Model-visible text assembled from a repl() result. */
 interface ReplResultText {

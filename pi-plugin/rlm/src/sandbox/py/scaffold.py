@@ -304,9 +304,10 @@ class WorkerScaffold:
         path_glob: str | None = None,
         before: int = 0,
         after: int = 0,
+        multiline: bool = True,
     ) -> dict[str, Any]:
         """Regex over `context`, capped and shaped. See retrieval.grep_context."""
-        return _grep_context_impl(self._entries(), pattern, k, path_glob, before, after)
+        return _grep_context_impl(self._entries(), pattern, k, path_glob, before, after, multiline)
 
     def _outline(self, path: str) -> str:
         """Definition/heading skeleton of one context file. See retrieval.outline."""

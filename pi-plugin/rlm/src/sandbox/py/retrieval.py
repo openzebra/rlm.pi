@@ -386,6 +386,17 @@ def search(entries: list[tuple[str, str]], index: _Bm25Index, query: str, k: int
     return merged
 
 
+class _GrepResult(dict):
+    """dict that explains a slice. Models write `grep_context(pat)[:k]` because `search` returns a list."""
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, slice):
+            raise TypeError(
+                "grep_context returns {hits, counts, total, truncated}; slice ['hits']"
+            )
+        return dict.__getitem__(self, key)
+
+
 def grep_context(
     entries: list[tuple[str, str]],
     pattern: str,
@@ -393,6 +404,7 @@ def grep_context(
     path_glob: str | None = None,
     before: int = 0,
     after: int = 0,
+    multiline: bool = True,
 ) -> dict[str, Any]:
     """Regex over `context`, capped and shaped.
 
@@ -404,9 +416,10 @@ def grep_context(
         # MULTILINE: the doc-level gate below must not veto line-anchored patterns (^/$) —
         # without it, `^foo` on a multi-line doc never matches outside position 0 and every
         # line hit is silently filtered out (grep is line-oriented; match that).
-        rx = re.compile(pattern, re.MULTILINE)
+        flags = re.MULTILINE if multiline else 0
+        rx = re.compile(pattern, flags)
     except re.error as e:
-        return {"hits": [], "counts": {}, "total": 0, "truncated": False, "error": f"bad regex: {e}"}
+        return _GrepResult(hits=[], counts={}, total=0, truncated=False, error=f"bad regex: {e}")
     try:
         limit = max(1, min(int(k), _GREP_HARD_CAP))
     except (TypeError, ValueError):
@@ -439,7 +452,7 @@ def grep_context(
                 "text": body,
                 "snippet": body,
             })
-    return {"hits": hits, "counts": counts, "total": total, "truncated": total > len(hits)}
+    return _GrepResult(hits=hits, counts=counts, total=total, truncated=total > len(hits))
 
 def outline(entries: list[tuple[str, str]], path: str) -> str:
     """Definition/heading skeleton of one context file — orient in ~200 chars, not 20K.

@@ -23,7 +23,7 @@ import { deepMergeWithNullDeletion } from "../util/state-merge.ts";
 import { formatError } from "../util/errors.ts";
 import { isRecord } from "../util/type-guards.ts";
 import type { ApproachOutcome, RunState } from "../core/run-state.ts";
-import { isTouchFact } from "../core/run-state.ts";
+import { isHarvestText, taskIdentity } from "../core/run-state.ts";
 import type { RlmConfig } from "../core/types.ts";
 import { skillStateLines } from "../prompts/glossary.ts";
 
@@ -162,22 +162,56 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
+interface SkillStateLoad {
+  readonly file: SkillStateFile;
+  readonly dropped: boolean;
+}
+
+function normalizeSkillFile(raw: SkillStateFile): SkillStateLoad {
+  // Drop file-touch / tool-outcome notes and strip continuation boilerplate from
+  // note context. `dropped` tells SkillStore to flush — a filtered load that never
+  // writes leaves the junk on disk.
+  let clean = true;
+  const projects: Record<string, readonly SkillNote[]> = {};
+  for (const [key, notes] of Object.entries(raw.projects)) {
+    const kept = new Array<SkillNote>(notes.length);
+    let n = 0;
+    let projectClean = true;
+    for (const note of notes) {
+      if (!isHarvestText(note.text)) {
+        clean = false;
+        projectClean = false;
+        continue;
+      }
+      const context = taskIdentity(note.context).slice(0, CONTEXT_MAX_CHARS);
+      if (context !== note.context) {
+        clean = false;
+        projectClean = false;
+        kept[n] = { ...note, context };
+        n += 1;
+        continue;
+      }
+      kept[n] = note;
+      n += 1;
+    }
+    projects[key] = projectClean ? notes : kept.slice(0, n);
+  }
+  return { file: clean ? raw : { version: 1, projects }, dropped: !clean };
+}
+
 /** Fail-soft reader — mirrors settings.ts:loadSettings. Corrupt/missing ⇒ frozen empty. */
 export async function loadSkillState(dir?: string): Promise<SkillStateFile> {
+  return (await loadSkillStateTracked(dir)).file;
+}
+
+/** Same read as `loadSkillState`, plus whether notes were dropped or rewritten. */
+export async function loadSkillStateTracked(dir?: string): Promise<SkillStateLoad> {
   try {
     const raw = JSON.parse(await readFile(skillStatePath(dir), "utf8")) as unknown;
-    if (!isSkillStateFile(raw)) return EMPTY_SKILL_STATE;
-    // Drop file-touch notes written by older versions; the next flush persists the result.
-    let clean = true;
-    const projects: Record<string, readonly SkillNote[]> = {};
-    for (const [key, notes] of Object.entries(raw.projects)) {
-      const kept = notes.filter((n) => !isTouchFact(n.text));
-      if (kept.length !== notes.length) clean = false;
-      projects[key] = kept;
-    }
-    return clean ? raw : { version: 1, projects };
+    if (!isSkillStateFile(raw)) return { file: EMPTY_SKILL_STATE, dropped: false };
+    return normalizeSkillFile(raw);
   } catch {
-    return EMPTY_SKILL_STATE;
+    return { file: EMPTY_SKILL_STATE, dropped: false };
   }
 }
 
@@ -233,24 +267,26 @@ function keywordsOf(text: string): readonly string[] {
  */
 export function notesFromRunState(state: RunState, depth = 0): readonly SkillNoteInput[] {
   const notes: SkillNoteInput[] = [];
+  const context = taskIdentity(state.task).slice(0, CONTEXT_MAX_CHARS);
   for (const fact of state.verifiedFacts) {
-    if (fact.trim().length < 8 || isTouchFact(fact)) continue;
+    if (!isHarvestText(fact)) continue;
     notes.push({
       text: fact.trim().slice(0, NOTE_MAX_CHARS),
       keywords: keywordsOf(fact),
       tags: ["symbol"],
-      context: state.task.slice(0, CONTEXT_MAX_CHARS),
+      context,
       depth,
     });
   }
   for (const [key, outcome] of Object.entries(state.testedApproaches)) {
     if (outcome.status !== "succeeded") continue;
     const text = `${key}: ${outcome.evidence}`.slice(0, NOTE_MAX_CHARS);
+    if (!isHarvestText(text)) continue;
     notes.push({
       text,
       keywords: keywordsOf(text),
       tags: ["recipe"],
-      context: state.task.slice(0, CONTEXT_MAX_CHARS),
+      context,
       depth,
     });
   }
@@ -259,11 +295,12 @@ export function notesFromRunState(state: RunState, depth = 0): readonly SkillNot
     .slice(-GOTCHA_NOTES_MAX);
   for (const [key, outcome] of failed) {
     const text = `${key} — ${outcomeDetail(outcome)}`.slice(0, NOTE_MAX_CHARS);
+    if (!isHarvestText(text)) continue;
     notes.push({
       text,
       keywords: keywordsOf(text),
       tags: ["gotcha"],
-      context: state.task.slice(0, CONTEXT_MAX_CHARS),
+      context,
       depth,
     });
   }
@@ -306,14 +343,14 @@ export function distillPromptFor(state: RunState): string {
  */
 export function parseDistilledNotes(raw: string, context = ""): readonly SkillNoteInput[] {
   const out: SkillNoteInput[] = [];
-  const contextSlice = context.slice(0, CONTEXT_MAX_CHARS);
+  const contextSlice = taskIdentity(context).slice(0, CONTEXT_MAX_CHARS);
   for (const line of raw.split("\n")) {
     const trimmed = line.trim().replace(/^-\s*/, "");
     if (trimmed === "") continue;
     const parts = trimmed.split("|");
     if (parts.length < 2) continue;
     const text = parts[0].trim();
-    if (text.length < 8) continue;
+    if (!isHarvestText(text)) continue;
     const keywords = (parts[1] ?? "")
       .split(",")
       .map((k) => k.trim())
@@ -408,11 +445,13 @@ export class SkillStore {
   ) {}
 
   static async hydrate(notesPerProject: number, dir?: string): Promise<SkillStore> {
+    const loaded = await loadSkillStateTracked(dir);
     return new SkillStore(
-      await loadSkillState(dir),
+      loaded.file,
       projectFingerprint(process.cwd()),
       Math.max(1, Math.floor(notesPerProject)),
       dir,
+      loaded.dropped,
     );
   }
 

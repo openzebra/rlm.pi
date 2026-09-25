@@ -12,13 +12,14 @@ import {
   EMPTY_SKILL_STATE,
   isSkillStateFile,
   loadSkillState,
+  loadSkillStateTracked,
   notesFromRunState,
   parseDistilledNotes,
   saveSkillState,
   SkillStore,
   skillStatePath,
 } from "../src/config/skillstate.ts";
-import type { RunState } from "../src/core/run-state.ts";
+import { taskIdentity, type RunState } from "../src/core/run-state.ts";
 import { check, finish } from "./helpers.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "rlm-skillstate-test-"));
@@ -198,6 +199,45 @@ try {
   const legacy = await loadSkillState(tmp);
   check("legacy note (no links/depth) loads", legacy !== EMPTY_SKILL_STATE
     && legacy.projects.legacy?.length === 1);
+
+  const harvested = notesFromRunState({
+    ...runState,
+    verifiedFacts: ["edited src/a.ts", "cipher/cyber.rs — sign-only"],
+    testedApproaches: {
+      ...runState.testedApproaches,
+      "tool:bash": { status: "succeeded", evidence: "" },
+    },
+  });
+  check("touch facts and tool outcomes are not skill notes",
+    !harvested.some((n) => n.text.startsWith("edited ") || n.text.startsWith("tool:")));
+  check("a real fact still harvests", harvested.some((n) => n.text.includes("cipher/cyber.rs")));
+
+  const droppedDistill = parseDistilledNotes("edited foo.py | foo | symbol\nshort | kw | symbol", "task");
+  check("distill parser drops touch facts and short lines", droppedDistill.length === 0);
+
+  const handoff = "[continuation 1]\nA prior RLM run hit its token cap mid-task.\n\nORIGINAL TASK:\nstudy the cipher\n\nCONFIRMED FINDINGS SO FAR:\nnone\n";
+  check("task identity is the original ask", taskIdentity(handoff) === "study the cipher");
+  check("task identity leaves a normal ask alone", taskIdentity("study the cipher") === "study the cipher");
+
+  writeFileSync(FILE, JSON.stringify({
+    version: 1,
+    projects: {
+      p: [
+        { id: "aaaaaaaaaaaaaaaa", text: "edited src/a.ts", keywords: [], tags: ["symbol"], context: "x", hits: 1, ts: 1 },
+        { id: "bbbbbbbbbbbbbbbb", text: "tool:bash: ", keywords: [], tags: ["recipe"], context: "x", hits: 1, ts: 2 },
+        { id: "cccccccccccccccc", text: "cipher/cyber.rs — sign-only", keywords: ["cipher"], tags: ["symbol"], context: handoff, hits: 1, ts: 3 },
+      ],
+    },
+  }), "utf8");
+  const tracked = await loadSkillStateTracked(tmp);
+  check("load reports dropped bookkeeping", tracked.dropped);
+  const kept = tracked.file.projects.p ?? [];
+  check("load keeps the real note only", kept.length === 1 && kept[0]?.text.includes("cipher/cyber.rs"));
+  check("load strips continuation boilerplate from note context", kept[0]?.context === "study the cipher");
+  const flushed = await SkillStore.hydrate(128, tmp);
+  check("filtered load flushes", await flushed.flush());
+  const again = await loadSkillStateTracked(tmp);
+  check("flushed file no longer needs a rewrite", !again.dropped && (again.file.projects.p ?? []).length === 1);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

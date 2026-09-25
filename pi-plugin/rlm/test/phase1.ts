@@ -151,7 +151,7 @@ async function main() {
 
   // per-block timeout -> watchdog/SIGALRM kills the block (not the whole process)
   r = await sandbox.exec("while True:\n    pass");
-  check("infinite loop hits exec timeout", r.stderr.includes("timeout"), r.stderr.trim().slice(0, 80));
+  check("infinite loop hits exec timeout", r.stderr.includes("cell exceeded"), r.stderr.trim().slice(0, 80));
 
   // sandbox still alive after timeout
   r = await sandbox.exec("print('alive')");
@@ -175,7 +175,7 @@ async function main() {
 
   // H4: the tail eval sits inside the SIGALRM window too
   r = await sandbox.exec("sum(i for i in iter(int, 1))");
-  check("H4: infinite tail expression still hits exec timeout", r.stderr.includes("timeout"), r.stderr.trim().slice(0, 80));
+  check("H4: infinite tail expression still hits exec timeout", r.stderr.includes("cell exceeded"), r.stderr.trim().slice(0, 80));
 
   // F3: context is an ordinary variable — rebinds persist, deletion re-injects the original.
   await sandbox.exec("context = 'changed'");
@@ -250,7 +250,7 @@ async function main() {
   );
   // Local CPU is still bounded: a busy loop still times out.
   r = await slow.exec("while True:\n    pass");
-  check("H3: local CPU loop still bounded by exec timeout", r.stderr.includes("timeout"), r.stderr.trim().slice(0, 80));
+  check("H3: local CPU loop still bounded by exec timeout", r.stderr.includes("cell exceeded"), r.stderr.trim().slice(0, 80));
   await slow.dispose();
 
   const progressSb = await PythonSandbox.spawn({

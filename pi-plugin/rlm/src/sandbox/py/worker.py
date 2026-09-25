@@ -28,6 +28,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 import traceback
 from contextlib import contextmanager
@@ -35,6 +36,22 @@ from typing import Any
 
 # Sibling modules: Python puts this file's directory on sys.path[0], so these resolve without
 # any packaging step. They ship inside `src/` like everything else.
+# Same sentence as prompts/glossary.ts CTX_VIRTUAL_PATH_NOTE, minus markdown.
+_CTX_PATH_HINT = (
+    "ctx/<id>/… paths are keys inside context, not disk paths. "
+    "Read with outline(path) or next(f['content'] for f in context if f['path'] == path)."
+)
+
+
+class _CellAbort(Exception):
+    """SIGINT during a cell. The worker process and its namespace stay."""
+
+
+def _ctx_filename(exc: BaseException) -> str | None:
+    filename = getattr(exc, "filename", None)
+    return filename if isinstance(filename, str) else None
+
+
 from guards import (
     _SAFE_BUILTINS,
     _CONTEXT_NAME,
@@ -90,11 +107,14 @@ class Worker(WorkerScaffold):
         max_prompt_chars: int,
         await_timeout_s: float = 600.0,
         surface: str = "root",
+        progress_s: float = 5.0,
     ):
         self.depth = depth
         self.exec_timeout_s = exec_timeout_s
         self.max_prompt_chars = max_prompt_chars
         self.await_timeout_s = await_timeout_s
+        self.progress_s = progress_s
+        self.in_cell = False
         # v5 role separation: "child" installs the delegation-only scaffold (no retrieval —
         # a child's world arrives as text via getChildContext; retrieval belongs to the root).
         self.surface = surface
@@ -334,7 +354,7 @@ class Worker(WorkerScaffold):
             return
 
         def _alarm(signum, frame):  # noqa: ARG001
-            raise TimeoutError(f"```repl``` block exceeded {t:g}s timeout")
+            raise TimeoutError(f"cell exceeded {t:g}s")
 
         old = signal.signal(signal.SIGALRM, _alarm)
         signal.setitimer(signal.ITIMER_REAL, t)
@@ -381,21 +401,52 @@ class Worker(WorkerScaffold):
                 pass
         return _print
 
+    def _progress(self) -> threading.Event:
+        """Emit `{"type":"progress"}` while the cell runs so a silent subprocess is not "no progress"."""
+        stop = threading.Event()
+        interval = self.progress_s
+        if interval <= 0:
+            return stop
+
+        def loop() -> None:
+            while not stop.wait(interval):
+                try:
+                    _send({"type": "progress"})
+                except Exception:
+                    return
+
+        threading.Thread(target=loop, name="rlm-progress", daemon=True).start()
+        return stop
+
     def execute(self, code: str) -> dict[str, Any]:
         start = time.perf_counter()
         raised = False
-        with self._capture() as (out, err):
-            self._print_marks: list[int] = []
-            try:
-                self._restore_scaffold()
-                self._exec(code, self.ns)
-                self._restore_scaffold()
-                stdout, stderr = out.getvalue(), err.getvalue()
-            except BaseException as e:  # noqa: BLE001
-                raised = True
-                self._restore_scaffold()
-                stdout = out.getvalue()
-                stderr = err.getvalue() + f"\n{type(e).__name__}: {e}\n" + traceback.format_exc()
+        self.in_cell = True
+        progress = self._progress()
+        try:
+            with self._capture() as (out, err):
+                self._print_marks: list[int] = []
+                try:
+                    self._restore_scaffold()
+                    self._exec(code, self.ns)
+                    self._restore_scaffold()
+                    stdout, stderr = out.getvalue(), err.getvalue()
+                except BaseException as e:  # noqa: BLE001
+                    raised = True
+                    self._restore_scaffold()
+                    stdout = out.getvalue()
+                    if isinstance(e, _CellAbort):
+                        stderr = err.getvalue() + f"\n{e}\n"
+                    else:
+                        stderr = err.getvalue() + f"\n{type(e).__name__}: {e}\n" + traceback.format_exc()
+                        filename = _ctx_filename(e)
+                        if isinstance(e, FileNotFoundError) and filename is not None and (
+                            filename == "ctx" or filename.startswith("ctx/")
+                        ):
+                            stderr += f"\n{_CTX_PATH_HINT}\n"
+        finally:
+            self.in_cell = False
+            progress.set()
         final, self._final_answer = self._final_answer, None
         answer = self.ns.get("answer")
         answer_content = answer.get("content", "") if isinstance(answer, dict) else ""
@@ -428,12 +479,21 @@ def main() -> None:
                     default=int(os.environ.get("RLM_MAX_PROMPT_CHARS", "400000")))
     ap.add_argument("--surface", default=os.environ.get("RLM_SURFACE", "root"),
                     choices=["root", "child"])
+    ap.add_argument("--progress-s", type=float, default=5.0)
     args = ap.parse_args()
 
     worker = Worker(depth=args.depth, exec_timeout_s=args.timeout,
                     max_prompt_chars=args.max_prompt_chars,
                     await_timeout_s=args.await_timeout,
-                    surface=args.surface)
+                    surface=args.surface,
+                    progress_s=args.progress_s)
+
+    def _on_sigint(signum, frame):  # noqa: ARG001
+        if worker.in_cell:
+            raise _CellAbort("repl execution aborted")
+
+    if hasattr(signal, "SIGINT"):
+        signal.signal(signal.SIGINT, _on_sigint)
     _send({"id": "_init", "ok": True})
 
     while True:

@@ -12,6 +12,7 @@ import type { Invocation, SpawnResult, SubcallHandlerDeps } from "./types.ts";
 import type { SubcallOpts } from "../../sandbox/interrupts.ts";
 import { SPAWN_HINT, spawnAndRun, type SpawnDeps } from "./task-registry.ts";
 import { ECHO_STUB, taskKey, type TaskLedger } from "../../core/ledger.ts";
+import { createBatchStop } from "./batch-stop.ts";
 
 /** Shared with rlm-query.ts — the unwired rejection sentinel (AGENTS DRY). */
 export const UNWIRED = formatError("RLM bridge not wired for this invocation");
@@ -134,6 +135,7 @@ export function createLlmBatchHandler(
 
     const cdeps = completeDeps(deps);
     const ledger = activeLedger(deps);
+    const stop = createBatchStop();
     return spawnAndRun(
       sd,
       "llm_batch",
@@ -147,12 +149,14 @@ export function createLlmBatchHandler(
               // NO outer gate — complete1 takes the single leaf slot per prompt.
               // v5 (audit H3): every item routes through the ledger — duplicate prompts inside
               // one batch (or twins of other in-flight leaves) coalesce instead of paying N times.
+              // `stop` is checked inside that same slot: a credit/auth/rate-limit failure
+              // does not start siblings still waiting on the gate.
               runClaimedLeaf(
                 ledger,
                 ledger === undefined ? undefined : leafClaimKey(deps, p),
                 p,
                 inv.depth,
-                () => complete1(inv, p, track, cdeps, throttleHooks(note)),
+                () => complete1(inv, p, track, cdeps, { ...throttleHooks(note), stop }),
               )),
           ),
         ),

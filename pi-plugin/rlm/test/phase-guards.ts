@@ -8,7 +8,7 @@ import { check, failureCount, runSuite } from "./helpers.ts";
 import { PythonSandbox } from "../src/sandbox/sandbox.ts";
 import { NATIVE_PROMPT_STATIC, NATIVE_PROMPT_BUDGET } from "../src/prompts/native.ts";
 import { formatContextListing } from "../src/context/listing.ts";
-import { buildReplResultText } from "../src/tool/repl-result.ts";
+import { buildReplResultText, replResultIsError, subcallFailureReason } from "../src/tool/repl-result.ts";
 import {
   bashCommandFromInput,
   capToolResultText,
@@ -191,6 +191,41 @@ async function main() {
     }
     const alive = await sandbox.exec("print(callable(llm_query), callable(search), callable(add_context))");
     check("retrieval + delegation surface intact", !alive.raised && alive.stdout.includes("True True True"), alive.stderr.slice(0, 120));
+
+    check("raised cell is a tool error", replResultIsError("boom", { status: "error" }));
+    check("REPL error text is a tool error", replResultIsError("REPL error: worker killed", { status: "done" }));
+    check("clean cell is not a tool error", !replResultIsError("ok", { status: "done" }));
+    check("failed sub-call reason", subcallFailureReason({ subcalls: [{ status: "error", detail: "402 credit" }] }) === "402 credit");
+
+    const syntax = await sandbox.exec("try:\n    raise SyntaxError('x')\nexcept SyntaxError:\n    print('caught')");
+    check("SyntaxError is a builtin", !syntax.raised && syntax.stdout.includes("caught"), syntax.stderr.slice(0, 160));
+
+    await sandbox.loadContext([{ path: "a.py", content: "alpha\n", tokens: 1 }]);
+    const sliced = await sandbox.exec("grep_context('alpha')[:1]");
+    check("grep slice names the fix", sliced.raised && sliced.stderr.includes("slice ['hits']"), sliced.stderr.slice(0, 220));
+    const multiline = await sandbox.exec("print(grep_context('alpha', multiline=True)['total'])");
+    check("grep accepts multiline", !multiline.raised && multiline.stdout.includes("1"), multiline.stderr.slice(0, 160));
+    const virtual = await sandbox.exec("open('ctx/foo/bar.py')");
+    check("ctx path is not a disk path", virtual.raised && virtual.stderr.includes("not disk paths"), virtual.stderr.slice(0, 240));
+
+    let ticks = 0;
+    const ticking = await PythonSandbox.spawn({
+      depth: 0, execTimeoutS: 10, requestTimeoutMs: 30_000, progressIntervalS: 0.2,
+    });
+    try {
+      const slept = await ticking.exec("import time\ntime.sleep(0.7)\nprint('slept')", undefined, () => { ticks += 1; });
+      check("progress tick during a silent cell", ticks >= 1 && slept.stdout.includes("slept"), `ticks=${ticks} ${slept.stderr.slice(0, 80)}`);
+      const ac = new AbortController();
+      const pending = ticking.exec("answers['k'] = 7\nimport time\ntime.sleep(30)\n", ac.signal);
+      await new Promise((resolve) => { setTimeout(resolve, 250); });
+      ac.abort();
+      const aborted = await pending;
+      check("cooperative abort stays in-process", aborted.stderr.includes("repl execution aborted"), aborted.stderr.slice(0, 200));
+      const kept = await ticking.exec("print(answers.get('k'))");
+      check("abort keeps REPL variables", kept.stdout.includes("7"), `${kept.stdout} ${kept.stderr.slice(0, 160)}`);
+    } finally {
+      await ticking.dispose();
+    }
   } finally {
     await sandbox.dispose();
   }

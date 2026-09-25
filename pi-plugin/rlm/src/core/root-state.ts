@@ -65,6 +65,9 @@ export class RootStateTracker {
   private dirtyFlag = false;
   /** R4: consecutive fence-eligible turns with zero accepted deltas (idle streak). */
   private idleFenceTurns = 0;
+  /** Set when a fence was rejected and not yet followed by an accepted delta.
+   *  Fence-free turns count as idle only while this is set — an absent fence is free. */
+  private fenceOutstanding = false;
   private readonly failures = new Map<string, number>();
   private pendingObservation: string | undefined;
   private readonly retryMax: number;
@@ -209,12 +212,12 @@ export class RootStateTracker {
    * observation), and only past `runStateRetryMax` total rejections the tracker degrades and
    * fences stop being applied. Wording delegates to run-state.ts (N1) — one source.
    *
-   * R4 (G6, /tmp/ROOT_FULL_SKILLSTATE_PLAN.md): idle-degrade parity with the engine — once
-   * the native prompt teaches the fence contract, EVERY finalized assistant turn is
-   * fence-eligible; a turn with zero accepted deltas grows `idleFenceTurns` and
-   * `ROOT_IDLE_DEGRADE_TURNS` consecutive idle turns degrade the tracker (an idle Σ is
-   * pure input tax — bench rec #2, paper §5.7; root threshold is 6, not the engine's 4 —
-   * see the const's soak citation). Any accepted delta resets the streak. In
+   * Idle degrade (bench rec #2, narrowed): a fence-free turn does not grow
+   * `idleFenceTurns` — STATE_FENCE_INSTRUCTION says an absent fence is free. The streak
+   * grows only while a rejection is outstanding (zero accepted deltas, then later turns
+   * that still send nothing). `ROOT_IDLE_DEGRADE_TURNS` consecutive idle turns degrade
+   * the tracker (root threshold is 6, not the engine's 4). Any accepted delta resets
+   * the streak and clears the outstanding rejection. In
    * degraded mode fences stop applying and the context transform stops splicing (`isActive`),
    * while runtime `observeToolResult` remains the Σ floor (degrade, never crash).
    *
@@ -238,8 +241,11 @@ export class RootStateTracker {
         // Recall W2: tool-running turns are work, not fence idleness — neutral, no degrade.
         return { fences: 0, accepted: 0, problems: 0 };
       }
-      // R4 (G6): a fence-free turn on a conditioned loop is IDLE — the contract rode the
-      // prompt for nothing. Grow the streak; degrade at the engine's threshold.
+      // An absent fence is free (STATE_FENCE_INSTRUCTION). Idle grows only while a
+      // rejected fence is still outstanding — the model was asked to fix one and did not.
+      if (!this.fenceOutstanding) {
+        return { fences: 0, accepted: 0, problems: 0 };
+      }
       this.idleFenceTurns += 1;
       this.degradeIfIdle();
       return { fences: 0, accepted: 0, problems: 0 };
@@ -260,9 +266,17 @@ export class RootStateTracker {
         problems.push(patchErrorText(next.error));
       }
     }
-    // Accepted deltas reset the idle streak — even in a partially-failing batch (engine
-    // parity: real work is never punished for a sibling's malformed fence).
-    this.idleFenceTurns = accepted > 0 ? 0 : this.idleFenceTurns + 1;
+    // Accepted deltas reset the idle streak and clear the outstanding rejection — even
+    // in a partially-failing batch (engine parity: real work is never punished for a
+    // sibling's malformed fence). Zero accepted deltas leave the rejection outstanding
+    // so later fence-free turns keep the streak.
+    if (accepted > 0) {
+      this.fenceOutstanding = false;
+      this.idleFenceTurns = 0;
+    } else {
+      this.fenceOutstanding = true;
+      this.idleFenceTurns += 1;
+    }
     this.degradeIfIdle();
     if (problems.length === 0) {
       // Recovery seam: a clean batch re-activates a degraded tracker, so one honest fence

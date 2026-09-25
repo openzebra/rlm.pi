@@ -412,7 +412,20 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
             // is active. Swapping earlier would let queued repl() calls overwrite
             // emitter/limits for the currently running REPL execution.
             bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
-          }, cellAbort.signal);
+          }, cellAbort.signal, () => {
+            const elapsedS = Math.max(1, Math.round((Date.now() - start) / 1000));
+            onUpdate?.({
+              content: [{ type: "text", text: `running ${elapsedS}s` }],
+              details: {
+                status: "running",
+                output: "",
+                stderr: "",
+                executionTimeMs: Date.now() - start,
+                subcalls: store.getSubcalls(),
+                totals: { tokens: store.getTotals().tokens },
+              },
+            });
+          });
         } finally {
           cellAbort.dispose();
         }
@@ -467,7 +480,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         );
 
         const details: ReplDetails = {
-          status: "done",
+          status: result.raised ? "error" : "done",
           output: result.stdout,
           stderr: result.stderr,
           executionTimeMs: elapsed,

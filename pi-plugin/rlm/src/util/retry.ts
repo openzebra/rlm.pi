@@ -34,6 +34,18 @@ export function isRateLimited(status: number | undefined, text: string): boolean
   return status === 429 || (status === undefined && RATE_LIMIT_TEXT.test(text));
 }
 
+/**
+ * A batch must stop launching siblings after one of these. Auth, credit, and
+ * rate-limit failures do not recover by sending the rest of the batch.
+ * Matches the formatted `Error: …` string complete1 returns (status is already baked in).
+ */
+const PROVIDER_STOP_TEXT =
+  /\b(?:401|402|403|429)\b|credit|payment|quota|insufficient|balance|unauthorized|forbidden|api[ -]?key|rate.?limit|速率|频率/i;
+
+export function isProviderStop(text: string): boolean {
+  return PROVIDER_STOP_TEXT.test(text);
+}
+
 /** Should this failure get another attempt? Explicit non-retryables win over patterns. */
 export function retryableError(status: number | undefined, text: string): boolean {
   if (status !== undefined) {

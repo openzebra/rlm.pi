@@ -185,6 +185,11 @@ export function isWorkerMessage(msg: unknown): msg is WorkerMessage {
   return isWorkerResponse(msg) || isInterrupt(msg);
 }
 
+/** Worker → parent keep-alive while a cell is inside subprocess or a long loop. */
+export function isProgressFrame(msg: unknown): boolean {
+  return isRecord(msg) && msg.type === "progress";
+}
+
 /** Unsettled Task still in the worker, optionally bound to a REPL variable. */
 export interface PendingTaskInfo {
   readonly var: string | null;

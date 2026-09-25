@@ -16,6 +16,7 @@ import json
 import re
 import signal
 import sys
+import threading
 from contextlib import contextmanager
 from typing import Any
 
@@ -51,7 +52,11 @@ _SAFE_BUILTINS = {
         "Exception", "BaseException", "ValueError", "TypeError", "KeyError", "IndexError",
         "AttributeError", "FileNotFoundError", "OSError", "IOError", "RuntimeError",
         "NameError", "ImportError", "StopIteration", "AssertionError", "NotImplementedError",
-        "ArithmeticError", "ZeroDivisionError", "LookupError", "Warning", "True", "False", "None",
+        "ArithmeticError", "ZeroDivisionError", "LookupError", "Warning",
+        "SyntaxError", "TimeoutError", "PermissionError", "EOFError",
+        "UnicodeError", "UnicodeDecodeError", "UnicodeEncodeError",
+        "MemoryError", "RecursionError",
+        "True", "False", "None",
     )
 }
 # `open` is allowed for data work; eval/exec/compile/input/globals/locals are not.
@@ -108,9 +113,16 @@ RESERVED = frozenset(
 # Only the single name `context` is the packed world. Legacy context_N names are filtered out.
 _CONTEXT_NAME = re.compile(r"context(_\d+)?\Z")
 
+# Progress frames are written from a daemon thread while the cell blocks in subprocess.
+# The main thread writes protocol frames too — one lock keeps each line intact.
+_IO_LOCK = threading.Lock()
+
+
 def _send(obj: dict[str, Any]) -> None:
-    REAL_STDOUT.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    REAL_STDOUT.flush()
+    line = json.dumps(obj, ensure_ascii=False) + "\n"
+    with _IO_LOCK:
+        REAL_STDOUT.write(line)
+        REAL_STDOUT.flush()
 
 
 class _StallTimeout(Exception):

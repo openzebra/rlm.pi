@@ -63,7 +63,7 @@ const BLOCK = [
   // surface MUST ride the static prompt (the glossary header calls that divergence a bug).
   check("native prompt documents archive recall", NATIVE_PROMPT_STATIC.includes("ctx/session-log"));
   check("native prompt documents skill_search", NATIVE_PROMPT_STATIC.includes("skill_search"));
-  check("native budget raised for recall lines", NATIVE_PROMPT_BUDGET === 9_700);
+  check("native budget covers the virtual-path note", NATIVE_PROMPT_BUDGET === 9_800);
 }
 
 // ── Root Σ WS-1: per-prompt Ξ query + relevance + mid-session freshness ─────────────

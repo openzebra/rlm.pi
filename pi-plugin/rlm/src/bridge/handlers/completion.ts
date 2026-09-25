@@ -14,6 +14,8 @@ import { checkResourceLimits } from "../../core/resource-limits.ts";
 import { errorMessage, formatError } from "../../util/errors.ts";
 import { retryPolicy } from "../../util/retry.ts";
 import type { Semaphore } from "../../util/concurrency.ts";
+import type { BatchStop } from "./batch-stop.ts";
+import { runAdmitted } from "./batch-stop.ts";
 import type { Invocation, SubcallConfig, SubcallHandlerDeps } from "./types.ts";
 
 interface Complete1Deps {
@@ -52,7 +54,12 @@ export async function complete1(
   prompt: string,
   track: (usage: Usage) => void,
   deps: Complete1Deps,
-  hooks?: { readonly onThrottlePark?: (ms: number) => void; readonly onThrottleRelease?: () => void },
+  hooks?: {
+    readonly onThrottlePark?: (ms: number) => void;
+    readonly onThrottleRelease?: () => void;
+    /** When set, a provider-stop error skips siblings still waiting on the leaf gate. */
+    readonly stop?: BatchStop;
+  },
 ): Promise<string> {
   const config = deps.getConfig();
   const limitError = checkResourceLimits({
@@ -74,10 +81,10 @@ export async function complete1(
       `${config.maxPromptChars.toLocaleString()}). Shorten or chunk the prompt before calling llm_query.`,
     );
   }
-  try {
-    const messages: ChatMsg[] = [{ role: "user", content: effective }];
-    const res = await deps.leafGate.run(() =>
-      modelComplete(messages, {
+  const messages: ChatMsg[] = [{ role: "user", content: effective }];
+  return runAdmitted(deps.leafGate, hooks?.stop, async () => {
+    try {
+      const res = await modelComplete(messages, {
         model: deps.getLlmModel(),
         registry: deps.registry,
         system: config.subSystemPrompt,
@@ -91,17 +98,17 @@ export async function complete1(
         // Long-context providers (zai bigmodel TTFB ~1 min per 10k ctx chars) need the
         // per-request wall cap raised from the pi-ai default.
         timeoutMs: config.requestTimeoutMs,
-      }),
-    );
-    inv.limits.addUsage(res.usage);
-    deps.onUsage?.(res.usage, "sub");
-    track(res.usage);
-    return res.text;
-  } catch (err: unknown) {
-    const msg = errorMessage(err);
-    const hint = /credit|402|payment|quota|rate.limit/i.test(msg)
-      ? " — try smaller batches or individual llm_query calls"
-      : "";
-    return formatError(`${msg}${hint}`);
-  }
+      });
+      inv.limits.addUsage(res.usage);
+      deps.onUsage?.(res.usage, "sub");
+      track(res.usage);
+      return res.text;
+    } catch (err: unknown) {
+      const msg = errorMessage(err);
+      const hint = /credit|402|payment|quota|rate.limit/i.test(msg)
+        ? " — try smaller batches or individual llm_query calls"
+        : "";
+      return formatError(`${msg}${hint}`);
+    }
+  });
 }

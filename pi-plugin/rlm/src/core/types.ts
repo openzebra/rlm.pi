@@ -160,6 +160,12 @@ export interface RlmConfig {
 export interface RlmInput {
   /** The question for the root model (folded into the metadata prompt). */
   readonly rootPrompt: string;
+  /**
+   * The original user ask, stable across budget continuations.
+   * `rootPrompt` on a continuation is the handoff wrapper; Σ.task and SkillState
+   * context use this instead so recall is not the words "token cap".
+   */
+  readonly originTask?: string;
   /** The (possibly huge) context loaded into the sandbox REPL. */
   readonly context: unknown;
   /** Recursion depth; 0 = top-level root. */

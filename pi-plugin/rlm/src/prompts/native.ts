@@ -8,6 +8,7 @@
 import {
   ARCHIVE_RECALL_LINE_NATIVE,
   CHUNKED_GLOSSARY_LINE_NATIVE,
+  CTX_VIRTUAL_PATH_NOTE,
   ENV_TIPS_CONDENSED,
   LARGE_FILE_RULE_NATIVE,
   DEFAULT_PROMPT_CAP,
@@ -21,7 +22,8 @@ function nativeReplGlossary(): string {
   return [
     "## REPL surface (inside `repl({code})` only)",
     "",
-    "Persistent Python sandbox. Only `print(...)` returns; variables/`answers`/`plan` persist across repl calls.",
+    "Persistent Python sandbox. `print(...)` returns, and so does a trailing bare expression (it is echoed). variables/`answers`/`plan` persist across repl calls.",
+    CTX_VIRTUAL_PATH_NOTE,
     "",
     "### Free locate (no sub-LLM tokens)",
     "- `search(query, k=10, path_glob=None) -> [{path, line, score, snippet, text}]` — BM25 pointers, not bodies",
@@ -217,8 +219,9 @@ export function buildNativeSystemPrompt(
 
 /** Soft cap on the static native prompt. Raised for v5-style contract/routing/examples;
  *  recall W3 raised it again (+200) for the archive-recall + skill_search twin lines —
- *  the model cannot recall elided turns or prior-session facts it is never told about. */
-export const NATIVE_PROMPT_BUDGET = 9_700;
+ *  the model cannot recall elided turns or prior-session facts it is never told about.
+ *  +100 for the auto-echo sentence and the ctx/ virtual-path note (both prompts). */
+export const NATIVE_PROMPT_BUDGET = 9_800;
 
 /** Exported for tests — prompt length without context metadata (which is injected separately). */
 export const NATIVE_PROMPT_STATIC = buildNativeSystemPrompt();

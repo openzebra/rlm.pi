@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   isInterrupt,
+  isProgressFrame,
   isWorkerMessage,
   parsePendingTasks,
   type ParentMessage,
@@ -51,6 +52,8 @@ export interface SandboxOptions {
   readonly initTimeoutMs?: number;
   /** Sub-LLM prompt cap (chars) — sizes llm_query_chunked chunks inside the worker. */
   readonly maxPromptChars?: number;
+  /** Seconds between worker progress frames during a cell. Default 5. 0 disables them. */
+  readonly progressIntervalS?: number;
   /**
    * Max seconds the worker will wait for a host reply while parked in `_drain_until`
    * (await_task / sync sub-call). Defaults to the worker's own RLM_AWAIT_TIMEOUT_S (600).
@@ -64,6 +67,8 @@ const STDERR_TAIL_CHARS = 8_192;
 export const SANDBOX_WATCHDOG_HEARTBEAT_MS = 30_000;
 /** How long dispose() waits for a clean worker exit before escalating to SIGKILL. */
 const SHUTDOWN_GRACE_MS = 50;
+/** Esc during a cell: SIGINT first. SIGKILL (and a wiped namespace) only if the worker stays silent. */
+const COOPERATIVE_ABORT_MS = 2_000;
 
 // The sandbox runs untrusted model-authored code; it must never inherit provider secrets.
 const SENSITIVE_ENV = /API[_-]?KEY|ACCESS[_-]?KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|ANTHROPIC|OPENAI|_KEY$/i;
@@ -117,6 +122,8 @@ export class PythonSandbox {
   }
   private disposed = false;
   private ready: Promise<void>;
+  /** Per-exec TUI tick. Set only for the cell currently inside `exec`. */
+  private progressTick: (() => void) | undefined;
 
   private constructor(opts: SandboxOptions) {
     this.handlers = { ...REJECT, ...opts.handlers };
@@ -139,6 +146,9 @@ export class PythonSandbox {
     }
     if (opts.awaitTimeoutS !== undefined) {
       workerArgs.push("--await-timeout", String(opts.awaitTimeoutS));
+    }
+    if (opts.progressIntervalS !== undefined) {
+      workerArgs.push("--progress-s", String(opts.progressIntervalS));
     }
     this.proc = spawn(
       python,
@@ -236,7 +246,17 @@ export class PythonSandbox {
     this.handlers = { ...REJECT, ...handlers };
   }
 
-  async exec(code: string, signal?: AbortSignal): Promise<ReplResult> {
+  async exec(code: string, signal?: AbortSignal, onProgress?: () => void): Promise<ReplResult> {
+    const previous = this.progressTick;
+    this.progressTick = onProgress;
+    try {
+      return await this.execRequest(code, signal);
+    } finally {
+      this.progressTick = previous;
+    }
+  }
+
+  private async execRequest(code: string, signal?: AbortSignal): Promise<ReplResult> {
     const res = await this.request({ type: "exec", code }, signal);
     if (!res.ok) throw new Error(res.error ?? "exec failed");
     return {
@@ -303,18 +323,24 @@ export class PythonSandbox {
     const id = `r${++this.seq}`;
     return new Promise<WorkerResponse>((resolve, reject) => {
       const timer = this.createWatchdog(id, payload.type, reject);
-      // Cancel == kill. The worker may be parked inside `_drain_until` with no other way out;
-      // `proc.on("exit") -> failAll` settles this request and SandboxManager's catch recreates
-      // the sandbox. REPL variables are lost — the documented price of interrupting.
+      // Esc raises inside the live cell (SIGINT → the worker keeps its namespace).
+      // SIGKILL, which wipes REPL variables, is the fallback when the worker never answers,
+      // plus /rlm-stop, dispose, and the no-progress watchdog.
+      let grace: ReturnType<typeof setTimeout> | undefined;
       const onAbort = (): void => {
-        this.pending.delete(id);
-        clearTimeout(timer);
-        try { this.proc.kill("SIGKILL"); } catch { /* already dead */ }
-        reject(new Error("repl execution aborted — REPL variables were reset"));
+        try { this.proc.kill("SIGINT"); } catch { /* already dead */ }
+        grace = setTimeout(() => {
+          if (!this.pending.has(id)) return;
+          this.pending.delete(id);
+          clearTimeout(timer);
+          try { this.proc.kill("SIGKILL"); } catch { /* already dead */ }
+          reject(new Error("repl execution aborted — REPL variables were reset"));
+        }, COOPERATIVE_ABORT_MS);
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       const once = <T>(settle: (value: T) => void) => (value: T): void => {
         signal?.removeEventListener("abort", onAbort);
+        if (grace !== undefined) clearTimeout(grace);
         settle(value);
       };
       this.pending.set(id, { resolve: once(resolve), reject: once(reject), timer, requestType: payload.type });
@@ -429,7 +455,10 @@ export class PythonSandbox {
       if (line) {
         try {
           const message = JSON.parse(line) as unknown;
-          if (isWorkerMessage(message)) this.dispatch(message);
+          if (isProgressFrame(message)) {
+            this.touchPending();
+            this.progressTick?.();
+          } else if (isWorkerMessage(message)) this.dispatch(message);
           else this.appendStderr(`\n[protocol] skipped invalid stdout message: ${line.slice(0, 200)}`);
         } catch {
           // Non-JSON line on the protocol stream — likely a subprocess writing to fd 1.

@@ -17,6 +17,8 @@ import { spawnAndRun, type SpawnDeps } from "./task-registry.ts";
 import { complete1, completeDeps } from "./completion.ts";
 import { emitting, summarizeLeaf, throttleHooks } from "./emitting.ts";
 import { activeLedger, leafClaimKey, runClaimedLeaf, unwiredSpawn } from "./llm-query.ts";
+import type { BatchStop } from "./batch-stop.ts";
+import { createBatchStop } from "./batch-stop.ts";
 
 const NO_UNMATCHED: readonly string[] = Object.freeze([]);
 
@@ -70,6 +72,7 @@ async function childRun(
   inv: Invocation,
   prompt: string,
   paths: readonly string[] | undefined,
+  stop?: BatchStop,
 ): Promise<RlmResult> {
   const childDepth = inv.depth + 1;
   const run = deps.runChild;
@@ -148,7 +151,19 @@ async function childRun(
   };
 
   try {
-    const res = await deps.gates.rlm.at(childDepth).run(() => run(input, inv));
+    const res = await deps.gates.rlm.at(childDepth).run(async () => {
+      const halted = stop?.before();
+      if (halted !== undefined) return emptyResult(halted);
+      try {
+        const value = await run(input, inv);
+        stop?.note(value.answer);
+        return value;
+      } catch (err: unknown) {
+        // Note before the slot is released so a waiter does not start another child.
+        stop?.note(formatError(`child RLM failed - ${errorMessage(err)}`));
+        throw err;
+      }
+    });
     inv.limits.addRaw(res.inputTokens, res.outputTokens);
     deps.onChildUsage?.(res.inputTokens, res.outputTokens);
     if (ledger !== undefined && claimKey !== undefined) ledger.finish(claimKey, res.answer);
@@ -242,13 +257,14 @@ export function createRlmBatchHandler(deps: SubcallHandlerDeps, sd: SpawnDeps) {
     const pathArg = opts.paths;
     // No wrapper "rlm_batch ×N" node: every task already gets its own rlm_query node from
     // childRun (DRY #2), parented to the caller — the batch is spawn fan-out, not a UI row.
+    const stop = createBatchStop();
     return spawnAndRun(
       sd,
       "rlm_batch",
       tasks.length,
       async () => {
         const results = await Promise.all(
-          tasks.map((t) => childRun(deps, inv, t, pathArg)),
+          tasks.map((t) => childRun(deps, inv, t, pathArg, stop)),
         );
         return results.map((r) => r.answer);
       },

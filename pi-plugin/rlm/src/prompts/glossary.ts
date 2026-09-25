@@ -318,11 +318,16 @@ export const ENV_TIPS_CONDENSED = [
 
 export function howToRunCode(): string {
   return [
-    "To run Python, write a fenced ```repl``` block. The REPL **persists** across turns. Only",
-    "`print(...)` output (stdout) is returned; a bare expression on the last line is discarded, so",
-    "always wrap inspections in `print(...)`.",
+    "To run Python, write a fenced ```repl``` block. The REPL **persists** across turns.",
+    "Stdout is what comes back: `print(...)`, and the value of a trailing bare expression",
+    "(it is echoed). Anything that is not the last line still needs `print`.",
   ].join(" ");
 }
+
+/** One wording for both prompts: `ctx/<id>/` names are inside `context`, not on disk. */
+export const CTX_VIRTUAL_PATH_NOTE =
+  "`ctx/<id>/…` paths are keys inside `context`, not disk paths. Read with `outline(path)` " +
+  "or `next(f[\"content\"] for f in context if f[\"path\"] == path)`.";
 
 export function replGlossary(
   kind: ContextKind,
@@ -343,7 +348,8 @@ export function replGlossary(
       "- `context`: list[dict] — the files you have loaded (starts empty; cwd seeds on first use).",
       "  Each dict has keys: `path` (str), `content` (str), `tokens` (int).",
       "  Cwd paths are un-prefixed (real paths for edit/write); external sources land under",
-      "  `ctx/<source_id>/…`. For large sets, chunk and delegate — never dump raw file bodies.",
+      "  `ctx/<source_id>/…`. " + CTX_VIRTUAL_PATH_NOTE,
+      "  For large sets, chunk and delegate — never dump raw file bodies.",
       CONTEXT_EXCLUSION_NOTE,
     );
     if (child) lines.push(...CHILD_CONTEXT_LINES);

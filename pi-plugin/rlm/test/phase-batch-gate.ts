@@ -39,12 +39,20 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeo
 let inFlight = 0;
 let peak = 0;
 let served = 0;
+let failClosed = false;
+let stopServed = 0;
 
 function sseChunk(body: Record<string, unknown>): string {
   return `data: ${JSON.stringify(body)}\n\n`;
 }
 
 const server: Server = createServer((_req, res) => {
+  if (failClosed) {
+    stopServed += 1;
+    res.writeHead(402, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "You have run out of credits", type: "insufficient_quota" } }));
+    return;
+  }
   inFlight += 1;
   peak = Math.max(peak, inFlight);
   setTimeout(() => {
@@ -180,6 +188,53 @@ check(
   `peak=${childPeak}`,
 );
 check("leaf gate keeps its own, larger limit", peak > CHILD_LIMIT, `leaf peak=${peak}`);
+
+// A credit failure stops siblings still waiting on the gate. Limit 1 so only the
+// first item is inside the provider call when the 402 lands.
+failClosed = true;
+const stopGates = createSubcallGates(1);
+const stopHandlers = createSubcallHandlers({
+  resolve: (_opts, depth) => ({ emitter, parentId: undefined, depth, limits: limitsFromRemaining() }),
+  gates: stopGates,
+  registry: MOCK_REGISTRY,
+  getLlmModel: () => fakeModel,
+  getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 2, requestTimeoutMs: 900_000 }),
+});
+const stopPrompts = ["a", "b", "c", "d"];
+const stopSpawned = await stopHandlers.llmBatch(stopPrompts, 0, ATTACHED);
+const stopCollected = stopSpawned.ok && stopSpawned.task_id !== null
+  ? await stopHandlers.awaitTask(stopSpawned.task_id, undefined, undefined, 0, ATTACHED)
+  : undefined;
+const stopResults = stopCollected !== undefined && stopCollected.ok ? stopCollected.results : undefined;
+check(
+  "credit failure does not start queued batch siblings",
+  stopServed === 1 && stopResults !== undefined && stopResults.length === 4 && stopResults.every((a) => a.includes("402") || a.toLowerCase().includes("credit")),
+  `served=${stopServed} results=${JSON.stringify(stopResults)?.slice(0, 240)}`,
+);
+
+let childCalls = 0;
+const childStop = createSubcallHandlers({
+  resolve: (_opts, depth) => ({ emitter, parentId: undefined, depth, limits: limitsFromRemaining() }),
+  gates: createSubcallGates(6, 1),
+  registry: MOCK_REGISTRY,
+  getLlmModel: () => fakeModel,
+  getConfig: () => ({ maxPromptChars: 400_000, maxDepth: 4, requestTimeoutMs: 900_000 }),
+  runChild: async () => {
+    childCalls += 1;
+    return { answer: "Error: 402 payment required", iterations: 1, inputTokens: 0, outputTokens: 0, durationMs: 0, lastStdout: "" };
+  },
+  degrade: async () => "degraded",
+});
+const childStopSpawned = await childStop.rlmBatch(["c0", "c1", "c2", "c3"], 0, ATTACHED);
+const childStopCollected = childStopSpawned.ok && childStopSpawned.task_id !== null
+  ? await childStop.awaitTask(childStopSpawned.task_id, undefined, undefined, 0, ATTACHED)
+  : undefined;
+const childStopResults = childStopCollected !== undefined && childStopCollected.ok ? childStopCollected.results : undefined;
+check(
+  "rlm_batch does not start children after a provider-stop answer",
+  childCalls === 1 && childStopResults !== undefined && childStopResults.every((a) => a.includes("402")),
+  `calls=${childCalls} results=${JSON.stringify(childStopResults)?.slice(0, 240)}`,
+);
 
 server.close();
 process.exit(failureCount() > 0 ? 1 : 0);

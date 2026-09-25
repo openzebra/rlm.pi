@@ -31,15 +31,22 @@ const WIRE = '{"state_patch": {"verifiedFacts[+]": "src/f.ts — fence wired"}}'
 }
 
 {
-  // ── R4: the idle ladder — fence-free turns degrade at the ROOT threshold (6; the engine's
-  // 4 amputated before native cold-start fences land — see ROOT_IDLE_DEGRADE_TURNS) ──
+  // An absent fence is free. Prose turns do not idle. A rejection starts the streak;
+  // later fence-free turns continue it until the root threshold.
+  const prose = RootStateTracker.fresh("prose", 99);
+  for (let i = 0; i < ROOT_IDLE_DEGRADE_TURNS; i++) {
+    prose.applyFences(findStatePatches(`turn ${i} replied with prose, no fence`));
+  }
+  check("prose turns stay active", prose.isActive && prose.idleTurns === 0);
+
   const t = RootStateTracker.fresh("idle ladder", 99); // retry cap deliberately out of the way
   t.observeToolResult("bash", false, ""); // the runtime floor flows before and after degrade
+  t.applyFences(findStatePatches("```state\n{not json}\n```"));
+  check("rejection starts the idle streak", t.idleTurns === 1 && t.isActive);
   for (let i = 1; i < ROOT_IDLE_DEGRADE_TURNS; i++) {
-    t.applyFences(findStatePatches(`turn ${i} replied with prose, no fence`));
-    check(`idle turn ${i}/${ROOT_IDLE_DEGRADE_TURNS} — still active`, t.isActive);
+    t.applyFences([]);
+    if (i < ROOT_IDLE_DEGRADE_TURNS - 1) check(`idle turn ${i + 1}/${ROOT_IDLE_DEGRADE_TURNS} — still active`, t.isActive);
   }
-  t.applyFences(findStatePatches("")); // an empty assistant text counts too (message_end feeds it verbatim)
   check(`idle turn ${ROOT_IDLE_DEGRADE_TURNS} — degraded`, !t.isActive);
   check("degrade reason names the idle streak", (t.degradeReason ?? "").includes("idle degrade"));
   check("idle streak counted at the root threshold", t.idleTurns >= ROOT_IDLE_DEGRADE_TURNS);
@@ -71,7 +78,8 @@ const WIRE = '{"state_patch": {"verifiedFacts[+]": "src/f.ts — fence wired"}}'
 
   // a GARBAGE batch in degraded mode stays degraded (sticky against zero-progress storms)
   const g = RootStateTracker.fresh("degraded garbage", 99);
-  for (let i = 0; i < ROOT_IDLE_DEGRADE_TURNS; i++) g.applyFences([]);
+  g.applyFences(findStatePatches("```state\n{not json}\n```"));
+  for (let i = 1; i < ROOT_IDLE_DEGRADE_TURNS; i++) g.applyFences([]);
   check("garbage-arm degraded", !g.isActive);
   g.applyFences(findStatePatches("```state\n{not json}\n```"));
   check("malformed batch in degraded mode keeps it degraded", !g.isActive);
@@ -81,14 +89,16 @@ const WIRE = '{"state_patch": {"verifiedFacts[+]": "src/f.ts — fence wired"}}'
 {
   // ── R4: one accepted delta BEFORE the threshold resets the streak — no degrade ──
   const r = RootStateTracker.fresh("idle reset", 99);
-  for (let i = 0; i < ROOT_IDLE_DEGRADE_TURNS - 1; i++) r.applyFences([]);
+  r.applyFences(findStatePatches("```state\n{not json}\n```"));
+  for (let i = 1; i < ROOT_IDLE_DEGRADE_TURNS - 1; i++) r.applyFences([]);
   check("streak warms to threshold − 1", r.idleTurns === ROOT_IDLE_DEGRADE_TURNS - 1 && r.isActive);
   r.applyFences(findStatePatches(fenceText('{"state_patch": {"verifiedFacts[+]": "reset"}}')));
   check("accepted delta resets the streak", r.idleTurns === 0 && r.isActive);
-  for (let i = 0; i < ROOT_IDLE_DEGRADE_TURNS - 1; i++) r.applyFences([]);
-  check("streak rebuilds without carrying the old count", r.idleTurns === ROOT_IDLE_DEGRADE_TURNS - 1 && r.isActive);
-  r.applyFences([]); // rebuilt streak (3) + this one = the 4th consecutive idle turn
-  check("the rebuilt streak degrades exactly at the threshold", !r.isActive);
+  for (let i = 0; i < ROOT_IDLE_DEGRADE_TURNS; i++) r.applyFences([]);
+  check("prose after a reset does not rebuild the streak", r.idleTurns === 0 && r.isActive);
+  r.applyFences(findStatePatches("```state\n{not json}\n```"));
+  for (let i = 1; i < ROOT_IDLE_DEGRADE_TURNS; i++) r.applyFences([]);
+  check("a new rejection rebuilds the streak to the threshold", !r.isActive);
   r.applyFences(findStatePatches(fenceText(WIRE)));
   check("degrade is recoverable — the next clean fence re-activates", r.isActive);
 }
@@ -96,10 +106,8 @@ const WIRE = '{"state_patch": {"verifiedFacts[+]": "src/f.ts — fence wired"}}'
 {
   // ── partial batch parity: a good fence resets idle even while a sibling is rejected ──
   const t = RootStateTracker.fresh("partial batch", 99);
-  t.applyFences([]);
-  t.applyFences([]);
-  t.applyFences([]);
-  check("warm idle streak (3)", t.idleTurns === 3);
+  t.applyFences(findStatePatches("```state\n{not json}\n```"));
+  check("warm idle streak (1)", t.idleTurns === 1);
   const mixed = `garbage first\n\`\`\`state\n{not json}\n\`\`\`\n\`\`\`state\n${WIRE}\n\`\`\``;
   t.applyFences(findStatePatches(mixed));
   check("partial batch lands the good delta", t.snapshot().verifiedFacts.includes("src/f.ts — fence wired"));
@@ -120,10 +128,10 @@ const WIRE = '{"state_patch": {"verifiedFacts[+]": "src/f.ts — fence wired"}}'
 }
 
 {
-  // ── empty assistant text is one idle turn (index.ts feeds it verbatim) ──
+  // ── empty assistant text is not idle unless a rejection is outstanding ──
   const t = RootStateTracker.fresh("empty turn", 99);
   t.applyFences(findStatePatches(""));
-  check("empty assistant text is one idle turn", t.idleTurns === 1 && t.isActive);
+  check("empty assistant text is not an idle turn", t.idleTurns === 0 && t.isActive);
 }
 
 finish();

@@ -30,7 +30,7 @@ import { finalVarRepairCode, findFinalTag, findReplBlocks, stripStateFences } fr
 import { contextLength, contextSizeStats, contextTypeLabel } from "../text/tokens.ts";
 import { finalAnswerOf, formatReplOutputs, latestAnswerContentOf, latestStdoutOf, turnHadError } from "./answer.ts";
 import { compactHistory, elideOldToolPayloads, rebaseWithState, shouldCompact } from "./compaction.ts";
-import { applyStatePatches, compactJSON, freshRunState, runStateTurnBlock, SIGMA_UNCHANGED_LINE, type RunState, type RunStateMode } from "./run-state.ts";
+import { applyStatePatches, compactJSON, freshRunState, runStateTurnBlock, SIGMA_UNCHANGED_LINE, taskIdentity, type RunState, type RunStateMode } from "./run-state.ts";
 import { findStatePatches } from "../text/parsing.ts";
 import { complete1, completeDeps } from "../bridge/handlers/completion.ts";
 import type { SubcallHandlerDeps } from "../bridge/handlers/types.ts";
@@ -167,7 +167,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
     // as the product — RunState never activates there (§12.1).
     let runStateMode: RunStateMode =
       deps.config.enableRunState && input.narrative !== true
-        ? { kind: "active", state: freshRunState(input.rootPrompt.slice(0, 200)), retries: 0, idle: 0 }
+        ? { kind: "active", state: freshRunState(taskIdentity(input.originTask ?? input.rootPrompt)), retries: 0, idle: 0 }
         : { kind: "degraded", reason: input.narrative === true ? "narrative" : "disabled" };
 
     // Workstream F: a rectified continuation may shrink leaf admission for THIS run only —
@@ -384,6 +384,10 @@ export function createEngine(deps: EngineDeps): RunRlm {
         reasoning: deps.config.smartReasoning,
         ...deps.config.rootSampling,
       };
+      // Idle only while a rejected fence is still outstanding. An absent fence is free
+      // (STATE_FENCE_INSTRUCTION); `i >= 2` used to mark every later turn fence-requested
+      // and degraded explanation turns that correctly sent no patch.
+      let fenceDue = false;
       for (let i = 0; i < deps.config.maxIterations; i++) {
         limits.checkTimeout();
         if (selfReportId) emitter.emitSubcallUpdated({ id: selfReportId, detail: `turn ${i + 1}/${deps.config.maxIterations}` });
@@ -553,12 +557,13 @@ export function createEngine(deps: EngineDeps): RunRlm {
             findStatePatches(turn.response),
             i + 1,
             deps.config,
-            i >= 2, // the fence was requested this turn → empty turns count as idle (bench rec #2)
+            fenceDue,
             // Productive-turn parity (root tracker, recall W2): executed work that neither
             // raised nor skipped resets the idle streak — repl progress is progress.
             turn.blocks.length > 0 && !turnHadError(turn.results) && turn.skippedBlocks === 0,
           );
           runStateMode = applied.mode;
+          fenceDue = applied.observation !== undefined;
           if (applied.observation !== undefined) {
             pendingReplOutputs = `${applied.observation}\n\n${pendingReplOutputs}`;
           }
@@ -584,9 +589,10 @@ export function createEngine(deps: EngineDeps): RunRlm {
               // NOW" flaw fix: never abort mid-task, restructure-and-resume. Workstream A:
               // with Σ active the handoff IS the state (compactJSON — lossless where it
               // matters); the prose walk stays only for degraded runs.
+              const originTask = input.originTask ?? input.rootPrompt;
               const handoff = runStateMode.kind === "active"
-                ? stateHandoff(runStateMode.state, input.rootPrompt, deps.config.budgetHandoffChars)
-                : distillTrajectory(history, input.rootPrompt, deps.config.budgetHandoffChars);
+                ? stateHandoff(runStateMode.state, originTask, deps.config.budgetHandoffChars)
+                : distillTrajectory(history, originTask, deps.config.budgetHandoffChars);
               const cont = budget.nextContinuation();
               // Workstream F (MAS2 Eq. 5): one deterministic local fix for the continuation.
               const fix = rectify({
@@ -607,6 +613,7 @@ export function createEngine(deps: EngineDeps): RunRlm {
                   + (fix.kind === "narrow-paths"
                     ? `\n\n[rectify] narrow child spawns: rlm_query(task, paths=${JSON.stringify(fix.paths)})`
                     : ""),
+                originTask,
                 context: liveContext, // H9: sources added mid-run reach the leaf
                 budget: cont,
                 remainingTimeoutMs: limits.remainingTimeoutMs(),

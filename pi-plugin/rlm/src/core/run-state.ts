@@ -131,6 +131,43 @@ export function touchFact(verb: "read" | "edited", path: string): string {
 export function isTouchFact(text: string): boolean {
   return TOUCH_FACT_RE.test(text);
 }
+
+/** Tool-outcome keys (`tool:bash: …`) are Σ bookkeeping, not project facts. */
+const TOOL_OUTCOME_TEXT = /^tool:[A-Za-z0-9_-]+:/;
+/** Exact `read <path>` / `edited <path>` lines. A gotcha whose key starts with "read " is not one. */
+const EXACT_TOUCH = /^(?:read|edited) \S+$/;
+
+/**
+ * The one harvest predicate (deterministic notes AND the distill parser).
+ * File touches, empty tool outcomes, and sub-8-char scraps never become SkillState notes.
+ */
+export function isHarvestText(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 8) return false;
+  if (EXACT_TOUCH.test(trimmed)) return false;
+  if (TOOL_OUTCOME_TEXT.test(trimmed)) return false;
+  return true;
+}
+
+const CONTINUATION_HEAD = /^\[continuation \d+\]/;
+
+/**
+ * Σ task / note context: the original ask.
+ * A continuation prompt's first 200 chars are the handoff header ("hit its token cap"),
+ * which used to become every distilled note's BM25 context. When that header is present,
+ * the ORIGINAL TASK section is the identity; otherwise the text is itself.
+ */
+export function taskIdentity(task: string): string {
+  const trimmed = task.trim();
+  if (!CONTINUATION_HEAD.test(trimmed)) return trimmed.slice(0, TASK_MAX_CHARS);
+  const marker = "ORIGINAL TASK:\n";
+  const at = trimmed.indexOf(marker);
+  if (at < 0) return trimmed.slice(0, TASK_MAX_CHARS);
+  const rest = trimmed.slice(at + marker.length);
+  const split = rest.search(/\n\s*\n/);
+  const ask = (split >= 0 ? rest.slice(0, split) : rest).trim();
+  return (ask.length > 0 ? ask : trimmed).slice(0, TASK_MAX_CHARS);
+}
 const STATE_VALUE_MAX_CHARS = 120;
 // `findings` | `findings[+]` | `findings[2]` | `testedApproaches.h1`
 const PATCH_KEY = /^([a-zA-Z_][a-zA-Z0-9_]*)((?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)(\[\+\]|\[\d+\])?$/;

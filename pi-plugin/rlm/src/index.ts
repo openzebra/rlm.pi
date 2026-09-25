@@ -36,6 +36,7 @@ import { SessionArchive } from "./core/session-archive.ts";
 import { agentMessageText, firstLine, textContentOf } from "./text/agent-text.ts";
 import { findStatePatches } from "./text/parsing.ts";
 import { capToolResultText } from "./mode/native-guards.ts";
+import { replResultIsError, subcallFailureReason } from "./tool/repl-result.ts";
 import {
   STAGE_CUSTOM_TYPE,
   renderStageCard,
@@ -690,17 +691,24 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   pi.on("tool_result", async (event, ctx) => {
     // Root Σ WS-4: the tracker learns the session's shape from outcomes — deterministic, zero
     // model cooperation; fresh results always outrank Σ (paper §5.3 observation override).
+    // Pi sets isError only when a tool throws. repl() returns tracebacks and REPL error
+    // text instead, so the cell's own status is the flag the tracker and the transcript use.
+    const text = textContentOf(event.content);
+    const cellFailed = event.toolName === "repl" && replResultIsError(text, event.details);
+    const failed = event.isError || cellFailed;
+    const subFailed = !failed && event.toolName === "repl" ? subcallFailureReason(event.details) : undefined;
     const tracker = rootTracker;
     if (tracker !== undefined) {
       tracker.observeToolResult(
         event.toolName,
-        event.isError,
-        event.isError ? firstLine(textContentOf(event.content)) : "",
+        failed,
+        failed ? firstLine(text) : "",
       );
+      if (subFailed !== undefined) tracker.observeToolResult("subcall", true, subFailed);
       // Recall W2 deterministic harvest (commit-at-first-sight, paper §7): successful reads
       // are Σ facts the moment they happen — previously the only runtime feeds were tool
       // ERRORS and edits, so the early turns (the ones elided first) never reached Σ.
-      if (!event.isError && event.toolName === "read") {
+      if (!failed && event.toolName === "read") {
         const path = extractEditPaths(event.input)[0];
         if (path !== undefined) tracker.noteFact(touchFact("read", path));
       }
@@ -730,16 +738,24 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       }
     }
 
-    if (!nativeTradeHolds() || !CAPPED_RESULT_TOOLS.has(event.toolName)) return;
-    let changed = false;
-    const content = event.content.map((c) => {
-      if (c.type !== "text") return c;
-      const capped = capToolResultText(c.text);
-      if (capped === undefined) return c;
-      changed = true;
-      return { ...c, type: "text" as const, text: capped };
-    });
-    return changed ? { content } : undefined;
+    const cappedContent = !nativeTradeHolds() || !CAPPED_RESULT_TOOLS.has(event.toolName)
+      ? undefined
+      : (() => {
+          let changed = false;
+          const content = event.content.map((c) => {
+            if (c.type !== "text") return c;
+            const capped = capToolResultText(c.text);
+            if (capped === undefined) return c;
+            changed = true;
+            return { ...c, type: "text" as const, text: capped };
+          });
+          return changed ? content : undefined;
+        })();
+    if (!cellFailed && cappedContent === undefined) return;
+    return {
+      ...(cappedContent !== undefined ? { content: cappedContent } : {}),
+      ...(cellFailed ? { isError: true } : {}),
+    };
   });
 
   // ── Session shutdown: cleanup ──
