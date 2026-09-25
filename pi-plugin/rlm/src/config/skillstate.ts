@@ -23,6 +23,7 @@ import { deepMergeWithNullDeletion } from "../util/state-merge.ts";
 import { formatError } from "../util/errors.ts";
 import { isRecord } from "../util/type-guards.ts";
 import type { ApproachOutcome, RunState } from "../core/run-state.ts";
+import { isTouchFact } from "../core/run-state.ts";
 import type { RlmConfig } from "../core/types.ts";
 import { skillStateLines } from "../prompts/glossary.ts";
 
@@ -165,8 +166,16 @@ function isStringArray(value: unknown): value is readonly string[] {
 export async function loadSkillState(dir?: string): Promise<SkillStateFile> {
   try {
     const raw = JSON.parse(await readFile(skillStatePath(dir), "utf8")) as unknown;
-    if (isSkillStateFile(raw)) return raw;
-    return EMPTY_SKILL_STATE;
+    if (!isSkillStateFile(raw)) return EMPTY_SKILL_STATE;
+    // Drop file-touch notes written by older versions; the next flush persists the result.
+    let clean = true;
+    const projects: Record<string, readonly SkillNote[]> = {};
+    for (const [key, notes] of Object.entries(raw.projects)) {
+      const kept = notes.filter((n) => !isTouchFact(n.text));
+      if (kept.length !== notes.length) clean = false;
+      projects[key] = kept;
+    }
+    return clean ? raw : { version: 1, projects };
   } catch {
     return EMPTY_SKILL_STATE;
   }
@@ -225,7 +234,7 @@ function keywordsOf(text: string): readonly string[] {
 export function notesFromRunState(state: RunState, depth = 0): readonly SkillNoteInput[] {
   const notes: SkillNoteInput[] = [];
   for (const fact of state.verifiedFacts) {
-    if (fact.trim().length < 8) continue;
+    if (fact.trim().length < 8 || isTouchFact(fact)) continue;
     notes.push({
       text: fact.trim().slice(0, NOTE_MAX_CHARS),
       keywords: keywordsOf(fact),

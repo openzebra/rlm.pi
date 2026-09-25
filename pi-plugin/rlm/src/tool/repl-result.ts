@@ -36,6 +36,7 @@ export function buildReplResultText(
   raised = false,
   pendingTasks: readonly PendingTaskInfo[] = [],
   nudges: readonly string[] = [],
+  code = "",
 ): ReplResultText {
   const answerSubmitted = finalAnswer !== undefined;
   const stderrBlock = formatReplStderr(stderr);
@@ -43,7 +44,7 @@ export function buildReplResultText(
   // Model-visible text is capped; the caller keeps full stdout in `details` for the TUI.
   const cappedText = capReplResultText(rawText) ?? rawText;
   const delegated = subcalls.some((s) => s.kind === "llm" || s.kind === "batch" || s.kind === "rlm");
-  const nudge = answerSubmitted || raised ? undefined : replDelegationNudge(rawText.length, delegated);
+  const nudge = answerSubmitted || raised ? undefined : replDelegationNudge(rawText.length, delegated, code);
   const failedBg = subcalls.filter((s) => s.id.startsWith("bg") && s.status === "error").length;
   const pendingLine = backgroundPending > 0
     ? `\n\n[rlm] ${backgroundPending} background task(s) still running — ${pendingCollectHint(pendingTasks)}.`

@@ -86,7 +86,10 @@ function lastLine(text: string): string {
 // ── Parameter schema ──
 
 const ReplToolParams = Object.freeze(Type.Object({
-  code: Type.String({ description: "Python code to execute in the persistent REPL sandbox" }),
+  code: Type.String({
+    description: "Python code to execute in the persistent REPL sandbox",
+    pattern: "\\S",
+  }),
 }));
 
 // ── Mutable bridge state (handler indirection) ──
@@ -460,6 +463,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
           result.raised,
           result.pendingTasks,
           result.nudges,
+          params.code,
         );
 
         const details: ReplDetails = {

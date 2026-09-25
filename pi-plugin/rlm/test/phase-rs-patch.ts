@@ -12,6 +12,7 @@ import {
   isRunState,
   RUN_STATE_IDLE_DEGRADE_TURNS,
   RUN_STATE_LIMITS,
+  STATE_FENCE_INSTRUCTION,
   type RunStateMode,
 } from "../src/core/run-state.ts";
 import { findStatePatches } from "../src/text/parsing.ts";
@@ -127,6 +128,29 @@ function base() {
     const r = applyPatch(nested.value, { state_patch: { "testedApproaches.h1": { status: "succeeded" } } }, 2);
     check("nested implicit drop rejected (entry lost 'evidence')", !r.ok);
   }
+}
+
+// ── outcome field writes ──
+{
+  const s1 = applyPatch(base(), { state_patch: { "testedApproaches.h1": { status: "partial", note: "n" } } }, 1);
+  if (s1.ok) {
+    const upd = applyPatch(s1.value, { state_patch: { "testedApproaches.h1.note": "n2" } }, 2);
+    check("outcome field update accepted", upd.ok && upd.value.testedApproaches.h1?.status === "partial");
+    check("prior Σ untouched by field write", JSON.stringify(s1.value.testedApproaches.h1) === '{"status":"partial","note":"n"}');
+    const flip = applyPatch(s1.value, { state_patch: { "testedApproaches.h1.status": "failed" } }, 2);
+    check("field write yielding invalid outcome rejected", !flip.ok);
+    check("too-deep outcome path rejected", !applyPatch(s1.value, { state_patch: { "testedApproaches.h1.x.y": "z" } }, 2).ok);
+  }
+  check("field write on missing entry rejected", !applyPatch(base(), { state_patch: { "testedApproaches.h9.status": "failed" } }, 1).ok);
+  // The fence contract's own example must apply as written.
+  const example = /\{"state_patch".*\}\}/.exec(STATE_FENCE_INSTRUCTION)?.[0] ?? "";
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(example);
+  } catch {
+    parsed = null;
+  }
+  check("STATE_FENCE_INSTRUCTION example applies", applyPatch(base(), parsed, 1).ok);
 }
 
 // ── type guards / schema rejections ─────────────────────────────────────────────

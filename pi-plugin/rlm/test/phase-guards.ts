@@ -135,9 +135,10 @@ async function main() {
   check("repl stdout under cap is untouched", capReplResultText("y".repeat(TOOL_RESULT_CAP)) === undefined);
 
   // ── delegation nudge ──
-  check("nudge fires: big stdout, 0 sub-LLM calls", replDelegationNudge(5_000, false) !== undefined);
-  check("no nudge: sub-LLM calls made", replDelegationNudge(5_000, true) === undefined);
-  check("no nudge: small stdout", replDelegationNudge(NUDGE_STDOUT_CHARS, false) === undefined);
+  check("nudge fires: located, dumped raw text, 0 sub-LLM calls", replDelegationNudge(5_000, false, "hits = search('x')\nprint(hits)") !== undefined);
+  check("no nudge: sub-LLM calls made", replDelegationNudge(5_000, true, "t = llm_query('a')\nawait_task(t)") === undefined);
+  check("no nudge: small stdout", replDelegationNudge(NUDGE_STDOUT_CHARS, false, "print(search('x'))") === undefined);
+  check("no nudge: plain print without locate", replDelegationNudge(5_000, false, "print(answers)") === undefined);
 
   // ── prompts ──
   check(
@@ -161,18 +162,15 @@ async function main() {
   // ── repl result assembly (exercises the real production function, not a hand-built concatenation) ──
   const bigStdout = "z".repeat(10_000);
   const llmSubcall = { id: "s1", depth: 0, kind: "llm" as const, label: "q", status: "done" as const, startedAt: 0, tokens: 0, tokensIn: 0, tokensOut: 0 };
-  // Big stdout + no subcalls → stdout is capped and the zero-subcall nudge fires.
-  const solo = buildReplResultText(bigStdout, undefined, []);
+  // Big stdout after a locate call + no subcalls → stdout is capped and the nudge fires.
+  const solo = buildReplResultText(bigStdout, undefined, [], 0, [], "", false, [], [], "print(search('x'))");
   check(
     "repl assembly caps stdout and nudges zero-subcall",
     solo.text.includes("repl() stdout capped") && solo.text.includes("0 sub-LLM calls"),
     solo.text.slice(-90),
   );
-  check(
-    "nudge carves out authoring",
-    solo.text.includes("Authoring an edit body yourself is correct"),
-    solo.text.slice(-120),
-  );
+  const printedResults = buildReplResultText(bigStdout, undefined, []);
+  check("no nudge when printing collected results", !printedResults.text.includes("sub-LLM calls"));
   // A delegation subcall present → no nudge even with big stdout.
   const delegated = buildReplResultText(bigStdout, undefined, [llmSubcall]);
   check("delegation subcall suppresses the nudge", !delegated.text.includes("sub-LLM calls"));

@@ -72,15 +72,18 @@ export function capReplResultText(text: string): string | undefined {
 export const NUDGE_STDOUT_CHARS = 2_000;
 
 /**
- * One-line corrective nudge when a repl() call printed bulk text without delegating.
- * Returns undefined when behavior was fine (small output, or a delegation happened).
+ * One-line corrective nudge when a repl() call located pointers (search/grep_context/outline)
+ * and then dumped the raw text itself instead of delegating the reading. Printing collected
+ * or computed results is correct orchestration and must not be nudged.
  * Takes primitives (no RlmSubcall dependency) so the tool layer owns the detection.
  */
-export function replDelegationNudge(stdoutChars: number, delegated: boolean): string | undefined {
-  if (delegated || stdoutChars <= NUDGE_STDOUT_CHARS) return undefined;
+const LOCATE_CALL_RE = /\b(?:search|grep_context|outline)\s*\(/;
+
+export function replDelegationNudge(stdoutChars: number, delegated: boolean, code: string): string | undefined {
+  if (delegated || stdoutChars <= NUDGE_STDOUT_CHARS || !LOCATE_CALL_RE.test(code)) return undefined;
   return (
-    `\n[RLM: this repl() printed ${stdoutChars.toLocaleString()} chars with 0 sub-LLM calls — ` +
-    "if you were READING, delegate via llm_query / llm_batch / llm_query_chunked. " +
-    "Authoring an edit body yourself is correct and needs no delegation.]"
+    `\n[RLM: this repl() located with search/grep and printed ${stdoutChars.toLocaleString()} chars of raw text with 0 sub-LLM calls — ` +
+    "delegate the READING via llm_query / llm_batch / llm_query_chunked instead of dumping bodies. " +
+    "Printing your own collected/computed results is fine.]"
   );
 }

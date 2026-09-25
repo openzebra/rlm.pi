@@ -30,6 +30,7 @@ import { buildNativeSystemPrompt } from "./prompts/native.ts";
 import { SkillStore, notesFromRunState, xiQuery } from "./config/skillstate.ts";
 import { buildRootDigestCompaction } from "./core/root-digest.ts";
 import { ROOT_IDLE_DEGRADE_TURNS, RootStateTracker } from "./core/root-state.ts";
+import { touchFact } from "./core/run-state.ts";
 import { elideStalePayloads, spliceSigmaSnapshot } from "./core/root-context.ts";
 import { SessionArchive } from "./core/session-archive.ts";
 import { agentMessageText, firstLine, textContentOf } from "./text/agent-text.ts";
@@ -701,7 +702,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       // ERRORS and edits, so the early turns (the ones elided first) never reached Σ.
       if (!event.isError && event.toolName === "read") {
         const path = extractEditPaths(event.input)[0];
-        if (path !== undefined) tracker.noteFact(`read ${path}`);
+        if (path !== undefined) tracker.noteFact(touchFact("read", path));
       }
     }
 
@@ -716,7 +717,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       for (const p of paths) {
         const body = await readDiskFile(p, cwd);
         if (body === null) continue;
-        rootTracker?.noteFact(`edited ${p}`); // WS-4: the tracker learns the session's file shape
+        rootTracker?.noteFact(touchFact("edited", p));
         try {
           await sandboxManager.refreshFileFromDisk(p, body, cwd);
           // Listing must re-inject if we rewrote payload identity

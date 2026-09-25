@@ -115,6 +115,22 @@ const NEXT_STEP_MAX_CHARS = 300;
 // rejected with an explicit error (a restatement-shaped patch must come back as feedback —
 // §5.7: consistent validator feedback is the small-model bottleneck).
 const STATE_PATCH_MAX_KEYS = 5;
+const APPROACH_OUTCOME_HINT =
+  'ApproachOutcome — write the whole entry: "testedApproaches.<id>": {"status": "failed", "reason": "…"} ' +
+  "(partial→note, succeeded→evidence)";
+
+// File-touch facts ("read <path>" / "edited <path>") are session bookkeeping, never skill notes.
+const TOUCH_FACT_RE = /^(?:read|edited) \S/;
+
+/** Runtime feed constructor — the single spelling of a file-touch Σ fact. */
+export function touchFact(verb: "read" | "edited", path: string): string {
+  return `${verb} ${path}`;
+}
+
+/** True when a Σ fact is a runtime file-touch feed (never distills into SkillState notes). */
+export function isTouchFact(text: string): boolean {
+  return TOUCH_FACT_RE.test(text);
+}
 const STATE_VALUE_MAX_CHARS = 120;
 // `findings` | `findings[+]` | `findings[2]` | `testedApproaches.h1`
 const PATCH_KEY = /^([a-zA-Z_][a-zA-Z0-9_]*)((?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)(\[\+\]|\[\d+\])?$/;
@@ -425,6 +441,23 @@ function applyKey(draft: MutableState, rawKey: string, value: unknown): Result<n
     cursor = next;
   }
   const leaf = middles[middles.length - 1];
+  if (root === "testedApproaches" && middles.length > 1) {
+    // Single-field write (`testedApproaches.h1.reason`); the result must remain a valid outcome.
+    // Copy first: `cursor` aliases the previous state.
+    if (middles.length > 2 || (value !== null && typeof value !== "string")) {
+      return err({ kind: "type", path: rawKey, expected: APPROACH_OUTCOME_HINT });
+    }
+    const candidate: Record<string, unknown> = { ...cursor };
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- null deletes the field
+    if (value === null) delete candidate[leaf];
+    else candidate[leaf] = clampStateValue(value);
+    if (!isApproachOutcome(candidate)) {
+      return err({ kind: "type", path: rawKey, expected: APPROACH_OUTCOME_HINT });
+    }
+    refreshOrder(record, middles[0], candidate);
+    commitRecord(draft, root, record);
+    return ok(null);
+  }
   if (value === null) {
     // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- ⊕ null = delete (paper §3.2)
     delete cursor[leaf];
@@ -432,8 +465,8 @@ function applyKey(draft: MutableState, rawKey: string, value: unknown): Result<n
     return ok(null);
   }
   if (root === "testedApproaches") {
-    if (!isPlainObject(value) || !isApproachOutcome(value)) {
-      return err({ kind: "type", path: rawKey, expected: "ApproachOutcome" });
+    if (middles.length !== 1 || !isPlainObject(value) || !isApproachOutcome(value)) {
+      return err({ kind: "type", path: rawKey, expected: APPROACH_OUTCOME_HINT });
     }
     // Contract clamp: outcome strings honor the promised ≤120 chars (nulls stay nulls).
     const outcome = clampOutcomeRecord(value);
@@ -611,7 +644,7 @@ export function statePatchObservation(problems: readonly string[]): string | und
 
 export const STATE_FENCE_INSTRUCTION: string =
   "[state] Your user-facing reply is normal prose — a readable report. The ```state fence is OPTIONAL compact metadata that trails it, never a replacement for the report:\n" +
-  '{"state_patch": {"verifiedFacts[+]": "src/x.ts — fact", "testedApproaches.h1.status": "failed"}}\n' +
+  '{"state_patch": {"verifiedFacts[+]": "src/x.ts — fact", "testedApproaches.h1": {"status": "failed", "reason": "grep too narrow"}}}\n' +
   "Σ is an index of pointers, not a report: ≤ 5 keys per patch, every string value ≤ 120 chars, " +
   "telegraphic style (`path — fact`, `verdict — numbers`). NEVER paste findings, tables, JSON " +
   "blobs, or long excerpts into Σ — the prose carries the story, Σ carries only the pointers.\n" +

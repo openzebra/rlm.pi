@@ -62,15 +62,20 @@ export async function complete1(
   // Workstream D (DRY #1): the ONE grounding application — llm_query, batch items, rlm→llm
   // demotion and depth-cap degrade all pass through here, so all of them get Ξ facts or none
   // does. Below-threshold prompts come back byte-identical from the groundLeaf impl.
+  // Grounding is optional: if it pushes a fitting prompt over the cap, send the raw prompt.
   const grounded = deps.groundLeaf !== undefined ? deps.groundLeaf(prompt) : prompt;
-  if (grounded.length > config.maxPromptChars) {
+  const effective =
+    grounded.length > config.maxPromptChars && prompt.length <= config.maxPromptChars
+      ? prompt
+      : grounded;
+  if (effective.length > config.maxPromptChars) {
     return formatError(
-      `sub-LLM prompt exceeded the size limit (${grounded.length.toLocaleString()} chars > ` +
-        `${config.maxPromptChars.toLocaleString()}). Shorten or chunk the prompt before calling llm_query.`,
+      `sub-LLM prompt exceeded the size limit (${effective.length.toLocaleString()} chars > ` +
+      `${config.maxPromptChars.toLocaleString()}). Shorten or chunk the prompt before calling llm_query.`,
     );
   }
   try {
-    const messages: ChatMsg[] = [{ role: "user", content: grounded }];
+    const messages: ChatMsg[] = [{ role: "user", content: effective }];
     const res = await deps.leafGate.run(() =>
       modelComplete(messages, {
         model: deps.getLlmModel(),

@@ -127,3 +127,22 @@ class Task:
 
     def __repr__(self) -> str:
         return f"<Task {self.kind} {'done' if self.done else 'running'} {self.label}>"
+
+    # A Task handle is not its result; make misuse (len(t), t[0], dict(t), `for x in t`)
+    # name the fix instead of a cryptic TypeError.
+
+    def _not_a_result(self) -> str:
+        state = "finished" if self.done else "still running"
+        return (
+            f"Task is a handle, not the result ({self.kind} {state}). "
+            "Collect it first: result = await_task(t)"
+        )
+
+    def __len__(self) -> int:
+        raise TypeError(self._not_a_result())
+
+    def __getitem__(self, key):
+        raise TypeError(self._not_a_result())
+
+    def __iter__(self):
+        raise TypeError(self._not_a_result())
