@@ -409,8 +409,15 @@ function applyKey(draft: MutableState, rawKey: string, value: unknown): Result<n
       return err({ kind: "schema", detail: `unknown array field "${root}"` });
     }
     if (op === "[+]") {
-      if (typeof value !== "string") return err({ kind: "type", path: rawKey, expected: "string" });
-      list.push(clampStateValue(value));
+      // Models sometimes emit an array for `[+]` (e.g. "verifiedFacts[+]": ["a","b"]) —
+      // append each string; dedup is the finalize pass's job, same as single appends.
+      if (typeof value === "string") {
+        list.push(clampStateValue(value));
+      } else if (isStringArray(value)) {
+        list.push(...value.map(clampStateValue));
+      } else {
+        return err({ kind: "type", path: rawKey, expected: "string | string[]" });
+      }
     } else if (op !== undefined) {
       const index = Number.parseInt(op.slice(1, -1), 10);
       if (value === null) {

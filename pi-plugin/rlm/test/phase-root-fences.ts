@@ -134,4 +134,32 @@ const WIRE = '{"state_patch": {"verifiedFacts[+]": "src/f.ts — fence wired"}}'
   check("empty assistant text is not an idle turn", t.idleTurns === 0 && t.isActive);
 }
 
+{
+  // ── SpecRune regression: ONE fence holding SEVERAL concatenated objects ──
+  // The model jammed two {"state_patch":…} JSON bodies into a single ```state fence.
+  // Whole-body JSON.parse fails; tolerant salvage must land BOTH deltas with no rejection.
+  const t = RootStateTracker.fresh("concat", 99);
+  const glued = `{"state_patch": {"verifiedFacts[+]": "src/a.ts — first"}}\n{"state_patch": {"openQuestions[+]": "why glued?"}}`;
+  t.applyFences(findStatePatches(fenceText(glued)));
+  check("salvaged object 1 applies", t.snapshot().verifiedFacts.includes("src/a.ts — first"));
+  check("salvaged object 2 applies", (t.snapshot().openQuestions ?? []).includes("why glued?"));
+  check("concat salvage is not a rejection", t.takePendingObservation() === undefined);
+  check("concat salvage resets idle", t.idleTurns === 0);
+}
+
+{
+  // ── SpecRune regression: `[+]` with an ARRAY value ──
+  // "verifiedFacts[+]": ["a","b"] used to fail with type-mismatch (expected string).
+  // Each string must append; non-string entries still reject.
+  const t = RootStateTracker.fresh("array append", 99);
+  t.applyFences(findStatePatches(fenceText('{"state_patch": {"verifiedFacts[+]": ["src/x.ts — one", "src/y.ts — two"]}}')));
+  const facts = t.snapshot().verifiedFacts;
+  check("array append lands every string", facts.includes("src/x.ts — one") && facts.includes("src/y.ts — two"));
+  check("array append is not a rejection", t.takePendingObservation() === undefined);
+
+  const bad = RootStateTracker.fresh("array append bad", 99);
+  bad.applyFences(findStatePatches(fenceText('{"state_patch": {"verifiedFacts[+]": ["ok", 42]}}')));
+  check("mixed array still rejects", (bad.takePendingObservation() ?? "").includes("rejected"));
+}
+
 finish();

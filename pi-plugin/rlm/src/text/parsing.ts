@@ -134,7 +134,26 @@ export function findStatePatches(text: string): readonly StateFenceResult[] {
     try {
       out.push({ ok: true, value: JSON.parse(body) as unknown });
     } catch (err: unknown) {
-      out.push({ ok: false, error: errorMessage(err) });
+      // Tolerant multi-object recovery (SpecRune bug): models sometimes concatenate
+      // several {"state_patch":…} objects inside ONE fence, which fails whole-body
+      // JSON.parse. Salvage each balanced object; only when nothing parses do we
+      // surface the error (the observation channel for the retry ladder).
+      let i = 0;
+      let salvaged = 0;
+      for (;;) {
+        while (i < body.length && body.charAt(i).trim() === "") i++;
+        if (i >= body.length || body.charAt(i) !== "{") break;
+        const obj = balancedJsonObject(body, i);
+        if (obj === undefined) break;
+        try {
+          out.push({ ok: true, value: JSON.parse(obj) as unknown });
+          salvaged += 1;
+        } catch {
+          // Unparseable fragment — skip it, keep scanning.
+        }
+        i += obj.length;
+      }
+      if (salvaged === 0) out.push({ ok: false, error: errorMessage(err) });
     }
   }
   // Tolerant harvest over fence-free remainder (well-formed payloads already taken above).
