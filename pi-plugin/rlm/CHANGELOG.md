@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.27] — 2026-10-05
+
+### Fixed
+
+- **State fences: tolerate concatenated JSON objects in one fence and array values for
+  `[+]`** (`core/run-state.ts`, `text/parsing.ts`, #33). Two parsing failures reported by
+  SpecRune both landed on the same retry ladder instead of applying the state delta:
+  - A single ```state fence containing several concatenated `{"state_patch":…}` objects
+    failed whole-body `JSON.parse`. `findStatePatches` now salvages each balanced object
+    when the whole body does not parse; the error only surfaces when nothing parses at all.
+  - `"verifiedFacts[+]": ["a","b"]` (array instead of string) was rejected with a type
+    mismatch. The `[+]` append path now accepts `string | string[]` and appends each entry;
+    mixed arrays still reject.
+
+  Neither change relaxes validation: rejected patches still feed the observation channel,
+  and dedup remains the finalize pass's job. Regression tests cover both cases in
+  `test/phase-root-fences.ts`.
+
 ## [0.3.26] — 2026-09-30
 
 ### Fixed
