@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.28] — 2026-10-07
+
 ### Added
 
 - **Σ fence fold in the transcript** (`text/parsing.ts` `foldStateFences`, `ui/sigma-i18n.ts`
