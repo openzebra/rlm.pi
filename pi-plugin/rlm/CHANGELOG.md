@@ -15,11 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (up to 4 clipped items, remainder count, rejection note; plain fallback when nothing
   parses). One digest per message. The original text is restored on the `context` clone, so
   the model still reads its own fences verbatim and in English.
-- **Display-layer i18n (`en` / `zh`)** — new `displayLocale` setting (rlm.json + `/rlm-config`
-  panel, default `en`, applied at `session_start` and live on panel save). Config panel,
+- **Display-layer i18n** — new `displayLocale` setting (rlm.json + `/rlm-config`
+  panel, default `auto` — see below; applied at `session_start` and live on panel save). Config panel,
   stage cards, status line, intro guide, model picker and notifies resolve through one string
   table in `ui/sigma-i18n.ts`. Model-facing prompts stay English.
-
 - **Russian UI (`ru`) and automatic locale detection.** `displayLocale` is now
   `auto | en | zh | ru`, default `auto`: resolved from `PI_LANG` > `LC_ALL` > `LC_MESSAGES` >
   `LANG` (first non-empty, non-`C`/`POSIX`, matched by language prefix), then the runtime
