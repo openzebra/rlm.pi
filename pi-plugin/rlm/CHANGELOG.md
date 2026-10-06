@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stage cards, status line, intro guide, model picker and notifies resolve through one string
   table in `ui/sigma-i18n.ts`. Model-facing prompts stay English.
 
+- **Russian UI (`ru`) and automatic locale detection.** `displayLocale` is now
+  `auto | en | zh | ru`, default `auto`: resolved from `PI_LANG` > `LC_ALL` > `LC_MESSAGES` >
+  `LANG` (first non-empty, non-`C`/`POSIX`, matched by language prefix), then the runtime
+  `Intl` locale, else English. Pure `detectSigmaLocale()` in `ui/sigma-i18n.ts`; the setting
+  is resolved at `session_start` and on panel save. Existing explicit `en`/`zh` values keep
+  working; model-facing prompts stay English.
+
 ### Fixed
 
 - Review follow-ups to #34: persisted `displayLocale` was never applied after restart; `$&`/`$'`

@@ -1,42 +1,76 @@
 /**
- * Display-layer i18n (zh/en) + the Σ fence digest — UI-facing wording ONLY.
+ * Display-layer i18n (en/zh/ru) + the Σ fence digest — UI-facing wording ONLY.
  * Model-facing (wire) wording stays English in `prompts/glossary.ts`; nothing here is ever
  * sent to a model.
  */
 
+import type { DisplayLocale, SigmaLocale } from "../core/types.ts";
 import { isRecord } from "../util/type-guards.ts";
 
 /** Transcript-side fold of ```state fences — display only; `foldStateFences` injects the
  * digest lines as a markdown quote block.
  *
- * Bilingual display layer: the language comes from rlm.json `displayLocale` (default "en"),
- * never from the environment. Wire prompts (model-facing) stay English by design. */
-export type SigmaLocale = "zh" | "en";
-/** Process-wide display language, seeded from rlm.json `displayLocale` at `session_start`
- * and on panel save. Module-level mutable by design (a display-only singleton, never part of
- * Σ or any wire text): renderers resolve per call so a panel save re-localizes stage
- * cards/status lines without a restart. */
+ * Display layer: languages en / zh / ru. rlm.json `displayLocale` is "auto" (default — resolved
+ * from the environment) or an explicit language. Wire prompts (model-facing) stay English. */
+export type { SigmaLocale, DisplayLocale };
+
+/** Pure locale sniffing from POSIX env vars: PI_LANG (explicit plugin override) > LC_ALL >
+ * LC_MESSAGES > LANG. The first non-empty, non-"C"/"POSIX" value decides by language prefix
+ * (`ru_RU.UTF-8`, `zh-CN`, …); an unsupported language is English. With no usable variable,
+ * `intlLocale` (the runtime's `Intl` locale) is consulted the same way. */
+export function detectSigmaLocale(
+  env: Readonly<Record<string, string | undefined>>,
+  intlLocale?: string,
+): SigmaLocale {
+  const pick = (v: string | undefined): SigmaLocale | undefined => {
+    const lang = (v ?? "").trim().toLowerCase();
+    if (lang === "" || lang === "c" || lang === "posix") return undefined;
+    if (lang.startsWith("ru")) return "ru";
+    if (lang.startsWith("zh")) return "zh";
+    return "en";
+  };
+  for (const key of ["PI_LANG", "LC_ALL", "LC_MESSAGES", "LANG"] as const) {
+    const hit = pick(env[key]);
+    if (hit !== undefined) return hit;
+  }
+  return pick(intlLocale) ?? "en";
+}
+
+const systemLocale = (): SigmaLocale => {
+  let intl: string | undefined;
+  try {
+    intl = Intl.DateTimeFormat().resolvedOptions().locale;
+  } catch {
+    intl = undefined;
+  }
+  return detectSigmaLocale(process.env, intl);
+};
+
+/** Process-wide RESOLVED display language, seeded from rlm.json `displayLocale` at
+ * `session_start` and on panel save. Module-level mutable by design (a display-only singleton,
+ * never part of Σ or any wire text): renderers resolve per call so a panel save re-localizes
+ * stage cards/status lines without a restart. */
 let sigmaOverride: SigmaLocale = "en";
 
-/** Set the plugin-wide display language (rlm.json `displayLocale`). */
-export function setDisplayLocale(v: SigmaLocale): void {
-  sigmaOverride = v;
+/** Set the plugin-wide display language (rlm.json `displayLocale`; "auto" → system locale). */
+export function setDisplayLocale(v: DisplayLocale): void {
+  sigmaOverride = v === "auto" ? systemLocale() : v;
 }
 
 /** The ONE locale resolver — display-layer strings across the plugin (stage cards, status
  * line, Σ fold, config panel) resolve through this instead of ad-hoc literals.
- * Precedence: explicit arg (panel pass-through) > session override (rlm.json). Default English. */
+ * Precedence: explicit arg (panel pass-through) > session language (rlm.json / auto). */
 export function resolveSigmaLocale(override?: SigmaLocale): SigmaLocale {
   return override ?? sigmaOverride;
 }
 
-/** Σ section keys the digest labels; zh/en tables must cover exactly these. */
+/** Σ section keys the digest labels; locale tables must cover exactly these. */
 const SIGMA_SECTION_KEYS = Object.freeze(["findings", "verifiedFacts", "testedApproaches", "openQuestions", "artifacts"] as const);
 type SigmaSectionKey = (typeof SIGMA_SECTION_KEYS)[number];
 const isSigmaSectionKey = (k: string): k is SigmaSectionKey => (SIGMA_SECTION_KEYS as readonly string[]).includes(k);
 
 /** Config-panel row ids (label + description each); `__sigma_window__`/`__save__` are the
- * non-editable rows. One key union ⇒ tsc flags any zh/en drift. */
+ * non-editable rows. One key union ⇒ tsc flags any locale drift. */
 export type PanelKey =
   | "maxDepth" | "maxIterations" | "execTimeoutS" | "maxConcurrentSubcalls" | "maxConcurrentChildren"
   | "maxTimeoutMs" | "maxTokens" | "maxErrors" | "orchestrator" | "compaction" | "compactionThresholdPct"
@@ -183,9 +217,128 @@ const SIGMA_STRINGS: Readonly<Record<SigmaLocale, Readonly<{
       requestTimeoutMs: "父侧对每个沙箱请求的看门狗；超时则杀掉 Python worker。",
       contextLoader: "允许 add_context() 把外部目录、文件、文档或 git 仓库拉入上下文。",
       autoSeedCwd: "首次 repl() 调用时把工作目录注入上下文（否则从空开始）。",
-      displayLocale: "界面文本语言（Σ 折叠、阶段卡片、状态行、本面板）。默认英文；模型面提示词保持英文。",
+      displayLocale: "界面文本语言（Σ 折叠、阶段卡片、状态行、本面板）。auto 按系统语言（PI_LANG / LC_ALL / LANG）。模型面提示词保持英文。",
       __sigma_window__: "查询期窗口校准，仅限 rlm.json：rootContextKeepTurns（默认 4）、rootContextElideChars、rootContextSnapshot、rootArchiveMaxChars（0 = 关闭归档；被省略的轮次否则无法找回）。会话恢复/分叉：tracker 惰性重建，Σ 由实时观察重新积累 — 恢复后的首次调用 Σ 为空，属设计如此。",
       __save__: "保存这些设置并关闭（Esc 同样保存）。",
+    }),
+  }),
+  ru: Object.freeze({
+    header: "**Σ записано:**",
+    tail: "*(ещё {n} в архиве — поток данных не меняется)*",
+    plain: "Σ-коммит — свёрнут, поток данных не меняется",
+    plainSuffix: " (принято: {a}{r})",
+    rejected: "отклонено",
+    sections: Object.freeze({ findings: "находка", verifiedFacts: "факт", testedApproaches: "подход", openQuestions: "вопрос", artifacts: "артефакт" }),
+    cards: Object.freeze({
+      digest: "**◆ дайджест #{i}** свёрнуто ходов: {t} · {b} ток. (пересчёт {r})",
+      degrade: "**⚠ Σ деградировал** простой {n}/{m} ходов, допускающих fence · {reason}",
+      recover: "**◆ Σ восстановлен** принято fence: {a}/{t}",
+      distill: "**◆ skill.state** +{n} заметок · всего {t}{byTag}",
+    }),
+    status: Object.freeze({ elided: "скрыто {n}", digest: "дайджест {n}", degraded: "деградаций {n}" }),
+    panel: Object.freeze({
+      title: "Настройки RLM",
+      labels: Object.freeze({
+        maxDepth: "Макс. глубина рекурсии",
+        maxIterations: "Макс. число итераций",
+        execTimeoutS: "Таймаут REPL-блока (с)",
+        maxConcurrentSubcalls: "Макс. параллельных подвызовов",
+        maxConcurrentChildren: "Макс. параллельных дочерних движков",
+        maxTimeoutMs: "Лимит времени запуска (мин)",
+        maxTokens: "Лимит токенов",
+        maxErrors: "Макс. ошибок подряд",
+        orchestrator: "Доп. подсказка оркестратору",
+        compaction: "Сжатие траектории",
+        compactionThresholdPct: "Порог сжатия (%)",
+        rootSamplingMaxTokens: "Лимит вывода корневой модели (ток.)",
+        smartReasoning: "Уровень рассуждений корня",
+        subSamplingMaxTokens: "Лимит вывода воркера (ток.)",
+        subSamplingTemperature: "Температура воркера",
+        sandboxInitTimeoutMs: "Таймаут запуска песочницы",
+        requestTimeoutMs: "Таймаут запроса к песочнице (мин)",
+        contextLoader: "Загрузчик контекста",
+        autoSeedCwd: "Автозагрузка рабочей папки",
+        displayLocale: "Язык интерфейса",
+        __sigma_window__: "Окно корневого Σ (калибровка)",
+        __save__: "Сохранить и закрыть",
+      }),
+      hint: "↑↓ перемещение · enter изменить · esc сохранить и закрыть",
+    }),
+    intro: Object.freeze({
+      on: "● RLM ВКЛ — llm={llm} · rlm={rlm}",
+      off: "○ RLM ВЫКЛ",
+      guide: `# Режим RLM
+
+{state}
+
+## Команды
+
+- \`/rlm\` — переключить режим RLM (горячая клавиша: Ctrl+Shift+R). Выключение также останавливает текущий запрос.
+- \`/rlm-llm\` — закрепить LLM-модель для llm_query / llm_batch / map_files
+- \`/rlm-rlm\` — закрепить модель для дочерних движков rlm_query / rlm_batch (по умолчанию — модель сессии)
+- \`/rlm-config\` — лимиты запуска и настройки движка
+- \`/rlm-stop\` — прервать всю текущую работу RLM: запуски, нативные repl-ячейки и фоновые задачи (выйти из режима RLM — /rlm или Ctrl+Shift+R)
+
+## Живое дерево
+
+Пока работают агенты, под редактором показывается дерево — Ctrl+R переводит на него фокус, Enter открывает хронологию агента.`,
+    }),
+    expand: "развернуть",
+    notify: Object.freeze({
+      saveFailed: "RLM: не удалось сохранить настройки в ~/.pi/agent/rlm.json",
+      aborted: "Работа RLM прервана — запуски, repl-ячейки и фоновые задачи остановлены.",
+      idle: "Нет активной работы RLM.",
+      pinnedRlm: "RLM: закреплённая модель rlm={m} недоступна — используется модель сессии, пока она не вернётся",
+      pinnedLlm: "RLM: закреплённая модель llm={m} недоступна — используется самая дешёвая, пока она не вернётся",
+      rlmFollows: "RLM: rlm использует модель сессии",
+      rlmPinned: "RLM: rlm={m}{r}",
+      llmPinned: "RLM: llm={m}{r}",
+      llmCheapest: " (самая дешёвая, авто)",
+      noneAvailable: "(нет доступных)",
+    }),
+    picker: Object.freeze({
+      titleLlm: "LLM-модель — провайдер",
+      titleRlm: "RLM-модель — провайдер",
+      cheapest: "⟳ самая дешёвая (авто)",
+      cheapestDesc: "Всегда использовать самую дешёвую модель с настроенным ключом",
+      followSession: "⌁ модель сессии",
+      followSessionDesc: "Дочерние движки rlm_query / rlm_batch используют активную модель pi",
+      filterHint: "↑↓ навигация • ввод — фильтр • enter выбрать • esc отмена",
+      modelsCount: "моделей: {n}",
+      backToProviders: "← провайдеры",
+      backToModels: "← модели {p}",
+      providerModels: "{p} › модели",
+      reasoning: "рассуждения",
+      none: "нет",
+      noReasoning: "Без рассуждений",
+      useLevel: "Уровень рассуждений: {l}",
+      useLevelFor: "Уровень рассуждений {l} для {m}",
+      thinkingTitle: "Уровень размышлений",
+      noModels: "RLM: нет доступных моделей (добавьте ключ провайдера в Pi или расширьте --models / enabledModels)",
+    }),
+    descriptions: Object.freeze({
+      maxDepth: "rlm_query глубже этого уровня превращается в обычный llm_query (1 = без рекурсии).",
+      maxIterations: "Макс. число ходов корневого REPL, после чего RLM просит модель дать окончательный ответ. Значение намеренно большое — запуск обычно завершается раньше по FINAL, ошибкам или времени.",
+      execTimeoutS: "Лимит времени на один Python REPL-блок, написанный моделью.",
+      maxConcurrentSubcalls: "Размер пула параллелизма для llm_batch и rlm_batch.",
+      maxConcurrentChildren: "Число одновременных дочерних движков rlm_query на каждой глубине. Каждый — отдельный Python-процесс со своей копией унаследованного контекста.",
+      maxTimeoutMs: "Лимит общего времени всего дерева рекурсии; none — без лимита.",
+      maxTokens: "Лимит входных+выходных токенов для всего дерева рекурсии.",
+      maxErrors: "Остановиться после стольких неудачных ходов подряд; none отключает защиту.",
+      orchestrator: "Добавить к системному промпту корневой модели дополнительные указания по декомпозиции задач.",
+      compaction: "Сжимать старые ходы, когда история приближается к окну контекста модели.",
+      compactionThresholdPct: "УСТАРЕЛО — игнорируется: сжатие использует абсолютный потолок 256k (COMPACTION_CEILING_TOKENS).",
+      rootSamplingMaxTokens: "Макс. число выходных токенов за ход корневой модели. Меньшее значение делает ходы компактнее.",
+      smartReasoning: "Усилие рассуждений корневой модели ('default' = выкл.). Думают только модели, у которых реестр поддерживает рассуждения; остальные работают без них. Токены рассуждений входят в лимит вывода — при включённых размышлениях увеличьте лимит вывода корня.",
+      subSamplingMaxTokens: "Макс. число выходных токенов на листовой подвызов (llm_query / llm_batch / map_files).",
+      subSamplingTemperature: "Температура для листовых подвызовов; 'default' = по умолчанию у провайдера. Детерминированное извлечение (temp 0) сделало бенчмарк r3 стабильным.",
+      sandboxInitTimeoutMs: "Сколько ждать запуска Python-воркера.",
+      requestTimeoutMs: "Сторожевой таймер родителя на каждый запрос к песочнице; при превышении Python-воркер убивается.",
+      contextLoader: "Разрешить add_context() подтягивать в контекст внешнюю папку, файл, документ или git-репозиторий.",
+      autoSeedCwd: "Загрузить рабочую папку в контекст при первом вызове repl() (иначе контекст пуст).",
+      displayLocale: "Язык интерфейса (свёрнутый Σ, карточки этапов, строка статуса, эта панель). auto — по системной локали (PI_LANG / LC_ALL / LANG). Промпты для модели всегда на английском.",
+      __sigma_window__: "Калибровка окна на этапе запроса, только в rlm.json: rootContextKeepTurns (4 по умолчанию), rootContextElideChars, rootContextSnapshot, rootArchiveMaxChars (0 = архив выключен; скрытые ходы иначе не восстановить). Возобновление/форк сессии: трекер создаётся лениво, а Σ заново накапливается из наблюдений — первый вызов после возобновления имеет пустой Σ по замыслу.",
+      __save__: "Сохранить настройки и закрыть (Esc тоже сохраняет).",
     }),
   }),
   en: Object.freeze({
@@ -302,7 +455,7 @@ While agents run, a tree shows below the editor — Ctrl+R focuses it, Enter ope
       requestTimeoutMs: "Parent-side watchdog per sandbox request; on breach the Python worker is killed.",
       contextLoader: "Allow add_context() to pull an external dir, file, document, or git repo into context.",
       autoSeedCwd: "Seed the working directory into context on the first repl() call (otherwise starts empty).",
-      displayLocale: "Language for UI-facing text (Σ fold, stage cards, status line, this panel). Defaults to English; model-facing wire prompts stay English.",
+      displayLocale: "Language for UI-facing text (Σ fold, stage cards, status line, this panel). `auto` follows the system locale (PI_LANG / LC_ALL / LANG). Model-facing wire prompts stay English.",
       __sigma_window__: "Query-time window calibrations, rlm.json only: rootContextKeepTurns (4 = default), rootContextElideChars, rootContextSnapshot, rootArchiveMaxChars (0 = archive off; elided turns are otherwise unrecoverable). Session resume/fork: the tracker is reborn lazily and Σ re-grows from live observations — the first call after a resume has an empty Σ by design.",
       __save__: "Save these settings and close (Esc also saves).",
     }),

@@ -4,12 +4,12 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
-import type { RlmConfig } from "../core/types.ts";
+import { DISPLAY_LOCALES, type RlmConfig } from "../core/types.ts";
 import { THINKING_LEVELS } from "../config/settings.ts";
 import { setDisplayLocale, sigmaStrings, type PanelKey } from "../ui/sigma-i18n.ts";
 
 const CHOICES = Object.freeze({
-  displayLocale: Object.freeze(["en", "zh"]),
+  displayLocale: DISPLAY_LOCALES,
   maxDepth: Object.freeze(["1", "2", "3", "4"]),
   maxIterations: Object.freeze(["100", "200", "500", "1000"]),
   execTimeoutS: Object.freeze(["30", "60", "120", "300"]),
@@ -144,10 +144,12 @@ export function applySetting(config: RlmConfig, id: string, value: string): RlmC
     case "requestTimeoutMs": return Object.freeze({ ...config, requestTimeoutMs: Number(value) * 60_000 });
     case "contextLoader": return Object.freeze({ ...config, contextLoader: value === "on" });
     case "autoSeedCwd": return Object.freeze({ ...config, autoSeedCwd: value === "on" });
-    case "displayLocale":
-      if (value !== "zh" && value !== "en") return config;
-      setDisplayLocale(value);
-      return Object.freeze({ ...config, displayLocale: value });
+    case "displayLocale": {
+      const locale = DISPLAY_LOCALES.find((l) => l === value);
+      if (locale === undefined) return config;
+      setDisplayLocale(locale);
+      return Object.freeze({ ...config, displayLocale: locale });
+    }
     default: return config;
   }
 }
