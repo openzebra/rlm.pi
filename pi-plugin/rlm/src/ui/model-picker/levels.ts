@@ -10,7 +10,7 @@ import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { Container, SelectList, Text } from "@earendil-works/pi-tui";
 import { resolveDynamicBorder } from "../tui-compat.ts";
-import { fillTpl, sigmaStrings } from "../../prompts/glossary.ts";
+import { fillTpl, sigmaStrings } from "../../ui/sigma-i18n.ts";
 
 const LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const);
 export type SelectableThinkingLevel = (typeof LEVELS)[number];

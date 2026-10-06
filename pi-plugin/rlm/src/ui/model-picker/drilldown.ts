@@ -19,7 +19,7 @@ import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import { Container, type Component, type SelectItem, SelectList, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { CHEAPEST_VALUE, SESSION_VALUE, buildCatalog, modelRefOf, type ProviderGroup } from "./grouping.ts";
 import { selectThinkingLevel, supportedThinkingLevels } from "./levels.ts";
-import { fillTpl, sigmaStrings } from "../../prompts/glossary.ts";
+import { fillTpl, sigmaStrings } from "../../ui/sigma-i18n.ts";
 
 export type PickerRole = "llm" | "rlm";
 

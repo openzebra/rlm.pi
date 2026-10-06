@@ -59,7 +59,7 @@ export const DEFAULT_CONFIG: Readonly<RlmConfig> = Object.freeze({
   sandboxInitTimeoutMs: 30_000,
   contextLoader: true,
   autoSeedCwd: true,
-  displayLocale: "en",
+  displayLocale: "auto",
   rootSampling: Object.freeze({ maxTokens: 16_384 }),
   subSystemPrompt: DEFAULT_SUB_SYSTEM_PROMPT,
   subSampling: Object.freeze({ maxTokens: 8192 }),

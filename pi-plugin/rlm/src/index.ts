@@ -34,8 +34,9 @@ import { touchFact } from "./core/run-state.ts";
 import { elideStalePayloads, spliceSigmaSnapshot } from "./core/root-context.ts";
 import { SessionArchive } from "./core/session-archive.ts";
 import { agentMessageText, firstLine, textContentOf } from "./text/agent-text.ts";
-import { findStatePatches, foldStateFences } from "./text/parsing.ts";
-import { setDisplayLocale, sigmaFenceDigest, sigmaStrings, fillTpl } from "./prompts/glossary.ts";
+import { findStatePatches } from "./text/parsing.ts";
+import { createFoldRegistry } from "./ui/sigma-fold.ts";
+import { setDisplayLocale, sigmaFenceDigest, sigmaStrings, fillTpl } from "./ui/sigma-i18n.ts";
 import { capToolResultText } from "./mode/native-guards.ts";
 import { replResultIsError, subcallFailureReason } from "./tool/repl-result.ts";
 import {
@@ -261,6 +262,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     // made during a previous session takes effect.
     const persisted = await loadSettings();
     controller.config = mergeConfig(persisted.config);
+    // The boot-time seed above only saw defaults; apply the persisted display language now.
+    setDisplayLocale(controller.config.displayLocale);
     controller.savedLlmRef = persisted.llm ?? undefined;
     controller.savedRlmRef = persisted.rlm ?? undefined;
 
@@ -491,6 +494,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // replies and run them through the ONE patch validator (run-state.ts applyPatch). EVERY
   // assistant turn feeds the ladder — a fence-free turn grows the idle streak, and
   // RUN_STATE_IDLE_DEGRADE_TURNS consecutive idle turns degrade the tracker (G6 parity).
+  const foldRegistry = createFoldRegistry();
   pi.on("message_end", async (event) => {
     const tracker = rootTracker;
     if (tracker === undefined || !controller.config.enableRootStateFences) return;
@@ -535,17 +539,12 @@ export default function rlmExtension(pi: ExtensionAPI): void {
       postStageCard({ kind: "recover", fencesAccepted: outcome.accepted, fencesTotal: outcome.fences });
     }
     // Transcript-side fold: collapse the raw ```state fence(s) the model just emitted into
-    // a one-line display form. Display only — the wire payload was already extracted above
-    // from the original text (applyFences ran on `event.message` before this fold).
+    // a quoted digest. pi stores THIS message object in agent state and the session log, so the
+    // fold would also reach the model's next-turn context — the `context` handler therefore
+    // restores the original text via `foldRegistry` (wire text stays English + verbatim).
     if (outcome.fences > 0) {
-      // sigmaFenceDigest always returns non-empty (item lines or the plain fallback),
-      // so the fold always has display text to inject.
       const digest = sigmaFenceDigest(rawPatches, outcome.accepted, outcome.problems);
-      for (const block of event.message.content) {
-        if (block.type === "text" && block.text.includes("```state")) {
-          block.text = foldStateFences(block.text, digest);
-        }
-      }
+      foldRegistry.fold(event.message, digest);
     }
   });
 
@@ -595,6 +594,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
   // Re-inject only when the payload identity changes (seed / add_context), not every turn —
   // the listing can be up to 200 file lines and the plugin exists to shrink the root window.
   pi.on("context", async (event, ctx) => {
+    foldRegistry.restore(event.messages);
     const filtered = event.messages.filter(
       (message) =>
         !(message.role === "custom" && message.customType === "rlm-intro")

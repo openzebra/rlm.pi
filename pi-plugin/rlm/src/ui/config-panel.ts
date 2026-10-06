@@ -4,12 +4,12 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
-import type { RlmConfig } from "../core/types.ts";
+import { DISPLAY_LOCALES, type RlmConfig } from "../core/types.ts";
 import { THINKING_LEVELS } from "../config/settings.ts";
-import { setDisplayLocale, sigmaStrings } from "../prompts/glossary.ts";
+import { setDisplayLocale, sigmaStrings, type PanelKey } from "../ui/sigma-i18n.ts";
 
 const CHOICES = Object.freeze({
-  displayLocale: Object.freeze(["en", "zh"]),
+  displayLocale: DISPLAY_LOCALES,
   maxDepth: Object.freeze(["1", "2", "3", "4"]),
   maxIterations: Object.freeze(["100", "200", "500", "1000"]),
   execTimeoutS: Object.freeze(["30", "60", "120", "300"]),
@@ -31,12 +31,11 @@ const CHOICES = Object.freeze({
   autoSeedCwd: Object.freeze(["on", "off"]),
 });
 
-function item(id: string, label: string, currentValue: string, values: readonly string[], description: string): SettingItem {
-  // Display-layer localization: label and description resolve via the locale table,
-  // falling back to the English literal so an unmapped id can never render blank.
-  // Locale-resolved per render so a displayLocale save re-localizes labels live.
+function item(id: PanelKey, currentValue: string, values: readonly string[]): SettingItem {
+  // Label and description come ONLY from the locale table (one wording source — no inline
+  // English literals to drift). Resolved per render so a displayLocale save re-localizes live.
   const s = sigmaStrings();
-  return { id, label: s.panel.labels[id] ?? label, currentValue, values: [...values], description: s.descriptions[id] ?? description };
+  return { id, label: s.panel.labels[id], currentValue, values: [...values], description: s.descriptions[id] };
 }
 
 /**
@@ -47,39 +46,31 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
   if (ctx.mode !== "tui") return config;
   let edited = config;
   const items: SettingItem[] = [
-    item("maxDepth", "Max recursion depth", String(config.maxDepth), CHOICES.maxDepth, "rlm_query past this depth degrades to plain llm_query (1 = no recursion)."),
-    item("maxIterations", "Max iterations", String(config.maxIterations), CHOICES.maxIterations, "Maximum root REPL turns before RLM asks the model for a final answer. Large by design — runs end on FINAL/errors/wall-clock first."),
-    item("execTimeoutS", "REPL block timeout (s)", String(config.execTimeoutS), CHOICES.execTimeoutS, "Wall-clock limit for one model-authored Python REPL block."),
-    item("maxConcurrentSubcalls", "Max concurrent sub-calls", String(config.maxConcurrentSubcalls), CHOICES.maxConcurrentSubcalls, "Concurrency pool size for llm_batch and rlm_batch."),
-    item("maxConcurrentChildren", "Max concurrent children", String(config.maxConcurrentChildren), CHOICES.maxConcurrentChildren, "Concurrent rlm_query child engines per depth. Each is a Python process holding its own copy of the inherited context."),
-    item("maxTimeoutMs", "Wall-clock ceiling (min)", config.maxTimeoutMs != null ? String(Math.round(config.maxTimeoutMs / 60_000)) : "none", CHOICES.maxTimeoutMs, "Total runtime cap for the whole recursive tree; none disables the cap."),
-    item("maxTokens", "Token ceiling", config.maxTokens != null ? String(config.maxTokens) : "none", CHOICES.maxTokens, "Total input+output token cap for the whole recursive tree."),
-    item("maxErrors", "Max consecutive errors", config.maxErrors != null ? String(config.maxErrors) : "none", CHOICES.maxErrors, "Stop after this many consecutive failing turns; none disables the guard."),
-    item("orchestrator", "Orchestrator addendum", config.orchestrator ? "on" : "off", CHOICES.orchestrator, "Append extra divide-and-conquer guidance to the root model system prompt."),
-    item("compaction", "Trajectory compaction", config.compaction ? "on" : "off", CHOICES.compaction, "Summarize old turns when history approaches the model context window."),
-    item("compactionThresholdPct", "Compaction threshold (%)", String(Math.round(config.compactionThresholdPct * 100)), CHOICES.compactionThresholdPct, "DEPRECATED — ignored: compaction uses the absolute 256k ceiling (COMPACTION_CEILING_TOKENS)."),
-    item("rootSamplingMaxTokens", "Root model output cap (tok)", String(config.rootSampling?.maxTokens ?? 16384), CHOICES.rootSamplingMaxTokens, "Max output tokens per root-model turn. Lower values keep each turn lean."),
-    item("smartReasoning", "Root reasoning effort", config.smartReasoning ?? "default", CHOICES.smartReasoning,
-      "Thinking effort for the root model ('default' = none). Only models whose registry entry supports reasoning will think; others silently run without it. Reasoning tokens share the output cap — raise the root output cap when thinking is on."),
-    item("subSamplingMaxTokens", "Worker output cap (tok)", String(config.subSampling?.maxTokens ?? 8192), CHOICES.subSamplingMaxTokens,
-      "Max output tokens per leaf sub-call (llm_query / llm_batch / map_files)."),
-    item("subSamplingTemperature", "Worker sampling temperature", config.subSampling?.temperature === undefined ? "default" : String(config.subSampling?.temperature), CHOICES.subSamplingTemperature,
-      "Sampling temperature for leaf sub-calls; 'default' = provider default. Deterministic extraction (temp 0) is what made the r3 bench stable."),
-    item("sandboxInitTimeoutMs", "Sandbox init timeout", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs, "How long to wait for the Python worker to start."),
-    item("requestTimeoutMs", "Sandbox request timeout (min)", String(Math.round(config.requestTimeoutMs / 60_000)), CHOICES.requestTimeoutMs, "Parent-side watchdog per sandbox request; on breach the Python worker is killed."),
-    item("contextLoader", "Context loader", config.contextLoader ? "on" : "off", CHOICES.contextLoader,
-      "Allow add_context() to pull an external dir, file, document, or git repo into context."),
-    item("autoSeedCwd", "Auto-seed cwd", config.autoSeedCwd ? "on" : "off", CHOICES.autoSeedCwd,
-      "Seed the working directory into context on the first repl() call (otherwise starts empty)."),
-    item("displayLocale", "Display language", config.displayLocale, CHOICES.displayLocale,
-      "Language for UI-facing text (Σ fold, stage cards, status line, this panel). Defaults to English; model-facing wire prompts stay English."),
+    item("maxDepth", String(config.maxDepth), CHOICES.maxDepth),
+    item("maxIterations", String(config.maxIterations), CHOICES.maxIterations),
+    item("execTimeoutS", String(config.execTimeoutS), CHOICES.execTimeoutS),
+    item("maxConcurrentSubcalls", String(config.maxConcurrentSubcalls), CHOICES.maxConcurrentSubcalls),
+    item("maxConcurrentChildren", String(config.maxConcurrentChildren), CHOICES.maxConcurrentChildren),
+    item("maxTimeoutMs", config.maxTimeoutMs != null ? String(Math.round(config.maxTimeoutMs / 60_000)) : "none", CHOICES.maxTimeoutMs),
+    item("maxTokens", config.maxTokens != null ? String(config.maxTokens) : "none", CHOICES.maxTokens),
+    item("maxErrors", config.maxErrors != null ? String(config.maxErrors) : "none", CHOICES.maxErrors),
+    item("orchestrator", config.orchestrator ? "on" : "off", CHOICES.orchestrator),
+    item("compaction", config.compaction ? "on" : "off", CHOICES.compaction),
+    item("compactionThresholdPct", String(Math.round(config.compactionThresholdPct * 100)), CHOICES.compactionThresholdPct),
+    item("rootSamplingMaxTokens", String(config.rootSampling?.maxTokens ?? 16384), CHOICES.rootSamplingMaxTokens),
+    item("smartReasoning", config.smartReasoning ?? "default", CHOICES.smartReasoning),
+    item("subSamplingMaxTokens", String(config.subSampling?.maxTokens ?? 8192), CHOICES.subSamplingMaxTokens),
+    item("subSamplingTemperature", config.subSampling?.temperature === undefined ? "default" : String(config.subSampling?.temperature), CHOICES.subSamplingTemperature),
+    item("sandboxInitTimeoutMs", String(config.sandboxInitTimeoutMs), CHOICES.sandboxInitTimeoutMs),
+    item("requestTimeoutMs", String(Math.round(config.requestTimeoutMs / 60_000)), CHOICES.requestTimeoutMs),
+    item("contextLoader", config.contextLoader ? "on" : "off", CHOICES.contextLoader),
+    item("autoSeedCwd", config.autoSeedCwd ? "on" : "off", CHOICES.autoSeedCwd),
+    item("displayLocale", config.displayLocale, CHOICES.displayLocale),
     // R5: the window calibrations are rlm.json-only knobs — shown read-only with live values.
-    item("__sigma_window__", "Root Σ window (calibration)",
+    item("__sigma_window__",
       `keepTurns=${config.rootContextKeepTurns} · elide=${config.rootContextElideChars} · snapshot=${config.rootContextSnapshot ? "on" : "off"} · archive=${config.rootArchiveMaxChars > 0 ? `${Math.round(config.rootArchiveMaxChars / 1000)}k` : "off"}`,
-      ["rlm.json"],
-      "Query-time window calibrations, rlm.json only: rootContextKeepTurns (4 = default), rootContextElideChars, rootContextSnapshot, rootArchiveMaxChars (0 = archive off; elided turns are otherwise unrecoverable). " +
-        "Session resume/fork: the tracker is reborn lazily and Σ re-grows from live observations — the first call after a resume has an empty Σ by design."),
-    item("__save__", sigmaStrings().panel.labels["__save__"] ?? "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
+      ["rlm.json"]),
+    item("__save__", "↵", ["↵"]),
   ];
 
   await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
@@ -153,10 +144,12 @@ export function applySetting(config: RlmConfig, id: string, value: string): RlmC
     case "requestTimeoutMs": return Object.freeze({ ...config, requestTimeoutMs: Number(value) * 60_000 });
     case "contextLoader": return Object.freeze({ ...config, contextLoader: value === "on" });
     case "autoSeedCwd": return Object.freeze({ ...config, autoSeedCwd: value === "on" });
-    case "displayLocale":
-      if (value !== "zh" && value !== "en") return config;
-      setDisplayLocale(value);
-      return Object.freeze({ ...config, displayLocale: value });
+    case "displayLocale": {
+      const locale = DISPLAY_LOCALES.find((l) => l === value);
+      if (locale === undefined) return config;
+      setDisplayLocale(locale);
+      return Object.freeze({ ...config, displayLocale: locale });
+    }
     default: return config;
   }
 }

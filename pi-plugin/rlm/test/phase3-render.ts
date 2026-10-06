@@ -11,7 +11,7 @@
 import { check, failureCount } from "./helpers.ts";
 // Display-layer assertions pin English regardless of host LANG — the string tables under
 // test are resolved per render from the locale detector.
-import { setDisplayLocale } from "../src/prompts/glossary.ts";
+import { setDisplayLocale } from "../src/ui/sigma-i18n.ts";
 setDisplayLocale("en");
 import { initTheme, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";

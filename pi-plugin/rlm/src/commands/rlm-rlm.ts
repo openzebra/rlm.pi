@@ -11,7 +11,7 @@ import type { RlmController } from "../mode/rlm-mode.ts";
 import { pickableModels, selectModel } from "../ui/model-picker.ts";
 import { setRlmModeStatus } from "../ui/status.ts";
 import { applyRlmSelection } from "./pins.ts";
-import { sigmaStrings } from "../prompts/glossary.ts";
+import { fillTpl, sigmaStrings } from "../ui/sigma-i18n.ts";
 
 async function runRlmRlm(controller: RlmController, ctx: ExtensionContext): Promise<void> {
   try {
@@ -36,7 +36,7 @@ async function runRlmRlm(controller: RlmController, ctx: ExtensionContext): Prom
   const reasoning = controller.config.rootSampling?.reasoning;
   ctx.ui.notify(
     controller.rlmModel
-      ? `RLM: rlm=${modelRef(controller.rlmModel) ?? "(none)"}${reasoning ? `/${reasoning}` : ""}`
+      ? fillTpl(sigmaStrings().notify.rlmPinned, { m: modelRef(controller.rlmModel) ?? "(none)", r: reasoning ? `/${reasoning}` : "" })
       : sigmaStrings().notify.rlmFollows,
     "info",
   );

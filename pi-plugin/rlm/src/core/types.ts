@@ -8,6 +8,13 @@ export interface Sampling {
   readonly reasoning?: ThinkingLevel;
 }
 
+/** Resolved display languages (UI wording only — never model-facing). */
+export const SIGMA_LOCALES = Object.freeze(["en", "zh", "ru"] as const);
+export type SigmaLocale = (typeof SIGMA_LOCALES)[number];
+/** rlm.json `displayLocale`: a language, or "auto" = detect from the system locale. */
+export const DISPLAY_LOCALES = Object.freeze(["auto", ...SIGMA_LOCALES] as const);
+export type DisplayLocale = (typeof DISPLAY_LOCALES)[number];
+
 export interface RlmConfig {
   /** Persistent editor-routing mode; when enabled, plain interactive prompts use RLM. */
   readonly enabled: boolean;
@@ -71,9 +78,9 @@ export interface RlmConfig {
    * (un-prefixed paths). When false, context stays empty until add_context is called.
    */
   readonly autoSeedCwd: boolean;
-  /** Display-layer language — panel/rlm.json controlled, default "en".
+  /** Display-layer language — panel/rlm.json controlled, default "auto" (system locale).
    * Wire prompts (model-facing) are always English regardless of this setting. */
-  readonly displayLocale: "en" | "zh";
+  readonly displayLocale: DisplayLocale;
   /** ThinkingLevel for the root smart model (set via /rlm-config). */
   readonly smartReasoning?: ThinkingLevel;
   /** Output token cap + temperature for the root smart model per turn.

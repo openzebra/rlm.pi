@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import type { RlmConfig } from "../core/types.ts";
+import { DISPLAY_LOCALES, type RlmConfig } from "../core/types.ts";
 import { trace, traceEnabled } from "../util/trace.ts";
 import { DEFAULT_CONFIG } from "./defaults.ts";
 
@@ -126,10 +126,9 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (contextLoader !== undefined) out.contextLoader = contextLoader;
   const autoSeedCwd = validateBoolean(r.autoSeedCwd);
   if (autoSeedCwd !== undefined) out.autoSeedCwd = autoSeedCwd;
-  // display layer language: inline whitelist — "zh" | "en" (legacy "auto" migrates to the default)
-  if (r.displayLocale === "zh" || r.displayLocale === "en") {
-    out.displayLocale = r.displayLocale;
-  }
+  // display layer language: closed whitelist — anything else keeps the default
+  const displayLocale = DISPLAY_LOCALES.find((l) => l === r.displayLocale);
+  if (displayLocale !== undefined) out.displayLocale = displayLocale;
   // v5 token budget cascade
   const enableTokenBudget = validateBoolean(r.enableTokenBudget);
   if (enableTokenBudget !== undefined) out.enableTokenBudget = enableTokenBudget;
