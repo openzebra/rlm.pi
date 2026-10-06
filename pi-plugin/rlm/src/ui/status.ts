@@ -12,6 +12,7 @@ import type { ContextUsage, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { RlmController } from "../mode/rlm-mode.ts";
 import { traceEnabled } from "../util/trace.ts";
+import { fillTpl, sigmaStrings } from "../prompts/glossary.ts";
 import { formatTokens } from "./theme.ts";
 
 const KEY = "rlm";
@@ -33,10 +34,9 @@ export function modelLabel(model: Model<Api> | undefined, fallback: string): str
 function sigmaLine(telemetry: RootSigmaTelemetry): string | undefined {
   const parts: string[] = [];
   if (telemetry.xiCompositions > 0) parts.push(`Ξ${telemetry.xiCompositions}`);
-  if (telemetry.elidedMessages > 0) parts.push(`elided ${telemetry.elidedMessages}`);
-  if (telemetry.sigmaSplices > 0) parts.push(`Σ${telemetry.sigmaSplices}`);
-  if (telemetry.rootDigests > 0) parts.push(`digest ${telemetry.rootDigests}`);
-  if (telemetry.idleDegrades > 0) parts.push(`degraded ${telemetry.idleDegrades}`);
+  if (telemetry.elidedMessages > 0) parts.push(fillTpl(sigmaStrings().status.elided, { n: telemetry.elidedMessages }));
+  if (telemetry.rootDigests > 0) parts.push(fillTpl(sigmaStrings().status.digest, { n: telemetry.rootDigests }));
+  if (telemetry.idleDegrades > 0) parts.push(fillTpl(sigmaStrings().status.degraded, { n: telemetry.idleDegrades }));
   return parts.length === 0 ? undefined : ` Σ ${parts.join(" · ")}`;
 }
 

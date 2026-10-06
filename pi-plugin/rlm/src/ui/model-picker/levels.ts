@@ -10,6 +10,7 @@ import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { Container, SelectList, Text } from "@earendil-works/pi-tui";
 import { resolveDynamicBorder } from "../tui-compat.ts";
+import { fillTpl, sigmaStrings } from "../../prompts/glossary.ts";
 
 const LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const);
 export type SelectableThinkingLevel = (typeof LEVELS)[number];
@@ -42,9 +43,9 @@ export async function selectThinkingLevel(
   const chosen = await ctx.ui.custom<SelectableThinkingLevel | null>((_tui, theme, _kb, done) => {
     const container = new Container();
     if (Border !== undefined) container.addChild(new Border((s: string) => theme.fg("accent", s)));
-    container.addChild(new Text(theme.fg("accent", theme.bold("Thinking level")), 1, 0));
+    container.addChild(new Text(theme.fg("accent", theme.bold(sigmaStrings().picker.thinkingTitle)), 1, 0));
     const list = new SelectList(
-      levels.map((level) => ({ value: level, label: level, description: `Use ${level} reasoning for ${model.id}` })),
+      levels.map((level) => ({ value: level, label: level, description: fillTpl(sigmaStrings().picker.useLevelFor, { l: level, m: model.id }) })),
       levels.length,
       {
         selectedPrefix: (t) => theme.fg("accent", t),

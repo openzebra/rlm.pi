@@ -19,6 +19,7 @@ import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import { Container, type Component, type SelectItem, SelectList, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { CHEAPEST_VALUE, SESSION_VALUE, buildCatalog, modelRefOf, type ProviderGroup } from "./grouping.ts";
 import { selectThinkingLevel, supportedThinkingLevels } from "./levels.ts";
+import { fillTpl, sigmaStrings } from "../../prompts/glossary.ts";
 
 export type PickerRole = "llm" | "rlm";
 
@@ -30,10 +31,14 @@ export interface ModelSelection {
 const BACK_VALUE = "__rlm_back__";
 const MAX_VISIBLE = 13;
 
-const TOP_OPTIONS: Readonly<Record<PickerRole, SelectItem>> = Object.freeze({
-  llm: { value: CHEAPEST_VALUE, label: "⟳ cheapest (auto)", description: "Always use the cheapest model with a configured key" },
-  rlm: { value: SESSION_VALUE, label: "⌁ follow session model", description: "rlm_query / rlm_batch child engines use pi's active model" },
-});
+/** Role's top sentinel option — locale-resolved per call (labels are display-only;
+ * `value` is a wire identifier and never localizes). */
+function topOption(role: PickerRole): SelectItem {
+  const p = sigmaStrings().picker;
+  return role === "llm"
+    ? { value: CHEAPEST_VALUE, label: p.cheapest, description: p.cheapestDesc }
+    : { value: SESSION_VALUE, label: p.followSession, description: p.followSessionDesc };
+}
 
 /** One overlay: a titled, filterable SelectList. Resolves value, or undefined on esc. */
 async function pickFromList(
@@ -67,7 +72,7 @@ async function pickFromList(
     list.onCancel = () => done(null);
     container.addChild(filterLine);
     container.addChild(list);
-    container.addChild(new Text(theme.fg("dim", "↑↓ navigate • type to filter • enter select • esc cancel"), 1, 0));
+    container.addChild(new Text(theme.fg("dim", sigmaStrings().picker.filterHint), 1, 0));
     if (Border !== undefined) container.addChild(new Border((s: string) => theme.fg("accent", s)));
     return {
       render: (w) => container.render(w),
@@ -91,15 +96,16 @@ async function pickFromList(
 }
 
 function providerItems(role: PickerRole, catalog: readonly ProviderGroup[]): SelectItem[] {
-  const items: SelectItem[] = [TOP_OPTIONS[role]];
-  for (const g of catalog) items.push({ value: g.provider, label: g.provider, description: `${g.models.length} models` });
+  const items: SelectItem[] = [topOption(role)];
+  for (const g of catalog) items.push({ value: g.provider, label: g.provider, description: fillTpl(sigmaStrings().picker.modelsCount, { n: g.models.length }) });
   return items;
 }
 
 function modelItems(group: ProviderGroup): SelectItem[] {
-  const items: SelectItem[] = [{ value: BACK_VALUE, label: "← providers", description: "" }];
+  const p = sigmaStrings().picker;
+  const items: SelectItem[] = [{ value: BACK_VALUE, label: p.backToProviders, description: "" }];
   for (const m of group.models) {
-    items.push({ value: modelRefOf(m), label: m.id, description: m.reasoning ? "reasoning" : "" });
+    items.push({ value: modelRefOf(m), label: m.id, description: m.reasoning ? p.reasoning : "" });
   }
   return items;
 }
@@ -107,12 +113,13 @@ function modelItems(group: ProviderGroup): SelectItem[] {
 function levelItems(group: ProviderGroup, model: Model<Api>): SelectItem[] {
   // rlm role only — llm never reaches this step. "off" resolves to thinkingLevel undefined
   // (nothing forwarded on the wire), so the menu spans the full none → max range.
+  const p = sigmaStrings().picker;
   const items: SelectItem[] = [
-    { value: BACK_VALUE, label: `← ${group.provider} models`, description: "" },
-    { value: "off", label: "none", description: "No reasoning" },
+    { value: BACK_VALUE, label: fillTpl(p.backToModels, { p: group.provider }), description: "" },
+    { value: "off", label: p.none, description: p.noReasoning },
   ];
   for (const level of supportedThinkingLevels(model)) {
-    items.push({ value: level, label: level, description: `Use ${level} reasoning` });
+    items.push({ value: level, label: level, description: fillTpl(p.useLevel, { l: level }) });
   }
   return items;
 }
@@ -127,7 +134,7 @@ export async function selectModel(
   currentRef?: string,
 ): Promise<ModelSelection | null | undefined> {
   if (models.length === 0) {
-    ctx.ui.notify("RLM: no models available (add a provider key in Pi, or widen --models / enabledModels)", "warning");
+    ctx.ui.notify(sigmaStrings().picker.noModels, "warning");
     return undefined;
   }
   if (ctx.mode !== "tui") {
@@ -155,7 +162,7 @@ export async function selectModel(
     if (group === undefined) {
       const items = providerItems(role, catalog);
       const pre = providerOf(currentRefStr);
-      const l1 = await pickFromList(ctx, role === "llm" ? "LLM model — provider" : "RLM model — provider", items,
+      const l1 = await pickFromList(ctx, role === "llm" ? sigmaStrings().picker.titleLlm : sigmaStrings().picker.titleRlm, items,
         pre === undefined ? 0 : Math.max(0, items.findIndex((i) => i.value === pre)));
       if (l1 === undefined) return undefined;              // esc — cancel
       if (l1 === CHEAPEST_VALUE || l1 === SESSION_VALUE) return null; // role's top option
@@ -165,7 +172,7 @@ export async function selectModel(
     }
     if (model === undefined) {
       const mItems = modelItems(group);
-      const l2 = await pickFromList(ctx, `${group.provider} › models`, mItems,
+      const l2 = await pickFromList(ctx, fillTpl(sigmaStrings().picker.providerModels, { p: group.provider }), mItems,
         Math.max(0, mItems.findIndex((i) => i.value === currentRefStr)));
       if (l2 === undefined) return undefined;
       if (l2 === BACK_VALUE) { group = undefined; continue; } // ← providers

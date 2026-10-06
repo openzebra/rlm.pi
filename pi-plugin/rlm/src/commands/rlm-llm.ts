@@ -7,6 +7,7 @@ import type { RlmController } from "../mode/rlm-mode.ts";
 import { pickableModels, selectModel } from "../ui/model-picker.ts";
 import { setRlmModeStatus } from "../ui/status.ts";
 import { applyLlmSelection } from "./pins.ts";
+import { sigmaStrings } from "../prompts/glossary.ts";
 
 async function runRlmLlm(controller: RlmController, ctx: ExtensionContext): Promise<void> {
   try {
@@ -25,7 +26,7 @@ async function runRlmLlm(controller: RlmController, ctx: ExtensionContext): Prom
   );
   applyLlmSelection(controller, llm);
   const persisted = await controller.persist();
-  if (!persisted) ctx.ui.notify("RLM: failed to save settings to ~/.pi/agent/rlm.json", "error");
+  if (!persisted) ctx.ui.notify(sigmaStrings().notify.saveFailed, "error");
   setRlmModeStatus(ctx, controller, ctx.getContextUsage());
 
   // Name the model that actually resolved, not "(cheapest)" — otherwise there is no way to

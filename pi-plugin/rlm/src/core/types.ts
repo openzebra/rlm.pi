@@ -71,6 +71,9 @@ export interface RlmConfig {
    * (un-prefixed paths). When false, context stays empty until add_context is called.
    */
   readonly autoSeedCwd: boolean;
+  /** Display-layer language — panel/rlm.json controlled, default "en".
+   * Wire prompts (model-facing) are always English regardless of this setting. */
+  readonly displayLocale: "en" | "zh";
   /** ThinkingLevel for the root smart model (set via /rlm-config). */
   readonly smartReasoning?: ThinkingLevel;
   /** Output token cap + temperature for the root smart model per turn.

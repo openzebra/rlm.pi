@@ -34,7 +34,8 @@ import { touchFact } from "./core/run-state.ts";
 import { elideStalePayloads, spliceSigmaSnapshot } from "./core/root-context.ts";
 import { SessionArchive } from "./core/session-archive.ts";
 import { agentMessageText, firstLine, textContentOf } from "./text/agent-text.ts";
-import { findStatePatches } from "./text/parsing.ts";
+import { findStatePatches, foldStateFences } from "./text/parsing.ts";
+import { setDisplayLocale, sigmaFenceDigest, sigmaStrings, fillTpl } from "./prompts/glossary.ts";
 import { capToolResultText } from "./mode/native-guards.ts";
 import { replResultIsError, subcallFailureReason } from "./tool/repl-result.ts";
 import {
@@ -81,6 +82,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
 
   // Init synchronously with defaults — ensures commands/tools/handlers register before session_start
   const config = mergeConfig({});
+  // Seed the display-layer language from rlm.json (panel saves keep it live via setDisplayLocale).
+  setDisplayLocale(config.displayLocale);
   const controller = new RlmController(config);
   // Root Σ WS-4: engine-finalize Σ flows into the root tracker (assigned once; buildEngine
   // reads it per run, so /rlm-config and session resets never stale this wire).
@@ -292,7 +295,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
         );
         try {
           ctx.ui.notify(
-            `RLM: pinned rlm=${controller.savedRlmRef} unavailable — following session model until it is`,
+            fillTpl(sigmaStrings().notify.pinnedRlm, { m: controller.savedRlmRef }),
             "warning",
           );
         } catch {
@@ -313,7 +316,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
         );
         try {
           ctx.ui.notify(
-            `RLM: pinned llm=${controller.savedLlmRef} unavailable — using cheapest until it is`,
+            fillTpl(sigmaStrings().notify.pinnedLlm, { m: controller.savedLlmRef }),
             "warning",
           );
         } catch {
@@ -498,7 +501,8 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     const productiveTurn = Array.isArray(event.message.content) &&
       (event.message.content as Array<{ type?: string }>).some((b) => b?.type === "toolCall");
     const wasActive = tracker.isActive;
-    const outcome = tracker.applyFences(findStatePatches(agentMessageText(event.message)), { productiveTurn });
+    const rawPatches = findStatePatches(agentMessageText(event.message));
+    const outcome = tracker.applyFences(rawPatches, { productiveTurn });
     // R3 soak observability: per-turn fence outcomes — the soak-B bars (≥50% of turns commit
     // ≥1 accepted delta, rejection storms <10%) are computed from these journal lines.
     if (traceEnabled) {
@@ -529,6 +533,19 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     } else if (!wasActive && tracker.isActive) {
       // R7-fix recovery observability, user-visible: a degraded tracker accepted a clean batch.
       postStageCard({ kind: "recover", fencesAccepted: outcome.accepted, fencesTotal: outcome.fences });
+    }
+    // Transcript-side fold: collapse the raw ```state fence(s) the model just emitted into
+    // a one-line display form. Display only — the wire payload was already extracted above
+    // from the original text (applyFences ran on `event.message` before this fold).
+    if (outcome.fences > 0) {
+      // sigmaFenceDigest always returns non-empty (item lines or the plain fallback),
+      // so the fold always has display text to inject.
+      const digest = sigmaFenceDigest(rawPatches, outcome.accepted, outcome.problems);
+      for (const block of event.message.content) {
+        if (block.type === "text" && block.text.includes("```state")) {
+          block.text = foldStateFences(block.text, digest);
+        }
+      }
     }
   });
 

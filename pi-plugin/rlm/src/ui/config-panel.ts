@@ -6,8 +6,10 @@ import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
 import type { RlmConfig } from "../core/types.ts";
 import { THINKING_LEVELS } from "../config/settings.ts";
+import { setDisplayLocale, sigmaStrings } from "../prompts/glossary.ts";
 
 const CHOICES = Object.freeze({
+  displayLocale: Object.freeze(["en", "zh"]),
   maxDepth: Object.freeze(["1", "2", "3", "4"]),
   maxIterations: Object.freeze(["100", "200", "500", "1000"]),
   execTimeoutS: Object.freeze(["30", "60", "120", "300"]),
@@ -30,7 +32,11 @@ const CHOICES = Object.freeze({
 });
 
 function item(id: string, label: string, currentValue: string, values: readonly string[], description: string): SettingItem {
-  return { id, label, currentValue, values: [...values], description };
+  // Display-layer localization: label and description resolve via the locale table,
+  // falling back to the English literal so an unmapped id can never render blank.
+  // Locale-resolved per render so a displayLocale save re-localizes labels live.
+  const s = sigmaStrings();
+  return { id, label: s.panel.labels[id] ?? label, currentValue, values: [...values], description: s.descriptions[id] ?? description };
 }
 
 /**
@@ -65,18 +71,20 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
       "Allow add_context() to pull an external dir, file, document, or git repo into context."),
     item("autoSeedCwd", "Auto-seed cwd", config.autoSeedCwd ? "on" : "off", CHOICES.autoSeedCwd,
       "Seed the working directory into context on the first repl() call (otherwise starts empty)."),
+    item("displayLocale", "Display language", config.displayLocale, CHOICES.displayLocale,
+      "Language for UI-facing text (Σ fold, stage cards, status line, this panel). Defaults to English; model-facing wire prompts stay English."),
     // R5: the window calibrations are rlm.json-only knobs — shown read-only with live values.
     item("__sigma_window__", "Root Σ window (calibration)",
       `keepTurns=${config.rootContextKeepTurns} · elide=${config.rootContextElideChars} · snapshot=${config.rootContextSnapshot ? "on" : "off"} · archive=${config.rootArchiveMaxChars > 0 ? `${Math.round(config.rootArchiveMaxChars / 1000)}k` : "off"}`,
       ["rlm.json"],
       "Query-time window calibrations, rlm.json only: rootContextKeepTurns (4 = default), rootContextElideChars, rootContextSnapshot, rootArchiveMaxChars (0 = archive off; elided turns are otherwise unrecoverable). " +
         "Session resume/fork: the tracker is reborn lazily and Σ re-grows from live observations — the first call after a resume has an empty Σ by design."),
-    item("__save__", "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
+    item("__save__", sigmaStrings().panel.labels["__save__"] ?? "Save & close", "↵", ["↵"], "Save these settings and close (Esc also saves)."),
   ];
 
   await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
     const container = new Container();
-    container.addChild(new Text(theme.fg("accent", theme.bold("RLM settings")), 1, 1));
+    container.addChild(new Text(theme.fg("accent", theme.bold(sigmaStrings().panel.title)), 1, 1));
     const list = new SettingsList(
       items,
       items.length + 2,
@@ -91,7 +99,7 @@ export async function showConfigPanel(ctx: ExtensionContext, config: RlmConfig):
       () => done(),
     );
     container.addChild(list);
-    container.addChild(new Text(theme.fg("dim", "↑↓ move · enter change · esc save & close"), 1, 1));
+    container.addChild(new Text(theme.fg("dim", sigmaStrings().panel.hint), 1, 1));
     return {
       render: (w) => container.render(w),
       invalidate: () => container.invalidate(),
@@ -145,6 +153,10 @@ export function applySetting(config: RlmConfig, id: string, value: string): RlmC
     case "requestTimeoutMs": return Object.freeze({ ...config, requestTimeoutMs: Number(value) * 60_000 });
     case "contextLoader": return Object.freeze({ ...config, contextLoader: value === "on" });
     case "autoSeedCwd": return Object.freeze({ ...config, autoSeedCwd: value === "on" });
+    case "displayLocale":
+      if (value !== "zh" && value !== "en") return config;
+      setDisplayLocale(value);
+      return Object.freeze({ ...config, displayLocale: value });
     default: return config;
   }
 }

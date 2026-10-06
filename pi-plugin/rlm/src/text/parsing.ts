@@ -47,7 +47,25 @@ export type StateFenceResult =
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly error: string };
 
-const STATE_FENCE = /(`{3,})[ \t]*state[ \t]*\r?\n([\s\S]*?)\1/g;
+export const STATE_FENCE = /(`{3,})[ \t]*state[ \t]*\r?\n([\s\S]*?)\1/g;
+
+/** Collapse every ```state fence in `text` to the one-line folded display form.
+ * Display-side only (message_end transcript fold): the wire payload the tracker parses
+ * is extracted from the ORIGINAL text before this runs.
+ * `fold` is the display text (from `sigmaFenceDigest`, which itself renders the plain
+ * fallback when nothing parses). A blank `fold` skips folding — the caller owns wording,
+ * parsing owns no literals (keeps this module free of glossary imports; see import graph). */
+export function foldStateFences(text: string, fold: string): string {
+  if (!text.includes("```state") || fold.trim() === "") return text;
+  // Multi-line digests render as a markdown quote block; every line quote-prefixed so
+  // the fold is always visually a quote.
+  const quoted = fold
+    .trim()
+    .split("\n")
+    .map((l) => (l === "" ? ">" : `> ${l}`))
+    .join("\n");
+  return text.replace(STATE_FENCE, quoted);
+}
 
 /** Tolerant fallback: a payload object whose FIRST key is the patch key, emitted without a
  *  (well-formed) fence — soak keeps catching `...report.state {"state_patch": …}}` blobs from

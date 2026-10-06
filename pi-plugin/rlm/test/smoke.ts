@@ -44,6 +44,8 @@ const SUITES: readonly string[] = Object.freeze([
   "phase-session-archive.ts",
   // UI: [rlm.stage] transcript cards (digest / degrade / recover / distill)
   "phase-stage-cards.ts",
+  // UI: ```state fence transcript fold + display-layer locale (Σ fold / i18n tables)
+  "phase-sigma-fold.ts",
   // /rlm-stop: raceAbort + stop command composition
   "phase-stop.ts",
 ]);

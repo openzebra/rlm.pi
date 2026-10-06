@@ -18,6 +18,7 @@ import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import type { SkillNoteInput } from "../config/skillstate.ts";
 import { previewText } from "../text/preview.ts";
 import { expandHint } from "../tool/subcall-render.ts";
+import { fillTpl, sigmaStrings } from "../prompts/glossary.ts";
 import { formatTokens } from "./theme.ts";
 import { markdownTheme } from "./theme-adapter.ts";
 
@@ -109,22 +110,29 @@ function byTagPart(byTag: Readonly<Record<string, number>>): string {
 export function stageCardHeaderLine(details: StageCardDetails): string {
   switch (details.kind) {
     case "digest":
-      return (
-        `**◆ digest #${String(details.index)}** folded ${String(details.turnsFolded)} turns · ` +
-        `${formatTokens(details.tokensBefore)} tok (recomputed ${formatTokens(details.tokensBeforeRecomputed)})`
-      );
+      return fillTpl(sigmaStrings().cards.digest, {
+        i: details.index,
+        t: details.turnsFolded,
+        b: formatTokens(details.tokensBefore),
+        r: formatTokens(details.tokensBeforeRecomputed),
+      });
     case "degrade":
-      return (
-        `**⚠ Σ degraded** idle ${String(details.idleTurns)}/${String(details.idleMax)} fence-eligible turns · ` +
-        previewText(details.reason, 80)
-      );
+      return fillTpl(sigmaStrings().cards.degrade, {
+        n: details.idleTurns,
+        m: details.idleMax,
+        reason: previewText(details.reason, 80),
+      });
     case "recover":
-      return `**◆ Σ recovered** fences accepted ${String(details.fencesAccepted)}/${String(details.fencesTotal)}`;
+      return fillTpl(sigmaStrings().cards.recover, {
+        a: details.fencesAccepted,
+        t: details.fencesTotal,
+      });
     case "distill":
-      return (
-        `**◆ skill.state** +${String(details.merged.length)} notes distilled · ` +
-        `${String(details.total)} total${byTagPart(details.byTag)}`
-      );
+      return fillTpl(sigmaStrings().cards.distill, {
+        n: details.merged.length,
+        t: details.total,
+        byTag: byTagPart(details.byTag),
+      });
   }
 }
 
@@ -183,7 +191,7 @@ export const renderStageCard: MessageRenderer = (message, options, theme) => {
     ));
     if (!options.expanded) {
       box.addChild(new Spacer(1));
-      box.addChild(new Text(expandHint(theme), 0, 0));
+      box.addChild(new Text(expandHint(theme, sigmaStrings().expand), 0, 0));
     }
     return box;
   } catch {
