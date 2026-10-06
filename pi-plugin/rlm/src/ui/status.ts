@@ -12,7 +12,7 @@ import type { ContextUsage, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { RlmController } from "../mode/rlm-mode.ts";
 import { traceEnabled } from "../util/trace.ts";
-import { fillTpl, sigmaStrings } from "../prompts/glossary.ts";
+import { fillTpl, sigmaStrings } from "../ui/sigma-i18n.ts";
 import { formatTokens } from "./theme.ts";
 
 const KEY = "rlm";

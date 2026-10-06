@@ -47,25 +47,7 @@ export type StateFenceResult =
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly error: string };
 
-export const STATE_FENCE = /(`{3,})[ \t]*state[ \t]*\r?\n([\s\S]*?)\1/g;
-
-/** Collapse every ```state fence in `text` to the one-line folded display form.
- * Display-side only (message_end transcript fold): the wire payload the tracker parses
- * is extracted from the ORIGINAL text before this runs.
- * `fold` is the display text (from `sigmaFenceDigest`, which itself renders the plain
- * fallback when nothing parses). A blank `fold` skips folding — the caller owns wording,
- * parsing owns no literals (keeps this module free of glossary imports; see import graph). */
-export function foldStateFences(text: string, fold: string): string {
-  if (!text.includes("```state") || fold.trim() === "") return text;
-  // Multi-line digests render as a markdown quote block; every line quote-prefixed so
-  // the fold is always visually a quote.
-  const quoted = fold
-    .trim()
-    .split("\n")
-    .map((l) => (l === "" ? ">" : `> ${l}`))
-    .join("\n");
-  return text.replace(STATE_FENCE, quoted);
-}
+const STATE_FENCE = /(`{3,})[ \t]*state[ \t]*\r?\n([\s\S]*?)\1/g;
 
 /** Tolerant fallback: a payload object whose FIRST key is the patch key, emitted without a
  *  (well-formed) fence — soak keeps catching `...report.state {"state_patch": …}}` blobs from
@@ -121,6 +103,56 @@ function balancedJsonObject(text: string, start: number): string | undefined {
     }
   }
   return undefined;
+}
+
+/** Collapse the state patch(es) in `text` — ```state fences AND the bare `{"state_patch"…}`
+ * blobs the tolerant parser also harvests — to ONE folded display block.
+ * Display-side only: the caller must have extracted the wire payload from the ORIGINAL text
+ * first. `fold` is the display text (from `sigmaFenceDigest`, which renders its own plain
+ * fallback when nothing parses). The digest covers ALL patches of the message, so it replaces
+ * the first one and the rest are dropped (never repeated). A blank `fold` skips folding —
+ * the caller owns wording, parsing owns no literals (no glossary import). Replacers are
+ * functions: `fold` carries model text, and a string replacement would expand `$&` / `$'`.
+ * Bare blobs inside ```json fences are quotations (recall W2) and are left alone. */
+export function foldStateFences(text: string, fold: string): string {
+  if (!hasStatePatch(text) || fold.trim() === "") return text;
+  // Multi-line digests render as a markdown quote block; every line quote-prefixed so
+  // the fold is always visually a quote.
+  const quoted = fold
+    .trim()
+    .split("\n")
+    .map((l) => (l === "" ? ">" : `> ${l}`))
+    .join("\n");
+  let placed = false;
+  const place = (): string => {
+    if (placed) return "";
+    placed = true;
+    return quoted;
+  };
+  // Well-formed fences first (document order), then bare blobs over the remainder — same
+  // order as findStatePatches, so a payload is never counted (or folded) twice.
+  const rest = text.replace(STATE_FENCE, place);
+  const jsonSpans = jsonFenceSpans(rest);
+  const parts: string[] = [];
+  let cursor = 0;
+  let m: RegExpExecArray | null;
+  BARE_PATCH.lastIndex = 0;
+  while ((m = BARE_PATCH.exec(rest)) !== null) {
+    if (insideSpans(jsonSpans, m.index)) continue;
+    const obj = balancedJsonObject(rest, m.index);
+    if (obj === undefined) continue;
+    parts.push(rest.slice(cursor, m.index), place());
+    cursor = m.index + obj.length;
+    BARE_PATCH.lastIndex = cursor;
+  }
+  if (parts.length === 0) return rest;
+  parts.push(rest.slice(cursor));
+  return parts.join("");
+}
+
+/** Cheap pre-check shared by the fold and its caller: could `text` hold a state patch? */
+export function hasStatePatch(text: string): boolean {
+  return text.includes("```state") || text.includes('{"state_patch"');
 }
 
 /** A dangling opener/closer pair after the fence body was mangled (e.g. `.state {…}}` followed

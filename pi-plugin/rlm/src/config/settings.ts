@@ -126,7 +126,7 @@ export function validateConfig(raw: unknown): Partial<RlmConfig> {
   if (contextLoader !== undefined) out.contextLoader = contextLoader;
   const autoSeedCwd = validateBoolean(r.autoSeedCwd);
   if (autoSeedCwd !== undefined) out.autoSeedCwd = autoSeedCwd;
-  // display layer language: inline whitelist — "zh" | "en" (legacy "auto" migrates to the default)
+  // display layer language: closed whitelist — anything else keeps the default
   if (r.displayLocale === "zh" || r.displayLocale === "en") {
     out.displayLocale = r.displayLocale;
   }

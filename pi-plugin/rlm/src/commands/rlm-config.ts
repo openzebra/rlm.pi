@@ -4,7 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { RlmController } from "../mode/rlm-mode.ts";
 import { setRlmModeStatus } from "../ui/status.ts";
 import { showConfigPanel } from "../ui/config-panel.ts";
-import { sigmaStrings } from "../prompts/glossary.ts";
+import { sigmaStrings } from "../ui/sigma-i18n.ts";
 
 async function runRlmConfig(controller: RlmController, ctx: ExtensionContext): Promise<void> {
   controller.setConfig(await showConfigPanel(ctx, controller.config));

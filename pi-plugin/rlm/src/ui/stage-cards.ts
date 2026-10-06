@@ -18,7 +18,7 @@ import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import type { SkillNoteInput } from "../config/skillstate.ts";
 import { previewText } from "../text/preview.ts";
 import { expandHint } from "../tool/subcall-render.ts";
-import { fillTpl, sigmaStrings } from "../prompts/glossary.ts";
+import { fillTpl, sigmaStrings } from "../ui/sigma-i18n.ts";
 import { formatTokens } from "./theme.ts";
 import { markdownTheme } from "./theme-adapter.ts";
 

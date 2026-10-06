@@ -9,14 +9,12 @@
 import { check, failureCount } from "./helpers.ts";
 // Display-layer assertions pin English regardless of host LANG — the string tables under
 // test are resolved per render from the locale detector.
-import {
-  SIGMA_DIGEST_ITEM_CAP,
-  SIGMA_DIGEST_MAX_ITEMS,
-  resolveSigmaLocale,
-  setDisplayLocale,
-  sigmaFenceDigest,
-} from "../src/prompts/glossary.ts";
+import { SIGMA_DIGEST_ITEM_CAP, SIGMA_DIGEST_MAX_ITEMS, resolveSigmaLocale, setDisplayLocale, sigmaFenceDigest } from "../src/ui/sigma-i18n.ts";
 import { findStatePatches, foldStateFences } from "../src/text/parsing.ts";
+import { createFoldRegistry } from "../src/ui/sigma-fold.ts";
+import { applySetting } from "../src/ui/config-panel.ts";
+import { mergeConfig, validateConfig } from "../src/config/settings.ts";
+import { sigmaStrings } from "../src/ui/sigma-i18n.ts";
 setDisplayLocale("en");
 
 /** Wrap a JSON payload in a ```state fence the way the model emits it. */
@@ -115,12 +113,77 @@ const fenced = (json: string): string => "```state\n" + json + "\n```";
   const multi = `a\n${fenced('{"state_patch": {"verifiedFacts[+]": ["1"]}}')}\nb\n${fenced('{"state_patch": {"verifiedFacts[+]": ["2"]}}')}\nc`;
   const foldedMulti = foldStateFences(multi, "**Σ recorded:**\n- fact 1");
   check("fold: both fences collapse", !foldedMulti.includes("state_patch") && foldedMulti.includes("a\n") && foldedMulti.includes("\nb\n") && foldedMulti.includes("\nc"), "");
+  check("fold: multi-fence → digest appears ONCE", foldedMulti.split("**Σ recorded:**").length === 2, "");
   check("fold: multi-line fold prefixes every line", foldStateFences(fenced("{}"), "l1\n\nl2").split("\n")[1] === ">", "");
 
   const noFence = "just prose, nothing to fold";
   check("fold: no fence → text unchanged", foldStateFences(noFence, "x") === noFence, "");
   const blankFold = foldStateFences(fenced('{"state_patch": {}}'), "   ");
   check("fold: blank fold → whole text unchanged, fence kept raw", blankFold.includes("```state") && blankFold.includes("state_patch"), "");
+}
+
+// ── fold: model text with `$` replacement patterns stays verbatim ──
+{
+  const fact = "echo $& and $' and $1 and $`";
+  const d = sigmaFenceDigest(findStatePatches(fenced(JSON.stringify({ state_patch: { "verifiedFacts[+]": [fact] } }))), 1, 0);
+  const folded = foldStateFences(`x\n${fenced("{}")}\ny`, d);
+  check("fold: $-patterns not expanded", folded.includes(fact), folded);
+}
+
+// ── digest: newlines in model text cannot break the list line ──
+{
+  const d = sigmaFenceDigest(findStatePatches(fenced(JSON.stringify({ state_patch: { "verifiedFacts[+]": ["a\n\n- fake item\nb"] } }))), 1, 0);
+  check("digest: whitespace collapsed to one line", d.split("\n").length === 2 && d.includes("- fact a - fake item b"), d);
+}
+
+// ── locale tables: identical key sets, config wiring ──
+{
+  const keysOf = (o: object): string => Object.keys(o).sort().join(",");
+  const en = sigmaStrings("en");
+  const zh = sigmaStrings("zh");
+  check("i18n: panel labels key parity", keysOf(en.panel.labels) === keysOf(zh.panel.labels), "");
+  check("i18n: descriptions key parity", keysOf(en.descriptions) === keysOf(zh.descriptions), "");
+  check("i18n: labels/descriptions cover same ids", keysOf(en.panel.labels) === keysOf(en.descriptions), "");
+  check("i18n: notify key parity", keysOf(en.notify) === keysOf(zh.notify), "");
+  check("i18n: picker key parity", keysOf(en.picker) === keysOf(zh.picker), "");
+  check("i18n: sections key parity", keysOf(en.sections) === keysOf(zh.sections), "");
+
+  const base = mergeConfig({});
+  const zhCfg = applySetting(base, "displayLocale", "zh");
+  check("config: applySetting zh sets config + live locale", zhCfg.displayLocale === "zh" && resolveSigmaLocale() === "zh", "");
+  check("config: applySetting rejects junk", applySetting(zhCfg, "displayLocale", "fr") === zhCfg, "");
+  setDisplayLocale("en");
+  check("config: validateConfig accepts zh", validateConfig({ displayLocale: "zh" }).displayLocale === "zh", "");
+  check("config: validateConfig drops junk", validateConfig({ displayLocale: "auto" }).displayLocale === undefined, "");
+}
+
+// ── bare (unfenced) state_patch blobs fold too; ```json quotations stay ──
+{
+  const bare = 'done.state {"state_patch": {"verifiedFacts[+]": ["b1"]}} ok';
+  const f = foldStateFences(bare, "**Σ recorded:**\n- fact b1");
+  check("fold: bare blob replaced", !f.includes("state_patch") && f.includes("> **Σ recorded:**") && f.endsWith(" ok"), f);
+  const quote = "example:\n```json\n{\"state_patch\": {\"x\": 1}}\n```";
+  check("fold: ```json quotation untouched", foldStateFences(quote, "d") === quote, "");
+  const mixed = `${fenced('{"state_patch": {"verifiedFacts[+]": ["1"]}}')}\n{"state_patch": {"verifiedFacts[+]": ["2"]}}`;
+  check("fold: fence + bare → digest once", foldStateFences(mixed, "D").split("> D").length === 2 && !foldStateFences(mixed, "D").includes("state_patch"), "");
+}
+
+// ── FoldRegistry: fold on screen, original restored on the wire clone ──
+{
+  const raw = "go\n" + fenced('{"state_patch": {"verifiedFacts[+]": ["f"]}}');
+  const msg = { role: "assistant", timestamp: 42, content: [{ type: "text", text: raw }, { type: "toolCall", text: undefined as string | undefined }] };
+  const reg = createFoldRegistry();
+  reg.fold(msg, "**Σ recorded:**\n- fact f");
+  const shown = msg.content[0]?.text ?? "";
+  check("registry: message folded for display", shown.includes("> **Σ recorded:**") && !shown.includes("state_patch"), "");
+  const clone = structuredClone([msg, { role: "assistant", timestamp: 7, content: [{ type: "text", text: "plain" }] }]);
+  reg.restore(clone);
+  const c0 = clone[0]?.content[0];
+  check("registry: restore reinstates original fence text", c0?.type === "text" && c0.text === raw, "");
+  check("registry: other messages untouched", clone[1]?.content[0]?.type === "text" && (clone[1].content[0] as { text: string }).text === "plain", "");
+  const nonText = { role: "assistant", timestamp: 1, content: "oops" };
+  reg.fold(nonText, "x"); reg.restore([nonText, { role: "user" }]);
+  check("registry: malformed messages never throw", true, "");
 }
 
 console.log(`\n${failureCount() === 0 ? "ALL PASS" : `${failureCount()} FAILURE(S)`}`);

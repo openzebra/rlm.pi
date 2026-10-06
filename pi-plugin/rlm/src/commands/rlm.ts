@@ -3,7 +3,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { RlmController } from "../mode/rlm-mode.ts";
 import { setRlmModeStatus } from "../ui/status.ts";
-import { sigmaStrings } from "../prompts/glossary.ts";
+import { sigmaStrings } from "../ui/sigma-i18n.ts";
 
 /**
  * `stopNative` aborts the native-mode session work (repl cells, child engines, detached
@@ -29,7 +29,7 @@ export function registerRlmCommand(pi: ExtensionAPI, controller: RlmController, 
       if (rlmBusy || nativeBusy) {
         ctx.ui.notify(sigmaStrings().notify.aborted, "info");
       } else {
-        ctx.ui.notify("No RLM work in progress.", "info");
+        ctx.ui.notify(sigmaStrings().notify.idle, "info");
       }
     },
   });

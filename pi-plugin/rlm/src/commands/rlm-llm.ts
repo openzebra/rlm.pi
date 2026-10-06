@@ -7,7 +7,7 @@ import type { RlmController } from "../mode/rlm-mode.ts";
 import { pickableModels, selectModel } from "../ui/model-picker.ts";
 import { setRlmModeStatus } from "../ui/status.ts";
 import { applyLlmSelection } from "./pins.ts";
-import { sigmaStrings } from "../prompts/glossary.ts";
+import { fillTpl, sigmaStrings } from "../ui/sigma-i18n.ts";
 
 async function runRlmLlm(controller: RlmController, ctx: ExtensionContext): Promise<void> {
   try {
@@ -34,9 +34,12 @@ async function runRlmLlm(controller: RlmController, ctx: ExtensionContext): Prom
   const pinned = controller.llmModel;
   const effective = pinned ?? cheapestModel(ctx.modelRegistry);
   const reasoning = controller.config.subSampling.reasoning;
+  const n = sigmaStrings().notify;
   ctx.ui.notify(
-    `RLM: llm=${modelRef(effective) ?? "(none available)"}`
-    + `${pinned ? "" : " (cheapest, auto)"}${reasoning ? `/${reasoning}` : ""}`,
+    fillTpl(n.llmPinned, {
+      m: modelRef(effective) ?? n.noneAvailable,
+      r: `${pinned ? "" : n.llmCheapest}${reasoning ? `/${reasoning}` : ""}`,
+    }),
     "info",
   );
 }
