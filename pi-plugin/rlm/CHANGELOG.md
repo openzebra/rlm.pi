@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **TaskLedger no longer coalesces near-duplicate prompts** (`core/ledger.ts`): a claim whose
+  words overlapped an earlier one by Jaccard ≥ 0.8 (≥ 0.7 with the same paths) received that
+  claim's result, so prompts sharing a frame with a different question got another task's
+  answer (`Opposite of hot?` → `Down`). Exact-hash coalescing, ancestor-echo rejection and the
+  `rlmBudget` counter are unchanged.
+
 ## [0.3.29] — 2026-10-21
 
 ### Changed

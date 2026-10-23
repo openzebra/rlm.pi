@@ -1,6 +1,6 @@
 /**
  * Phase 2 (v5 port): TaskLedger blackboard — unit + handler + engine gates.
- * Mirrors e2e-v2 offline gates: dup_spawn → 1 runner, echo → stub, near-dup → coalesce,
+ * Mirrors e2e-v2 offline gates: dup_spawn → 1 runner, echo → stub, near-dup → own run,
  * rlmBudget demotion, empty-inject silence.
  */
 
@@ -47,7 +47,7 @@ import { errorMessage } from "../src/util/errors.ts";
   check("contextSig: packed files differ from raw string", contextSig(files) !== contextSig("haystack"));
 }
 
-// ── ledger decisions: run / exact coalesce / near-dup / echo ─────────────────────
+// ── ledger decisions: run / exact coalesce / near-dup runs / echo ────────────────
 
 {
   const led = new TaskLedger();
@@ -60,10 +60,28 @@ import { errorMessage } from "../src/util/errors.ts";
   const d2 = led.tryClaim(req, key);
   check("claim: exact duplicate coalesces", d2.type === "coalesce" && !d2.done, JSON.stringify(d2));
 
-  // near-dup: high overlap, different wording, same paths
+  // near-dup: high overlap, different wording, same paths → its own run, never another's result
   const near = { ...req, prompt: "study the auth module deeply" };
   const d3 = led.tryClaim(near, taskKey("rlm", near.prompt, near.paths, "m", ""));
-  check("claim: near-dup (jaccard ≥ 0.8) coalesces onto the runner", d3.type === "coalesce", JSON.stringify(d3));
+  check("claim: near-dup (high word overlap) runs on its own", d3.type === "run", JSON.stringify(d3));
+
+  // a shared frame with a different question is a different task (leaf llm_batch shape)
+  const frame = "Answer with only the requested word. ".repeat(3);
+  const up = { kind: "llm" as const, prompt: `${frame}Opposite of up?`, paths: [], depth: 0 };
+  const hot = { ...up, prompt: `${frame}Opposite of hot?` };
+  const kUp = taskKey("llm", up.prompt, [], "m", "");
+  led.tryClaim(up, kUp);
+  led.finish(kUp, "Down");
+  const dHot = led.tryClaim(hot, taskKey("llm", hot.prompt, [], "m", ""));
+  check("claim: same frame, different question runs (never inherits 'Down')", dHot.type === "run", JSON.stringify(dHot));
+
+  // rlm_batch fan-out: one long shared brief, different areas → separate child runs
+  const brief = "Search the web, read primary sources, cite every claim with a URL and date, write sections 1-6. ".repeat(3);
+  const rlA = { kind: "rlm" as const, prompt: `${brief}Your area: reinforcement learning recipes.`, paths: [], depth: 1 };
+  const rlB = { ...rlA, prompt: `${brief}Your area: hosting and serving costs.` };
+  led.tryClaim(rlA, taskKey("rlm", rlA.prompt, [], "m", ""));
+  const dB = led.tryClaim(rlB, taskKey("rlm", rlB.prompt, [], "m", ""));
+  check("claim: shared-brief sibling with a different area runs", dB.type === "run", JSON.stringify(dB));
 
   // disjoint goal → fresh run
   const other = { ...req, prompt: "profile the database query latency" };
@@ -92,7 +110,7 @@ import { errorMessage } from "../src/util/errors.ts";
   const d7 = led.tryClaim({ kind: "rlm", prompt: "flaky task", paths: [], depth: 1 }, k6);
   check("fail: key becomes claimable again", d7.type === "run");
 
-  check("hits: exact/echo/near counters", led.hits().exact >= 1 && led.hits().near >= 1, JSON.stringify(led.hits()));
+  check("hits: exact counter", led.hits().exact >= 1, JSON.stringify(led.hits()));
 }
 
 // ── ancestor echo ───────────────────────────────────────────────────────────────
@@ -438,7 +456,7 @@ import { errorMessage } from "../src/util/errors.ts";
     c3.listClaims().slice(0, 60));
 }
 
-// ── Concurrent sibling runs at depth=1 + target-aware near-dup + demoted file slice + resetTurnBudget ──
+// ── Concurrent sibling runs at depth=1 + templated siblings + demoted file slice + resetTurnBudget ──
 {
   const led = new TaskLedger();
   // Concurrent sibling child engines at depth=1 (as spawned by rlm_batch)
@@ -461,8 +479,8 @@ import { errorMessage } from "../src/util/errors.ts";
   const dC = led.tryClaim(reqC, taskKey("rlm", reqC.prompt, [], "m", ""));
   check("concurrent siblings: depth=1 sibling is never treated as an ancestor echo", dC.type === "run", JSON.stringify(dC));
 
-  // A templated claim for crates/hf_body must NOT near-dup coalesce onto crates/hf_core even though
-  // 10/11 words are identical (targetTokenSet distinguishes crates/hf_body vs crates/hf_core).
+  // A templated claim for crates/hf_body must NOT coalesce onto crates/hf_core even though
+  // 10/11 words are identical.
   const reqBody = {
     kind: "rlm" as const,
     prompt: "Analyze crates/hf_body in detail: public types, functions, invariants, and architecture",
