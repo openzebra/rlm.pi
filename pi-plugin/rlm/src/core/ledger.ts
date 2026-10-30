@@ -4,11 +4,12 @@
  * One instance per root run (engine) or per session (native repl tool), threaded down to every
  * child through `SubcallHandlerDeps.ledger` / `RlmInput.ledger` — the same seam as
  * getChildContext. It gives every agent global state visibility (the `[ledger]` block) and
- * stops duplicate work three ways:
+ * stops duplicate work two ways:
  *   - exact-hash coalesce: identical task → one runner, many waiters
  *   - ancestor-echo reject: a child restating an ancestor task gets a stub
- *   - near-dup coalesce: Jaccard ≥ 0.8, or ≥ 0.7 with the same path set
- * plus the `rlmBudget` demotion counter (extra rlm_query → llm_query).
+ * plus the `rlmBudget` demotion counter (extra rlm_query → llm_query). Similar-but-different
+ * prompts are never coalesced: a shared frame with a different question is a different task,
+ * and handing it another task's result is a silent wrong answer.
  */
 
 import { createHash } from "node:crypto";
@@ -16,8 +17,6 @@ import { isRecord } from "../util/type-guards.ts";
 
 const NOISE = /\b(no edits?|do not edit|analysis[- ]only|do not change)\.?/gi;
 const TOK = /[a-z0-9_]{2,}/g;
-const NEAR_JACCARD = 0.8;
-const NEAR_JACCARD_SAME_PATHS = 0.7;
 const ECHO_JACCARD = 0.8;
 const INFLIGHT_LINES = 8;
 const DONE_LINES = 6;
@@ -56,7 +55,6 @@ type ClaimDecision =
 interface LedgerHits {
   readonly exact: number;
   readonly echo: number;
-  readonly near: number;
 }
 
 interface Waiter {
@@ -84,7 +82,7 @@ export function tokenSet(text: string): ReadonlySet<string> {
  * Target-specific identifiers in a prompt (paths with `/`, filenames with extensions,
  * snake_case symbols, or numeric/ordinal module indices). Two templated prompts that
  * differ in their target identifiers (e.g. `crates/hf_app` vs `crates/hf_body`) are
- * distinct tasks, never near-duplicates or ancestor echoes.
+ * distinct tasks, never ancestor echoes.
  */
 const TARGET_TOK =
   /(?:[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)+|\b[a-z0-9_-]+\.(?:ts|tsx|js|jsx|py|rs|go|md|json|toml|yaml|yml|sh|sql|css|html|c|cc|cpp|h|hpp|java|kt|swift|rb)\b|\b[a-z0-9]+_[a-z0-9_]+\b|\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|alpha|beta|gamma|delta)\b)/gi;
@@ -173,7 +171,7 @@ export class TaskLedger {
   private readonly claims = new Map<string, Claim>();
   private readonly waiters = new Map<string, Waiter[]>();
   private readonly stack: AncestorEntry[] = [];
-  private readonly hitCounts = { exact: 0, echo: 0, near: 0 };
+  private readonly hitCounts = { exact: 0, echo: 0 };
   private rlmRuns = 0;
   private nextRunId = 0;
 
@@ -224,24 +222,6 @@ export class TaskLedger {
     return false;
   }
 
-  /** Near-duplicate over inflight + done claims (Jaccard, or lower bar with identical paths). */
-  findNear(prompt: string, paths: readonly string[]): Claim | undefined {
-    const np = normalizePrompt(prompt);
-    const toks = tokenSet(np);
-    const targets = targetTokenSet(np);
-    const ps = pathSig(paths);
-    for (const c of this.claims.values()) {
-      if (c.status === "error") continue;
-      const cnp = normalizePrompt(c.prompt);
-      const cTargets = targetTokenSet(cnp);
-      if ((targets.size > 0 || cTargets.size > 0) && !sameSet(targets, cTargets)) continue;
-      const score = jaccard(toks, tokenSet(cnp));
-      if (score >= NEAR_JACCARD) return c;
-      if (score >= NEAR_JACCARD_SAME_PATHS && pathSig(c.paths) === ps) return c;
-    }
-    return undefined;
-  }
-
   /** Exact-key lookup among live (non-error) claims. */
   lookup(key: string): Claim | undefined {
     const c = this.claims.get(key);
@@ -258,11 +238,6 @@ export class TaskLedger {
     if (exact !== undefined) {
       this.hitCounts.exact++;
       return { type: "coalesce", key, done: exact.status === "done" };
-    }
-    const near = this.findNear(req.prompt, req.paths);
-    if (near !== undefined) {
-      this.hitCounts.near++;
-      return { type: "coalesce", key: near.key, done: near.status === "done" };
     }
     this.claims.set(key, Object.freeze({
       key,

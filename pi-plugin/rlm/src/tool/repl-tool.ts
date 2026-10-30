@@ -404,7 +404,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
         // v5 blackboard (audit C3 / BUG-1): ancestors are RUNNING engines only — engine.ts
         // brackets each child run with beginRun/endRun. A native cell pushes NOTHING: its
         // spawns claim against an empty stack, so an originator can never echo against
-        // itself. Duplicates are caught by the ledger's claim store (exact/near
+        // itself. Duplicates are caught by the ledger's claim store (exact
         // coalescing + rlmBudget demotion), never by silent suppression.
         // The cell races pi's per-call signal (esc) against /rlm-stop's session signal.
         const cellAbort = raceAbort(execSignal, currentSignal());
