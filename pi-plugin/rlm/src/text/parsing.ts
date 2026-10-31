@@ -47,8 +47,8 @@ export type StateFenceResult =
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly error: string };
 
-const STATE_FENCE = /(`{3,})[ \t]*(?:state\b[^\r\n]*\r?\n|\r?\n[ \t]*state\b[^\r\n]*\r?\n)([\s\S]*?)\1/g;
-const UNCLOSED_STATE_FENCE = /`{3,}[ \t]*(?:state\b[^\r\n]*\r?\n|\r?\n[ \t]*state\b[^\r\n]*\r?\n)([\s\S]*)$/;
+const STATE_FENCE = /^[ \t]*(`{3,})[ \t]*(?:state\b[^`\r\n]*\r?\n|\r?\n[ \t]*state\b[^`\r\n]*\r?\n)([\s\S]*?)\1/gm;
+const UNCLOSED_STATE_FENCE = /^[ \t]*`{3,}[ \t]*(?:state\b[^`\r\n]*\r?\n|\r?\n[ \t]*state\b[^`\r\n]*\r?\n)([\s\S]*)$/m;
 /** Tolerant fallback: a payload object whose FIRST key is the patch key, emitted without a
  *  (well-formed) fence — soak keeps catching `...report.state {"state_patch": …}}` blobs from
  *  small models that mangle the opening backticks. Matched literally so ordinary prose or
@@ -153,7 +153,7 @@ export function foldStateFences(text: string, fold: string): string {
   return parts.join("").replace(ORPHAN_FENCE, "");
 }
 
-const HAS_STATE_FENCE = /`{3,}[ \t]*(?:state\b|\r?\n[ \t]*state\b)/;
+const HAS_STATE_FENCE = /^[ \t]*`{3,}[ \t]*(?:state\b[^`\r\n]*(?:\r?\n|$)|\r?\n[ \t]*state\b)/m;
 const HAS_BARE_PATCH = /\{\s*"state_patch"\s*:/;
 
 /** Cheap pre-check shared by the fold and its caller: could `text` hold a state patch? */

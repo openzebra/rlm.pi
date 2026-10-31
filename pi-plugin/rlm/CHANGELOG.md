@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.31] — 2026-10-31
+
+### Fixed
+
+- **Sub-agent fan-out restored after the v0.3.29 prompt compaction** (`prompts/native.ts`,
+  `prompts/glossary.ts`, `prompts/system.ts`): dropping the `map_files` / `llm_batch` worked
+  examples collapsed sub-LLM calls from ~800/session to single digits — sessions that used to
+  fan out in batches of 10–20 leaves stopped calling leaf workers at all. The `E2` (`map_files`)
+  and `E3` (`llm_batch`) examples are back next to `E1`, the delegation worked example fans a
+  `context` slice through `llm_batch` (instead of one blanket `rlm_batch`), and the orchestrator
+  addendum's Oolong-tuned leaf-audit wording no longer reads as "don't use leaf workers for
+  reading".
+- **Children no longer steered away from leaf fan-out** (`bridge/handlers/rlm-query.ts`):
+  `CHILD_PROMPT_ADDENDUM` told sub-RLM runs to use `llm_query` / `llm_batch` only for >8K-char
+  chunks and to distrust their verdicts, so child runs read files in Python loops instead of
+  batching. It now asks for `map_files` / `llm_batch` fan-out with self-audited borderline
+  counts.
+- **Elision stub echo-spam** (`core/root-context.ts`): elided assistant turns with tool calls no
+  longer get the `… turn elided — durable facts live in Σ…` synthetic text block injected next
+  to the calls. Models copied the stub verbatim into their own replies (up to 79% of turns for
+  Kimi), which then re-seeded the archive and taught later turns to repeat it.
+- **Trivial child final answers recovered** (`sandbox/py/worker.py`, `prompts/glossary.ts`):
+  finalizing with `answer["content"] = "done"` / `"ready"` while the real report sits in
+  `answers` now substitutes the collected reports (joined when several); the glossary spells out
+  that `answer["content"]` must carry the full text, never a status word.
+- **`rlmBudget` no longer starves a whole session** (`tool/repl-tool.ts`): the demotion budget
+  resets at every root `repl()` call (done-claim cache preserved) instead of once per user turn;
+  after the 8th `rlm_query` in a long multi-call turn every later child run silently demoted to
+  a leaf for the rest of the session. Demoted leaves also report their model again
+  (`displayModel`, dropped in v0.3.29).
+- **State-fence parser anchored to line starts** (`text/parsing.ts`): inline ```state mention in
+  prose (e.g. a numbered list item) opened a phantom fence and produced `malformed \`\`\`state
+  fence` rejects; `STATE_FENCE` / `UNCLOSED_STATE_FENCE` / `HAS_STATE_FENCE` now match only
+  fences that start a line. `ROOT_IDLE_DEGRADE_TURNS` drops 6 → 3 so models that never emit
+  state blocks (Kimi: 0 of ~1,570 turns) shed the fence instruction twice as fast.
+
 ## [0.3.30] — 2026-10-30
 
 ### Fixed

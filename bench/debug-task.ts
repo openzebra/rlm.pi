@@ -33,7 +33,7 @@ if (modelRef === undefined || taskId === undefined) {
 }
 
 const opts = full24 ? { oolongMaxCl: 65536, oolongLimit: 24 } : ext ? { oolongMaxCl: 8192, oolongLimit: 6 } : {};
-const tasks = await buildTasks("oolong", undefined, opts);
+const tasks = await buildTasks(opts);
 const task = tasks.find((t) => t.id === taskId);
 if (task === undefined) throw new Error(`no task ${taskId}; have: ${tasks.map((t) => t.id).join(", ")}`);
 

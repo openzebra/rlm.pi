@@ -12,7 +12,6 @@
  *
  * Usage (from the repo root):
  *   bun run bench/run.ts                      # oolong, default 8 tasks @ cl ≤ 2048
- *   bun run bench/run.ts --limit 1            # first task only
  *   bun run bench/run.ts --oolong-max-cl 65536 --oolong-limit 24
  *                                             # extended oolong: context_len cap / task count
  *   bun run bench/run.ts --model b-ai/qwen3.8-27b   # one panel model only
@@ -35,7 +34,7 @@
 import { appendRow, makeRow, type BenchRow } from "./journal.ts";
 import { gradeAnswer } from "./grade.ts";
 import { fetchPricing, makeRun, requireApiKey, resolveTarget, type BenchPricing } from "./engine.ts";
-import { buildTasks, type BenchTask, type SuiteName } from "./tasks.ts";
+import { buildTasks, type BenchTask } from "./tasks.ts";
 import panel from "./panel.json";
 import { SkillStore } from "../pi-plugin/rlm/src/config/skillstate.ts";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -45,8 +44,6 @@ import { dirname, join } from "node:path";
 import type { RunRlm } from "../pi-plugin/rlm/src/core/types.ts";
 
 interface Args {
-  readonly suite: SuiteName;
-  readonly limit?: number;
   readonly model?: string;
   readonly subModel?: string;
   readonly journal?: string;
@@ -69,8 +66,6 @@ interface Args {
 }
 
 function parseArgs(argv: readonly string[]): Args {
-  const suite: SuiteName = "oolong";
-  let limit: number | undefined;
   let model: string | undefined;
   let subModel: string | undefined;
   let journal: string | undefined;
@@ -92,11 +87,7 @@ function parseArgs(argv: readonly string[]): Args {
       if (i >= argv.length) throw new Error(`missing value for ${a}`);
       return argv[i];
     };
-    if (a === "--limit") {
-      const v = Number(next());
-      if (!Number.isInteger(v) || v < 1) throw new Error(`--limit must be a positive integer`);
-      limit = v;
-    } else if (a === "--oolong-max-cl") {
+    if (a === "--oolong-max-cl") {
       const v = Number(next());
       if (!Number.isInteger(v) || v < 1) throw new Error(`--oolong-max-cl must be a positive integer`);
       oolongMaxCl = v;
@@ -142,7 +133,7 @@ function parseArgs(argv: readonly string[]): Args {
       throw new Error(`unknown argument: ${a}`);
     }
   }
-  return { suite, limit, model, subModel, journal, oolongMaxCl, oolongLimit, oolongLabels, runs, maxIterations, temperature, list, poolOnly, taskIds, resume, taskDelayMs };
+  return { model, subModel, journal, oolongMaxCl, oolongLimit, oolongLabels, runs, maxIterations, temperature, list, poolOnly, taskIds, resume, taskDelayMs };
 }
 
 function printTasks(tasks: readonly BenchTask[]): void {
@@ -244,7 +235,7 @@ async function main(): Promise<void> {
   // --oolong-labels is the CLI face; the env var is kept for parity with the other RLM_BENCH_*
   // knobs (weight-ladder shims). Either one flips the same labeled family (plan P0.1).
   const wantLabels = args.oolongLabels === true || process.env.RLM_BENCH_OOLONG_LABELS === "1";
-  const pool = await buildTasks(args.suite, args.limit, {
+  const pool = await buildTasks({
     oolongMaxCl: args.oolongMaxCl,
     oolongLimit: args.oolongLimit,
     oolongLabels: wantLabels,
@@ -324,8 +315,7 @@ async function benchModel(ref: string, args: Args, tasks: readonly BenchTask[], 
     startedAt: new Date().toISOString(),
     model: target.ref,
     subModel: args.subModel ?? null,
-    suite: args.suite,
-    limit: args.limit ?? null,
+    suite: "oolong",
     taskIds: args.taskIds ?? null,
     oolongMaxCl: args.oolongMaxCl ?? null,
     oolongLimit: args.oolongLimit ?? null,
@@ -347,7 +337,7 @@ async function benchModel(ref: string, args: Args, tasks: readonly BenchTask[], 
     }
   })();
   console.log(
-    `rlm bench  model=${target.ref}  suite=${args.suite}${args.limit !== undefined ? ` limit=${args.limit}` : ""}${oolongOpts}` +
+    `rlm bench  model=${target.ref}  suite=oolong${oolongOpts}` +
       `  temp=${args.temperature ?? 0} runs=${args.runs ?? 1} iter=${args.maxIterations ?? "default"}` +
       `  labels=${wantLabels} skillstate=${skillStateOn}` +
       `  price(in/out)=${pricing.inputPerToken}/${pricing.outputPerToken} $/tok  journal=${journalPath}` +

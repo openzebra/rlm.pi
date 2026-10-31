@@ -111,6 +111,17 @@ print("B2", await_task(tb2))
       e2.raised && e2.stderr.includes("TypeError") && e2.stderr.includes("rlm_batch(tasks="),
     );
 
+    // ── trivial answer['content'] ('done'/'ready') recovers real report from answers ───
+    const rTrivial = await sb.exec(`
+answers["report"] = "detailed render settings report"
+answer["content"] = "done"
+answer["ready"] = True
+`);
+    check(
+      "trivial answer['content']='done' recovers report from answers dict",
+      rTrivial.finalAnswer === "detailed render settings report",
+    );
+
     // ── doc-drift guard: never advertise a kwarg the scaffold doesn't accept ────────────
     testDocDrift();
   } finally {

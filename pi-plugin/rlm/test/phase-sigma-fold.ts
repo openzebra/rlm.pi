@@ -191,12 +191,15 @@ const fenced = (json: string): string => "```state\n" + json + "\n```";
     check(
       `fold (${label}): parsed + folded cleanly without outer fence residue`,
       patches.length === 1 &&
-        patches[0]?.ok === true &&
+        patches[0] !== undefined &&
+        patches[0].ok &&
         !folded.includes("```") &&
         folded.includes("> **Σ recorded:**"),
       folded,
     );
   }
+  const inlineProse = "1. **Игнор ` ```state ` (0.38):**\n```python\nx = 1\n```";
+  check("fold: inline ```state in prose is not parsed as a state fence", findStatePatches(inlineProse).length === 0, "");
 }
 
 // ── FoldRegistry: fold on screen, original restored on the wire clone ──

@@ -187,7 +187,7 @@ function usage(input: number, output = 0): typeof ZERO_USAGE {
     mk("assistant", "count them"),
     mk("user", "REPL stdout:\ncounter_a = 875\n" + "p".repeat(5_000)),
     mk("assistant", "looks high"),
-    mk("user", "Turn " + n + "/30:\n"),
+    mk("user", `Turn ${n}/30:\n`),
     mk("assistant", "final"),
     mk("user", "REPL stdout:\ntail"),
   ];

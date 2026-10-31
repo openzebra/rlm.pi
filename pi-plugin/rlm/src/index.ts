@@ -491,7 +491,7 @@ export default function rlmExtension(pi: ExtensionAPI): void {
     return {
       ...(message === undefined ? {} : { message }),
       systemPrompt: isStringArray(event.systemPrompt)
-        ? ([...event.systemPrompt, addendum] as unknown as string)
+        ? (event.systemPrompt.concat(addendum))
         : event.systemPrompt + "\n\n" + xiPart + nativePrompt,
     };
   });

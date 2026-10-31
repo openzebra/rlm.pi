@@ -16,7 +16,7 @@ import type { SubcallOpts } from "../../sandbox/interrupts.ts";
 import { spawnAndRun, type SpawnDeps } from "./task-registry.ts";
 import { complete1, completeDeps } from "./completion.ts";
 import { emitting, summarizeLeaf, throttleHooks } from "./emitting.ts";
-import { activeLedger, leafClaimKey, runClaimedLeaf, unwiredSpawn } from "./llm-query.ts";
+import { activeLedger, displayModel, leafClaimKey, runClaimedLeaf, unwiredSpawn } from "./llm-query.ts";
 import type { BatchStop } from "./batch-stop.ts";
 import { createBatchStop } from "./batch-stop.ts";
 
@@ -287,6 +287,7 @@ export function createRlmQueryHandler(deps: SubcallHandlerDeps, sd: SpawnDeps) {
                 {
                   kind: "llm",
                   label: "rlm_query→llm (demoted)",
+                  model: displayModel(deps),
                   args: previewText(task),
                 },
                 (track, note) => complete1(inv, leafPrompt, track, completeDeps(deps), throttleHooks(note)),

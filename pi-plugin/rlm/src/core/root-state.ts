@@ -44,7 +44,7 @@ const ROOT_TASK_MAX_CHARS = 200;
  *  study sessions degraded at 4, then fenced at 5). 6 clears the observed ramp while still
  *  bounding the fence tax. The engine const and its tuning are untouched.
  */
-export const ROOT_IDLE_DEGRADE_TURNS = 6;
+export const ROOT_IDLE_DEGRADE_TURNS = 3;
 
 /** R3 soak observability: per-turn fence outcome, returned by applyFences. */
 export interface FenceOutcome {

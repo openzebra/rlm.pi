@@ -49,7 +49,7 @@ function orchestratorAddendum(maxPromptChars: number, delegation: boolean): stri
     `<contract> Heavy calls return Task; only await_task returns content. Fire independent Tasks first, ${delegation ? "slice `context`" : "free search"}, then await_task.</contract>`,
     "<routing> one-shot extracts → llm_query/llm_batch/map_files; multi-step study → rlm_query; ≥2 areas → rlm_batch. Never print raw file bodies.</routing>",
     `Budget: < ${maxPromptChars.toLocaleString()} chars (≈${promptCapTokensK(maxPromptChars)}K tok) per prompt; ~20 prompts/llm_batch.`,
-    "`llm_query`/`llm_batch` are non-thinking readers: spell out strict criteria in their prompt (e.g., for literal-paraphrase checks: must restate the figurative meaning literally and non-metaphorically, not swap another metaphor or twist a word) and ask for `index | label | 5-word reason`; for exact counts, print and audit the minority/borderline items yourself before counting.",
+    "Fan out per-file/chunk reading via `map_files` / `llm_batch` instead of dumping files in Python loops. `llm_query`/`llm_batch` are non-thinking extractors: spell out strict criteria in their prompt (`index | label | 5-word reason`) and audit borderline items yourself for exact counts.",
   ].join("\n");
 }
 

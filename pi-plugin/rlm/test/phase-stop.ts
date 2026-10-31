@@ -80,7 +80,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
     const { ctx, messages } = makeCtx();
     await stop?.("", ctx);
     check("stop: RLM-mode run aborted", aborted === 1);
-    check("stop: message says work was stopped", messages[0]?.includes("aborted") === true);
+    check("stop: message says work was stopped", messages[0]?.includes("aborted"));
   }
 
   // Native work only (controller idle, stopNative reports in-flight repl/bg work).
@@ -96,7 +96,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
     const { ctx, messages } = makeCtx();
     await handlers.get("rlm-stop")?.("", ctx);
     check("stop: native stop invoked, RLM controller untouched", nativeStopped === 1 && aborted === 0);
-    check("stop: native-only stop still reports success", messages[0]?.includes("aborted") === true);
+    check("stop: native-only stop still reports success", messages[0]?.includes("aborted"));
   }
 
   // Nothing in flight.
@@ -106,7 +106,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
     registerRlmCommand(pi, controller, () => false);
     const { ctx, messages } = makeCtx();
     await handlers.get("rlm-stop")?.("", ctx);
-    check("stop: idle session reports nothing to stop", messages[0]?.includes("No RLM work in progress") === true);
+    check("stop: idle session reports nothing to stop", messages[0]?.includes("No RLM work in progress"));
   }
 }
 

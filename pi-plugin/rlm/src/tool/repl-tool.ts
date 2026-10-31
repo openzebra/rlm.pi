@@ -414,6 +414,7 @@ export function createReplTool(deps: ReplToolDeps): ToolDefinition<typeof ReplTo
             // Wire per-invocation mutable state only after the serialized exec slot
             // is active. Swapping earlier would let queued repl() calls overwrite
             // emitter/limits for the currently running REPL execution.
+            sessionLedger.resetTurnBudget();
             bridgeState.swap({ emitter, parentId: undefined, depth: 0, limits });
           }, cellAbort.signal, () => {
             const elapsedS = Math.max(1, Math.round((Date.now() - start) / 1000));

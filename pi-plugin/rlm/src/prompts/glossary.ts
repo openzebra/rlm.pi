@@ -125,8 +125,10 @@ const SPAWN_EXAMPLE_RETRIEVAL: readonly string[] = Object.freeze([
 
 const SPAWN_EXAMPLE_DELEGATION: readonly string[] = Object.freeze([
   "  ```python",
-  '  t = rlm_batch(["Answer from first half: X.", "Answer from second half: Y."])',
-  "  reports = await_task(t)",
+  "  # slice the world you were handed, then fan out:",
+  '  slice = [f for f in context if f["path"].startswith("src/auth/")][:6]',
+  '  t = llm_batch([f"Answer from this file only:\\n\\n{f[\'content\'][:4000]}" for f in slice])',
+  '  answers.update(dict(zip([f["path"] for f in slice], await_task(t))))',
   "  ```",
 ]);
 
@@ -193,7 +195,7 @@ export const LARGE_FILE_RULE_NATIVE =
 export function envTips(delegation = false): string {
   const locate = delegation
     ? "1. Locate: slice `context` in Python (`print(len(context))`). Do not print file bodies."
-    : "1. Locate: `print(len(context))`; use free `search` / `grep_context` / `outline` (or Python slicing). Do not print file bodies.";
+    : "1. Locate: `print(len(context))`; free locate with `search` / `grep_context` / `outline` (or Python slicing). Do not print file bodies.";
   return [
     "## Decomposition doctrine",
     "Orchestrate; don't brute-force. Leaf workers (`llm_query`/`llm_batch`) are fast non-thinking readers: use them to extract/screen slices, then audit borderline judgements yourself (`rlm_query` when a sub-area needs its own reasoning loop).",
@@ -278,7 +280,7 @@ export function replGlossary(
   }
   lines.push(
     "- `answers` / `plan`: persistent dicts across turns (`SHOW_VARS()`, `list_tasks()`, `list_claims()`).",
-    '- `answer`: `{"content": "", "ready": False}`. Submit by setting `answer["content"]` and `answer["ready"] = True` (never `FINAL(...)` prose or a ```state fence on the finalizing turn).',
+    '- `answer`: `{"content": "", "ready": False}`. Submit by setting `answer["content"]` to the full report/answer text (never a status word like `"done"`/`"ready"` or a pointer to `answers[k]`) and `answer["ready"] = True` (never `FINAL(...)` prose or a ```state fence on the finalizing turn).',
   );
   return lines.join("\n");
 }

@@ -12,7 +12,7 @@
  */
 
 import type { Grade } from "./grade.ts";
-import { asStr, cachedTaskSlice, cachedTasks, hfRows } from "./data.ts";
+import { asStr, cachedTaskSlice, cachedTasks, hfRows, type OolongRecord } from "./data.ts";
 import { scoreOolong } from "./scorers.ts";
 
 export type SuiteName = "oolong";
@@ -24,16 +24,6 @@ export interface BenchTask {
   readonly prompt: string;
   readonly grade: Grade;
   readonly gold?: string;
-}
-
-interface OolongRecord {
-  readonly id: string;
-  readonly context: string;
-  readonly question: string;
-  readonly answer: unknown;
-  readonly answerType: string;
-  readonly taskGroup: string;
-  readonly contextLen: number;
 }
 
 const OOLONG_MAX_CONTEXT_LEN = 65536; // hardcore: full dataset context_len range (last bucket = 65536 units)
@@ -82,17 +72,14 @@ export interface BenchBuildOpts {
  * order, task_groups) instead of only the smallest bucket. Deterministic per cache key.
  */
 export async function buildTasks(
-  suite: SuiteName,
-  limit?: number,
   opts?: BenchBuildOpts,
 ): Promise<readonly BenchTask[]> {
-  void suite; // single-member union — kept as a parameter so call sites stay stable
   const maxContextLen = opts?.oolongMaxCl ?? OOLONG_MAX_CONTEXT_LEN;
   const rows = opts?.oolongLimit ?? OOLONG_LIMIT;
   const wantLabels = opts?.oolongLabels === true;
   // Fast path: an equal-or-larger cache for this (cl, n) shape exists on disk — slice it
   // and never touch HuggingFace (dataset is already local; smoke runs must not re-fetch).
-  const sliced = cachedTaskSlice<OolongRecord>(rows, maxContextLen, { labels: wantLabels });
+  const sliced = cachedTaskSlice(rows, maxContextLen, { labels: wantLabels });
   if (sliced !== undefined) {
     if (wantLabels) assertLabeledContexts(sliced);
     return sliced.map((r): BenchTask => ({

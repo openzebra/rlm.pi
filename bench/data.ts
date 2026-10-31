@@ -115,11 +115,21 @@ export async function cachedTasks<T>(
  */
 const OOLONG_CACHE_RE = /^oolong_(?:lab_)?synth(?:_lab)?_cl(\d+)_n(\d+)\.json$/;
 
-export function cachedTaskSlice<T>(
+export interface OolongRecord {
+  readonly id: string;
+  readonly context: string;
+  readonly question: string;
+  readonly answer: unknown;
+  readonly answerType: string;
+  readonly taskGroup: string;
+  readonly contextLen: number;
+}
+
+export function cachedTaskSlice(
   rows: number,
   maxContextLen: number,
   opts?: { readonly labels?: boolean },
-): readonly T[] | undefined {
+): readonly OolongRecord[] | undefined {
   if (!existsSync(DATA_DIR)) return undefined;
   const wantLabels = opts?.labels === true;
   let bestName: string | undefined;
@@ -140,7 +150,7 @@ export function cachedTaskSlice<T>(
   if (bestName === undefined) return undefined;
   const parsed: unknown = JSON.parse(readFileSync(`${DATA_DIR}${bestName}`, "utf8"));
   if (!Array.isArray(parsed)) return undefined;
-  const filtered = (parsed as readonly (T & { contextLen: number })[]).filter(
+  const filtered = (parsed as readonly OolongRecord[]).filter(
     (r) => r.contextLen <= maxContextLen,
   );
   console.log(`[data] slicing ${Math.min(rows, filtered.length)}/${filtered.length} tasks (cl≤${maxContextLen}${wantLabels ? ", labels" : ""}) from cached ${bestName}`);

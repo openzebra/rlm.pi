@@ -121,7 +121,7 @@ const BIG = "y".repeat(4_000);
   const call = blocks.find((b) => b.type === "toolCall") as { id: string; name: string; arguments: { cmd: string } } | undefined;
   check("toolCall block survives elision", call !== undefined, JSON.stringify(blocks));
   check("toolCall id/name/arguments verbatim", call !== undefined && call.id === "tool_01" && call.name === "bash" && call.arguments.cmd === "ls", JSON.stringify(call));
-  check("prose still stubbed", blocks.some((b) => b.type === "text" && "text" in b && (b as { text: string }).text.length > 0));
+  check("prose stripped on toolCall turns (no stub echo-spam)", !blocks.some((b) => b.type === "text"));
   check("following toolResult untouched", (messages[1] as { toolCallId: string }).toolCallId === "tool_01");
 }
 

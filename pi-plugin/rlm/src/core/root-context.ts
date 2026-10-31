@@ -197,9 +197,10 @@ function elideRange(
       const toolCalls = Array.isArray(m.content)
         ? (m.content as Array<{ type?: string }>).filter((b) => b?.type === "toolCall")
         : [];
-      const line = elidedLineFor("assistant", undefined, archiveFlag(opts));
       const content: unknown[] =
-        toolCalls.length > 0 ? [...toolCalls, { type: "text", text: line }] : [{ type: "text", text: line }];
+        toolCalls.length > 0
+          ? toolCalls
+          : [{ type: "text", text: elidedLineFor("assistant", undefined, archiveFlag(opts)) }];
       messages[i] = { ...m, content } as RootMessage;
       elided += 1;
       continue;

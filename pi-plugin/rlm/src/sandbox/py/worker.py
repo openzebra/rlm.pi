@@ -455,6 +455,19 @@ class Worker(WorkerScaffold):
         if final is not None:
             if not final.strip() and str(answer_content).strip():
                 final = str(answer_content)
+            answers_dict = self.ns.get("answers")
+            if isinstance(answers_dict, dict) and answers_dict:
+                low = final.strip().lower()
+                if low in {"done", "ready", "ok", "true", "complete", "completed", "finished"} or (
+                    len(low) < 80 and ("answers[" in low or "stored in answers" in low)
+                ):
+                    parts = [
+                        str(v) if len(answers_dict) == 1 else f"### {k}\n{v}"
+                        for k, v in answers_dict.items()
+                        if str(v).strip()
+                    ]
+                    if parts:
+                        final = "\n\n".join(parts)
             if isinstance(answer, dict) and final.strip():
                 dict.__setitem__(answer, "ready", False)
         nudges = self._nudge_lines()

@@ -54,7 +54,7 @@ const REF_TOKEN_CAP = 512;
  *  turn banner differs (P3.2 "按内容签名去重"). Exact text, NOT digit-normalised: two
  *  `counter_a=875` / `counter_a=499` payloads are different conclusions and must not collapse. */
 function payloadSignature(content: string): string {
-  return content.replace(/\s+/g, " ").trim().slice(0, 400) + "#" + content.length;
+  return `${content.replace(/\s+/g, " ").trim().slice(0, 400)}#${content.length}`;
 }
 
 function payloadTokens(content: string, into: Set<string>): void {
